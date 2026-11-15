@@ -5,6 +5,12 @@
   실제 모드:  $env:BEDROCK_MOCK="0"; .venv\\Scripts\\python -m ai.eval.score --runs 3
               (공고 10건 x 3회 = Bedrock 호출 30번 이상. 재시도가 있으면 더 늘어남)
   프롬프트:   --prompt v1(기본), v2, v2.1 (#21 채점용 공고로 판단할 버전은 v2.1)
+  채점용(#21): $env:BEDROCK_MOCK="0"; .venv\\Scripts\\python -m ai.eval.score --split test --final
+              - 공고는 data/raw/eval_test/postings/, 정답지는 data/raw/eval_test/gold_test.json (커밋 안 함)
+              - 프롬프트는 v2.1 고정, 1회만. 확인표(ai/eval/test_manifest.json)의 sha256 과 본문이 다르면 멈춘다
+              - outputs/eval/test_runs.log 에 "완료 mode=bedrock" 줄(점수를 본 기록)이 있으면 멈춘다. 다시 하려면 그 줄을 직접 지운다
+              - 시작·중단 줄은 막지 않는다. SSO 만료·throttling 으로 중단되면 원인을 고친 뒤 다시 실행한다
+              - 화면과 결과 파일에는 합계 점수만 남긴다. 공고별 결과와 근거 문장은 남기지 않는다. 중단 때는 합계도 남기지 않는다
 
 채점은 전부 코드로 한다.
 - 기본 점수: 공고마다 (normalized, type) 묶음을 정답과 비교해 모두 더한 micro P/R/F1
@@ -40,6 +46,9 @@ from ai.extract import DEFAULT_PROMPT, PROMPTS, extract_with_details  # noqa: E4
 POSTINGS = ROOT / "data" / "sample" / "postings.json"
 GOLD = ROOT / "ai" / "eval" / "gold_extraction.json"
 OUT_DIR = ROOT / "outputs" / "eval"
+TEST_DIR = ROOT / "data" / "raw" / "eval_test"
+TEST_LOG = OUT_DIR / "test_runs.log"
+FINAL_PROMPT = "v2.1"  # 채점용 공고로 판단할 버전 (11/16 결정, 예시와 정답지 겹침 0)
 
 
 def prf(tp: int, fp: int, fn: int) -> dict:
@@ -155,11 +164,121 @@ def print_run(i: int, r: dict) -> None:
         print(f"  ! {e['posting_id']}: {e['error']}")
 
 
+DONE = "완료"  # 채점 기록에서 점수를 낸 줄의 표시. 이 줄이 mode=bedrock 이면 다시 채점하지 않는다
+
+
+def is_real_done(line: str) -> bool:
+    """기록 한 줄이 '실제 모드로 끝까지 돌아 점수를 낸' 줄인가. 줄 형식: '날짜 시각 완료 mode=bedrock ...'."""
+    words = line.split()
+    return len(words) >= 4 and words[2] == DONE and words[3] == "mode=bedrock"
+
+
+def _log(path: Path, line: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+
+
+def test_final(args) -> int:
+    """채점용 공고 1회 채점. 합계만 화면과 결과 파일에 남긴다."""
+    from ai.eval.make_gold_template import GOLD_KEYS, load_postings, sha256, shown
+
+    if not args.final:
+        print("채점용 공고는 한 번만 채점합니다. 정말 채점하려면 --final 을 함께 주세요.")
+        return 1
+    if args.prompt not in (None, FINAL_PROMPT):
+        print(f"채점용 공고는 프롬프트 {FINAL_PROMPT} 로만 채점합니다(받은 값: {args.prompt}).")
+        return 1
+    if args.runs not in (None, 1):
+        print("채점용 공고는 1회만 채점합니다(--runs 를 빼세요).")
+        return 1
+    mode = "mock" if is_mock() else "bedrock"
+    log = args.log
+
+    # 1) 실행 기록: 실제 모드로 끝까지 돌아 점수를 본 적이 있으면("완료 mode=bedrock") 멈춘다.
+    #    시작·중단 줄은 막지 않는다. 중단 때는 점수를 남기지 않으므로 SSO 만료·throttling 뒤 다시 할 수 있다.
+    if log.exists():
+        lines = [x for x in log.read_text(encoding="utf-8").splitlines() if x.strip()]
+        done = [x for x in lines if is_real_done(x)]
+        if done:
+            print(f"이미 실제 채점을 끝낸 기록이 있어 멈춥니다: {shown(log)}")
+            print(f"  기록: {done[-1]}")
+            print("  다시 채점하려면 그 줄을 직접 지우고, 왜 다시 하는지 PR 이나 이슈에 남기세요.")
+            return 1
+        if lines:
+            print(f"참고: 기록 {len(lines)}줄(가짜 모드나 시작·중단)이 있습니다. 채점을 막지는 않습니다.")
+
+    # 2) 공고·확인표·정답지 대조
+    if not args.manifest.exists():
+        print(f"확인표가 없습니다: {shown(args.manifest)}. 먼저 init 을 하세요: python -m ai.eval.make_gold_template init")
+        return 1
+    postings = load_postings(args.test_dir / "postings")
+    manifest_text = args.manifest.read_text(encoding="utf-8")
+    expected = {x["id"]: x["text_sha256"] for x in json.loads(manifest_text)["postings"]}
+    by_id = {p["id"]: p for p in postings}
+    changed = sorted(pid for pid, h in expected.items() if pid not in by_id or sha256(by_id[pid]["text"]) != h)
+    extra = sorted(set(by_id) - set(expected))
+    if changed or extra:
+        print(f"공고가 확인표와 다릅니다. 바뀌었거나 없음: {changed} / 확인표에 없음: {extra}")
+        return 1
+    gold_list = json.loads((args.test_dir / "gold_test.json").read_text(encoding="utf-8"))
+    gold = {g["posting_id"]: g for g in gold_list}
+    if sorted(gold) != sorted(expected):
+        print("정답지의 공고 id 가 확인표와 다릅니다. make_gold_template check 를 먼저 돌리세요.")
+        return 1
+    if any(set(s) != set(GOLD_KEYS) for g in gold_list for s in g["skills"]):
+        print("정답지에 section 등이 안 채워진 항목이 있습니다. make_gold_template check --fill 을 먼저 돌리세요.")
+        return 1
+
+    # 3) 채점
+    prompt = PROMPTS[FINAL_PROMPT]
+    n_gold = sum(len(g["skills"]) for g in gold_list)
+    meta = {"prompt": prompt.VERSION, "mode": mode, "postings": len(postings), "gold": n_gold,
+            "alias_sha256": prompt.ALIAS_SHA256, "manifest_sha256": sha256(manifest_text)[:12]}
+    _log(log, "시작 " + " ".join(f"{k}={v}" for k, v in meta.items()))
+    print(f"채점용 공고 {len(postings)}건 / 정답 {n_gold}개 / 프롬프트 {prompt.VERSION} / 모드 {mode} / 1회")
+    if mode == "mock":
+        print("가짜 모드: 응답이 가짜라 점수에는 의미가 없습니다. 기록은 남기지만 실제 채점을 막지는 않습니다.")
+    try:
+        r = run_once([by_id[pid] for pid in sorted(expected)], gold, FINAL_PROMPT)
+    except BaseException as e:  # Ctrl+C 도 기록한다. 공고별 결과·부분 합계는 화면과 파일에 남기지 않는다
+        _log(log, f"중단 mode={mode} 이유={type(e).__name__}")
+        print(f"\n채점이 중단됐습니다({type(e).__name__}). 점수는 남기지 않았습니다. 원인을 고친 뒤 다시 실행하면 됩니다.")
+        raise
+    failed = sorted(e["posting_id"] for e in r["errors"])
+    summary = {"strict": r["strict"], "name_only": r["name_only"],
+               "counts": {k: v for k, v in r["counts"].items()}, "tokens": r["tokens"], "failed_postings": failed}
+
+    # 4) 합계만 저장·기록한 뒤 출력한다 (공고별 결과·근거 문장·오류 원문은 남기지 않는다).
+    #    "완료" 줄을 점수 출력보다 먼저 써서, 점수를 본 뒤에는 반드시 잠기게 한다.
+    s, n, c = summary["strict"], summary["name_only"], summary["counts"]
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUT_DIR / f"{prompt.VERSION}_test_final_{mode}_{time.strftime('%Y%m%d-%H%M%S')}.json"
+    out.write_text(json.dumps({**meta, "summary": summary}, ensure_ascii=False, indent=1), encoding="utf-8")
+    _log(log, f"{DONE} mode={mode} P={s['precision']} R={s['recall']} F1={s['f1']} 오류={c['errors']} 결과={out.name}")
+    print(f"\nP {s['precision']:.3f}  R {s['recall']:.3f}  F1 {s['f1']:.3f}  (이름만 F1 {n['f1']:.3f})")
+    print(f"맞춤 {c['tp']} / extra {c['extra']} / 놓침 {c['missing']} / 지어낸 근거 {c['fabricated_evidence']}"
+          f" / uncertain {c['uncertain']} / section 일치 {c['section_ok']} / 제외 칸 버림 {c['excluded_dropped']}")
+    print(f"빈 공고 정답 {c['empty_posting_ok']} / 재시도 {c['retried']}건 / 오류 {c['errors']}건"
+          + (f" (공고 {', '.join(failed)})" if failed else "") + f" / 토큰 {summary['tokens']['totalTokens']}")
+    print(f"\n합계 저장: {shown(out)} / 기록: {shown(log)}")
+    return 1 if failed else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="추출 정답지 채점")
-    ap.add_argument("--runs", type=int, default=3, help="반복 측정 횟수 (기본 3)")
-    ap.add_argument("--prompt", choices=sorted(PROMPTS), default=DEFAULT_PROMPT, help="프롬프트 버전 (기본 v1)")
+    ap.add_argument("--runs", type=int, default=None, help="반복 측정 횟수 (가짜 10건 기본 3, 채점용은 1회 고정)")
+    ap.add_argument("--prompt", choices=sorted(PROMPTS), default=None, help="프롬프트 버전 (기본 v1, 채점용은 v2.1 고정)")
+    ap.add_argument("--split", choices=("sample", "test"), default="sample", help="sample: 가짜 10건(기본), test: 채점용 공고")
+    ap.add_argument("--final", action="store_true", help="채점용 공고를 정말 채점한다(한 번만)")
+    ap.add_argument("--test-dir", type=Path, default=TEST_DIR, help="채점용 공고·정답지 폴더 (시험용)")
+    ap.add_argument("--manifest", type=Path, default=ROOT / "ai" / "eval" / "test_manifest.json", help="확인표 (시험용)")
+    ap.add_argument("--log", type=Path, default=TEST_LOG, help="채점 기록 파일 (시험용)")
     args = ap.parse_args()
+    if args.split == "test":
+        return test_final(args)
+    args.runs = args.runs or 3
+    args.prompt = args.prompt or DEFAULT_PROMPT
 
     prompt = PROMPTS[args.prompt]
     version = prompt.VERSION
