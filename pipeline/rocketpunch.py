@@ -17,7 +17,7 @@ import json
 import os
 import re
 import sys
-from datetime import date
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -25,6 +25,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = ROOT / "data" / "raw"
+KST = timezone(timedelta(hours=9))
 BASE = "https://openapi.rocketpunch.com/v1"  # 문서의 /api/v1 은 404 라서 /v1 을 쓴다
 # 본문 필드 순서. 필드 이름과 내용이 다른 공고가 있어 라벨 없이 본문만 잇는다.
 TEXT_FIELDS = ("description", "duty", "minimumQualification", "preferredQualification", "benefit")
@@ -73,17 +74,24 @@ def clean(text: str | None) -> str:
     return re.sub(r"\n\s*\n+", "\n", text).strip()
 
 
-def to_posting(raw: dict, job_category: str = "cloud_engineer") -> dict:
-    """로켓펀치 상세 응답 → posting. job_category 는 직무가 하나(M2)라 인자로 받는다."""
-    parts = [clean(raw.get(f)) for f in TEXT_FIELDS]
+def to_posting(raw: dict, role: str = "클라우드 엔지니어") -> dict:
+    """로켓펀치 상세 응답 → posting(실습 노트북의 표준 필드 + url). role 은 직무가 하나(M2)라 인자로 받는다."""
+    company = raw.get("company") or {}
+    started = raw.get("startAt") or raw.get("createdAt")  # 게시일. UTC 로 오므로 한국시간 날짜로 바꾼다
     return {
-        "posting_id": f"rp-{raw['jobId']}",
+        "id": f"rp-{raw['jobId']}",
+        "company": company.get("name") or "",
         "title": clean(raw["title"]),
-        "company": (raw.get("company") or {}).get("name") or "",
-        "job_category": job_category,
-        "text": "\n".join(p for p in parts if p),
-        "source": "rocketpunch",
-        "collected_at": date.today().isoformat(),
+        "industry": company.get("industry"),  # 산업 코드 그대로(예: FINANCE_ETC)
+        "role": role,
+        "career": ",".join(raw.get("seniorities") or []) or None,  # 숙련도 원본. 분석에는 쓰지 않는다
+        "region": None,  # 로켓펀치 상세 응답에 지역 필드가 없다
+        "posted_at": (
+            datetime.fromisoformat(started.replace("Z", "+00:00")).astimezone(KST).date().isoformat()
+            if started else None
+        ),
+        "text": "\n".join(p for p in (clean(raw.get(f)) for f in TEXT_FIELDS) if p),
+        "url": raw.get("webUrl"),
     }
 
 
@@ -137,22 +145,22 @@ def cmd_search(args) -> None:
     print("\njobId:", " ".join(str(it["jobId"]) for it in listing["items"]))
 
 
-def process(job_id, job_category: str, terms) -> bool:
+def process(job_id, role: str, terms) -> bool:
     """상세를 받아(있으면 재사용) 본문 필터를 적용하고, 통과하면 posting 을 저장한다."""
-    posting = to_posting(load_or_fetch(str(job_id)), job_category)
+    posting = to_posting(load_or_fetch(str(job_id)), role)
     hits = matched_terms(posting, terms)
-    out = RAW_DIR / f"{posting['posting_id']}.posting.json"
+    out = RAW_DIR / f"{posting['id']}.posting.json"
     if hits:
         out.write_text(json.dumps(posting, ensure_ascii=False, indent=2), encoding="utf-8")
     else:
         out.unlink(missing_ok=True)  # 필터 기준이 바뀌었을 때 예전 통과본을 지운다
-    print(f"{'통과' if hits else '탈락'}\t{posting['posting_id']}\t필터 {hits or '없음'}\t본문 {len(posting['text'])}자\t{posting['title'][:40]}")
+    print(f"{'통과' if hits else '탈락'}\t{posting['id']}\t필터 {hits or '없음'}\t본문 {len(posting['text'])}자\t{posting['title'][:40]}")
     return bool(hits)
 
 
 def cmd_fetch(args) -> None:
     for job_id in args.ids:
-        process(job_id, args.job_category, args.terms)
+        process(job_id, args.role, args.terms)
 
 
 def cmd_collect(args) -> None:
@@ -167,7 +175,7 @@ def cmd_collect(args) -> None:
         items = list_page(params)
         for it in items:
             seen += 1
-            kept += process(it["jobId"], args.job_category, args.terms)
+            kept += process(it["jobId"], args.role, args.terms)
             if kept >= args.n:
                 break
         if kept >= args.n or not items:
@@ -199,7 +207,7 @@ def main() -> None:
     c.add_argument("--pages", type=int, default=1)
     c.add_argument("-n", type=int, default=10, help="통과 목표 건수")
     for sp, run in ((f, cmd_fetch), (c, cmd_collect)):
-        sp.add_argument("--job-category", default="cloud_engineer", help="posting 의 job_category")
+        sp.add_argument("--role", default="클라우드 엔지니어", help="posting 의 role(직무 이름)")
         sp.add_argument("--terms", nargs="+", default=list(DEFAULT_TERMS), help="본문 필터 단어")
         sp.set_defaults(run=run)
     args = p.parse_args()

@@ -18,13 +18,18 @@
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `posting_id` | string | 출처 접두어 + 번호. 예: `w24-0001` |
-| `title` | string | 공고 제목 |
+| `id` | string | 출처 접두어 + 번호. 예: `rp-159502`. ②·④의 `posting_id`가 이 값을 가리킨다 |
 | `company` | string | 회사명 |
-| `job_category` | string | 직무 코드. 예: `cloud_engineer` |
+| `title` | string | 공고 제목 |
+| `industry` | string \| null | 산업. 로켓펀치는 산업 코드 그대로(예: `FINANCE_ETC`) |
+| `role` | string | 직무 이름. 예: `클라우드 엔지니어` |
+| `career` | string \| null | 경력·숙련도 원문(예: `JUNIOR,MIDLEVEL`). 분석에는 쓰지 않는다 |
+| `region` | string \| null | 근무 지역. 소스가 주지 않으면 `null` |
+| `posted_at` | string \| null | 게시일 `YYYY-MM-DD`(한국시간) |
 | `text` | string | 공고 본문 전체. 근거 문장 검사의 기준 |
-| `source` | string | 데이터 출처. 예: `rocketpunch`, `manual` |
-| `collected_at` | string | 수집일 `YYYY-MM-DD` |
+| `url` | string \| null | 원본 공고 링크. 수동 수집처럼 링크가 없으면 `null` |
+
+필드 이름은 수업 실습 노트북(`01_데이터수집_전처리`)의 표준 필드를 따릅니다. 데이터 출처와 수집일은 필드로 두지 않고 `docs/data-sources.md`에 적습니다(2026-11-15).
 
 ## ② 추출 결과 (`extraction`) — ai → backend
 

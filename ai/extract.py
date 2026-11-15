@@ -59,11 +59,11 @@ def extract_with_meta(posting: dict) -> tuple[dict, ConverseResult]:
         prompt.SYSTEM,
         prompt.user_message(posting["text"]),
         mock_file=MOCK_FILE,
-        mock_key=posting["posting_id"],
+        mock_key=posting["id"],
         validate=validate_llm_output,
     )
     extraction = {
-        "posting_id": posting["posting_id"],
+        "posting_id": posting["id"],  # ②의 posting_id 는 ①의 id 를 가리킨다
         "skills": to_contract(result.data["skills"], posting["text"]),
     }
     return extraction, result

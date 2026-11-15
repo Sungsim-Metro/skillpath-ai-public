@@ -55,7 +55,7 @@ def run_once(postings: list[dict], gold: dict[str, dict]) -> dict:
     rows, errors = [], []
 
     for p in postings:
-        pid = p["posting_id"]
+        pid = p["id"]  # 정답지(gold)의 posting_id 와 같은 값
         gold_pairs = {(s["normalized"], s["type"]) for s in gold[pid]["skills"]}
         gold_names = {n for n, _ in gold_pairs}
         if not gold_pairs:

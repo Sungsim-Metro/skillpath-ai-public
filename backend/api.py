@@ -199,7 +199,7 @@ def extract_posting(text: str, posting_id: str = "manual-input") -> dict:
     if not is_mock():
         from ai.extract import extract_skills
 
-        return extract_skills({"posting_id": posting_id, "text": text})
+        return extract_skills({"id": posting_id, "text": text})
     vocab = {s["skill"]: s["skill"] for s in _load("demand.json")["skills"]}
     vocab.update(_MOCK_ALIASES)
     clauses = [c.strip() for c in re.split(r"[.\n,·;]", text) if c.strip()]
