@@ -1,0 +1,14 @@
+{
+  "posting_id": "sample-0002",
+  "skills": [
+    {
+      "raw": "AWS",
+      "normalized": "AWS",
+      "type": "preferred",
+      "section": "preference",
+      "evidence": "AWS 운영 경험 우대",
+      "confidence": "high",
+      "ncs_unit": null
+    }
+  ]
+}

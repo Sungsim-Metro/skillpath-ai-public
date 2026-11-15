@@ -3,7 +3,8 @@
 LLM 은 raw, normalized, type, evidence 만 낸다. posting_id, section, confidence, ncs_unit 은 코드가 채운다.
 - evidence 가 비면 버린다.
 - section 은 근거 문장이 들어 있는 칸(ai.sections). 혜택·회사소개 같은 제외 칸에서 나온 기술은 버린다.
-- 같은 기술이 여러 번 나오면 수요 가중치(ai.sections.weight)가 가장 큰 것 하나만 남긴다.
+- 같은 기술이 여러 번 나오면 confidence가 high인 후보를 우선한다.
+  같은 확신도에서는 수요 가중치(ai.sections.weight)가 가장 큰 하나를 남기고, 둘 다 같으면 먼저 나온 후보를 남긴다.
 
 프롬프트 버전 (기본은 v1. 기본값을 v2.1 로 바꾸는 시점은 #21 채점 뒤에 정한다)
 - v1: confidence 는 근거가 공고에 있고 normalized 가 v1 대표명 12개 안이면 high
@@ -15,6 +16,10 @@ PROMPTS 에 없는 버전을 주면 ValueError 를 낸다.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+
 from ai.bedrock import ConverseResult, converse_json
 from ai.evidence import evidence_in_text
 from ai.prompts import extract_v1, extract_v2, extract_v2_1
@@ -24,8 +29,51 @@ from pipeline.aliases import normalize_skill
 PROMPTS = {"v1": extract_v1, "v2": extract_v2, "v2.1": extract_v2_1}  # v2.1 의 후처리는 v2 와 같다
 DEFAULT_PROMPT = "v1"
 PROMPT_VERSION = PROMPTS[DEFAULT_PROMPT].VERSION
+EXTRACTOR_VERSION = "extractor-v3"
 MOCK_FILE = "mock_bedrock_extract.json"
 TYPES = ("required", "preferred")
+MAX_TOKENS = 4096
+TEMPERATURE = 0.0
+
+
+def _json_sha256(value: object) -> str:
+    serialized = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def extraction_settings() -> dict:
+    """현재 추출 설정을 DynamoDB에 저장할 수 있는 값으로 돌려준다."""
+    prompt = prompt_of(DEFAULT_PROMPT)
+    model_id = os.getenv("BEDROCK_MODEL_ID", "")
+    if not model_id.strip():
+        raise ValueError("BEDROCK_MODEL_ID를 설정해야 추출 결과를 저장할 수 있습니다.")
+    return {
+        "model_id": model_id,
+        "prompt_version": prompt.VERSION,
+        "extractor_version": EXTRACTOR_VERSION,
+        "canonical_skills_sha256": _json_sha256(sorted(prompt.CANONICAL_SKILLS)),
+        "inference_config": {
+            "temperature": str(TEMPERATURE),
+            "max_tokens": MAX_TOKENS,
+        },
+    }
+
+
+def input_fingerprint(
+    posting: dict, job_category: str, settings: dict | None = None
+) -> str:
+    """현재 분석 입력과 설정의 해시로 저장된 성공 결과의 재사용 여부를 판단한다."""
+    prompt = prompt_of(DEFAULT_PROMPT)
+    return _json_sha256({
+        "job_category": job_category,
+        "posting_id": posting["id"],
+        "text": posting["text"],
+        "system": prompt.SYSTEM,
+        "user_message": prompt.user_message(posting["text"]),
+        "settings": extraction_settings() if settings is None else settings,
+    })
 
 
 def validate_llm_output(data: dict) -> None:
@@ -62,7 +110,7 @@ def _canonical(s: dict, prompt_version: str) -> tuple[str, bool]:
 def to_contract_with_dropped(
     llm_skills: list[dict], text: str, prompt_version: str = DEFAULT_PROMPT
 ) -> tuple[list[dict], list[dict]]:
-    """LLM 출력을 ② skills 형식으로 바꾼다. (② skills, 제외 칸이라 버린 LLM 출력) 을 돌려준다."""
+    """근거 검증과 수요 가중치 순으로 중복을 합쳐 (② skills, 제외 후보)를 돌려준다."""
     prompt_of(prompt_version)  # 없는 버전이면 여기서 멈춘다 (v1 이 아니라는 이유로 v2 후처리로 가지 않게)
     by_name: dict[str, dict] = {}
     dropped: list[dict] = []
@@ -86,7 +134,12 @@ def to_contract_with_dropped(
             "ncs_unit": None,
         }
         prev = by_name.get(name)
-        if prev is None or weight(item["type"], item["section"]) > weight(prev["type"], prev["section"]):
+        priority = (
+            item["confidence"] == "high", weight(item["type"], item["section"])
+        )
+        if prev is None or priority > (
+            prev["confidence"] == "high", weight(prev["type"], prev["section"])
+        ):
             by_name[name] = item
     return list(by_name.values()), dropped
 
@@ -107,6 +160,8 @@ def extract_with_details(
         mock_file=MOCK_FILE,
         mock_key=posting["id"],
         validate=validate_llm_output,
+        max_tokens=MAX_TOKENS,
+        temperature=TEMPERATURE,
     )
     skills, dropped = to_contract_with_dropped(result.data["skills"], posting["text"], prompt_version)
     extraction = {

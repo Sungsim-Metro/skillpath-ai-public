@@ -19,11 +19,19 @@ from __future__ import annotations
 import json
 import os
 import re
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
+from time import monotonic
+
+from backend.dynamodb import DynamoDBStore, json_numbers
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SAMPLE_DIR = DATA_DIR / "sample"
+DEMAND_CACHE_SECONDS = 60
+_demand_cache: dict[tuple[str, str, str, str], tuple[float, dict]] = {}
+_demand_cache_lock = Lock()
 
 UNCLASSIFIED = "미분류"
 
@@ -48,10 +56,27 @@ def _load(name: str):
 
 
 def get_demand(job_category: str) -> dict:
-    """직무의 기술별 수요 집계(④)를 돌려준다."""
+    """직무 수요 집계(④). 실제 모드는 완성된 DB 결과를 60초간 재사용한다."""
     if is_mock():
         return _load("demand.json")
-    raise NotImplementedError("실제 수요 집계는 #12 에서 구현합니다.")
+    table_name = os.getenv("DYNAMODB_DEMAND_TABLE", "").strip()
+    if not table_name:
+        raise ValueError("DYNAMODB_DEMAND_TABLE을 설정하세요.")
+    cache_key = (
+        job_category, table_name,
+        os.getenv("AWS_REGION", "ap-northeast-2"), os.getenv("AWS_PROFILE", ""),
+    )
+    with _demand_cache_lock:
+        now = monotonic()
+        cached = _demand_cache.get(cache_key)
+        if cached is not None and now - cached[0] < DEMAND_CACHE_SECONDS:
+            return deepcopy(cached[1])
+        snapshot = DynamoDBStore.from_env().get_demand_snapshot(job_category)
+        if snapshot is None:
+            raise LookupError(f"완성된 직무 수요 집계가 없습니다: {job_category}")
+        demand = json_numbers(snapshot["demand"])
+        _demand_cache[cache_key] = (monotonic(), demand)
+        return deepcopy(demand)
 
 
 @lru_cache
