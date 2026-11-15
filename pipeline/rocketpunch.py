@@ -4,8 +4,12 @@
   python -m pipeline.rocketpunch codes                       # 직군 코드 목록
   python -m pipeline.rocketpunch search -k 클라우드 --codes <코드> --size 20
   python -m pipeline.rocketpunch fetch 159620 159227 ...     # 상세를 받아 직무 필터 후 posting 저장
-  python -m pipeline.rocketpunch collect --codes <코드> -n 10  # 목록 → 상세 → 직무 필터, 통과 10건까지
+  python -m pipeline.rocketpunch collect --codes <코드> -n 10  # 목록 → 제목 선판정 → 상세 → 직무 필터, 통과 10건까지
+  python -m pipeline.rocketpunch collect -k Kubernetes --codes dev --pages 5 --any-title -n 999
+                                                             # 제목 선판정 없이 상세까지 받는다(AWS 언급 공고를 찾을 때)
+  python -m pipeline.rocketpunch export-eval --n 10 --min-aws 4  # 채점용 공고를 data/raw/eval/ 로 내보낸다
 
+- 사람이 열어 볼 posting 은 data/raw/rp-<id>_<회사>_<제목>.posting.json 으로 저장한다.
 - 원본 응답은 data/raw/rp-<jobId>.raw.json 에 저장한다(저장소에 올리지 않는다).
 - 이미 받은 공고는 API 를 다시 부르지 않는다. 429 가 오면 멈추고, 다시 실행하면 이어서 받는다.
 """
@@ -172,15 +176,32 @@ def cmd_search(args) -> None:
     print("\njobId:", " ".join(str(it["jobId"]) for it in listing["items"]))
 
 
+def _slug(text: str, limit: int) -> str:
+    """파일 이름에 쓸 수 있는 읽기 쉬운 조각. [회사] 같은 꼬리표와 윈도우 금지 문자를 빼고 공백은 -로 잇는다."""
+    text = re.sub(r"\[[^\]]*\]|\(주\)|㈜|주식회사", " ", text or "")  # [꼬리표]와 (주)·주식회사는 이름에서 뺀다
+    text = re.sub(r'[<>:"/\\|?*·,()\x00-\x1f]+', " ", text)
+    return "-".join(text.split())[:limit].strip("-.") or "무제"
+
+
+def posting_path(posting: dict) -> Path:
+    """사람이 열어 볼 posting 파일 이름: rp-159502_한패스_핀테크-IT-인프라-운영-관리-담당-경력.posting.json
+    id 가 맨 앞이라 이름만 보고도 공고를 찾을 수 있고, 회사와 제목이 있어 목록에서 구분된다."""
+    return RAW_DIR / f"{posting['id']}_{_slug(posting['company'], 12)}_{_slug(posting['title'], 30)}.posting.json"
+
+
+def _posting_files(posting_id: str) -> list[Path]:
+    """한 공고의 posting 파일 전부(예전 이름 rp-<id>.posting.json 포함). id 가 앞부분만 같은 다른 공고는 걸리지 않는다."""
+    return [*RAW_DIR.glob(f"{posting_id}_*.posting.json"), *RAW_DIR.glob(f"{posting_id}.posting.json")]
+
+
 def process(job_id, role: str, terms) -> bool:
     """상세를 받아(있으면 재사용) 직무(제목) 필터를 적용하고, 통과하면 posting 을 저장한다."""
     posting = to_posting(load_or_fetch(str(job_id)), role)
     hits = matched_terms(posting, terms)
-    out = RAW_DIR / f"{posting['id']}.posting.json"
+    for old in _posting_files(posting["id"]):
+        old.unlink()  # 필터 기준이나 파일 이름 규칙이 바뀌었을 때 예전 파일을 남기지 않는다
     if hits:
-        out.write_text(json.dumps(posting, ensure_ascii=False, indent=2), encoding="utf-8")
-    else:
-        out.unlink(missing_ok=True)  # 필터 기준이 바뀌었을 때 예전 통과본을 지운다
+        posting_path(posting).write_text(json.dumps(posting, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"{'통과' if hits else '탈락'}\t{posting['id']}\t필터 {hits or '없음'}\t본문 {len(posting['text'])}자\t{posting['title'][:40]}")
     return bool(hits)
 
@@ -191,8 +212,11 @@ def cmd_fetch(args) -> None:
 
 
 def cmd_collect(args) -> None:
-    """목록 → 상세 → 본문 필터. 통과가 --n 건이 되거나 429 가 오면 멈춘다. 다시 실행하면 이어서 한다."""
-    kept = seen = 0
+    """목록 → (제목 선판정) → 상세 → 직무 필터. 통과가 --n 건이 되거나 429 가 오면 멈춘다. 다시 실행하면 이어서 한다.
+
+    목록에는 제목이 이미 있다. 직무 필터가 제목만 보므로 제목이 안 맞는 공고는 상세를 받기 전에 건너뛴다(상세 1회 절약).
+    이미 받은 원본이 있으면 호출이 들지 않으니 그대로 처리한다."""
+    kept = seen = skipped = 0
     for page in range(1, args.pages + 1):
         params = {"pageSize": args.size, "page": page, "sort": args.sort}
         if args.keyword:
@@ -202,12 +226,83 @@ def cmd_collect(args) -> None:
         items = list_page(params)
         for it in items:
             seen += 1
+            cached = (RAW_DIR / f"rp-{it['jobId']}.raw.json").exists()
+            if not args.any_title and not cached and not matched_terms({"title": it["title"]}, args.terms):
+                skipped += 1
+                # 예전 기준으로 통과해 저장된 posting 이 원본 없이 남아 있어도 이제는 탈락이므로 같이 지운다
+                for stale in _posting_files(f"rp-{it['jobId']}"):
+                    stale.unlink()
+                print(f"건너뜀\trp-{it['jobId']}\t제목이 직무 단어에 안 맞아 상세를 받지 않음\t{it['title'][:40]}")
+                continue
             kept += process(it["jobId"], args.role, args.terms)
             if kept >= args.n:
                 break
         if kept >= args.n or not items:
             break
-    print(f"\n후보 {seen}건 확인, 통과 {kept}건, 탈락 {seen - kept}건 (목표 {args.n}건)")
+    print(f"\n후보 {seen}건 확인, 통과 {kept}건, 상세 없이 건너뜀 {skipped}건(호출 {skipped}회 절약), "
+          f"그 밖의 탈락 {seen - kept - skipped}건 (목표 {args.n}건)")
+
+
+TUNING_FILE = ROOT / "data" / "tuning_ids.json"  # 성진님이 프롬프트를 고칠 때 본 공고 번호(번호만, 원문 없음)
+EVAL_DIR = RAW_DIR / "eval"
+NOT_ROLE = "기타(직무 필터 밖)"
+
+
+def cmd_export_eval(args) -> None:
+    """채점용 공고를 data/raw/eval/ 로 내보낸다. 받아 둔 원본(호출 없음)에서 고른다.
+
+    - 프롬프트 튜닝에 쓴 공고(data/tuning_ids.json)는 뺀다. 본 공고로 채점하면 점수가 부풀려진다.
+    - 직무 필터를 통과한 공고를 우선하고, AWS 언급 공고는 최소 --min-aws 건 넣는다. AWS 추출 성능을 재기 위해서다.
+      직무 필터 밖의 AWS 언급 공고도 들어갈 수 있고, 그때 role 은 '기타(직무 필터 밖)'로 표시한다(수요 집계에 섞지 않으려고).
+    - 공고 원문이 들어 있으므로 커밋하지 않는다(data/raw/ 는 .gitignore). 같이 만드는 eval-목록.csv 에는 원문이 없다."""
+    from ai.sections import headings
+
+    tuned = {str(i) for i in json.loads(TUNING_FILE.read_text(encoding="utf-8"))["ids"]}
+    pool = []  # (posting, 직무 필터 통과, AWS 언급)
+    for f in sorted(RAW_DIR.glob("rp-*.raw.json")):
+        raw = json.loads(f.read_text(encoding="utf-8"))
+        if str(raw["jobId"]) in tuned:
+            continue
+        posting = to_posting(raw, args.role)
+        role_ok = bool(matched_terms(posting, args.terms))
+        aws = bool(matched_terms(posting, ["aws"], fields=("title", "text")))
+        pool.append((posting if role_ok else {**posting, "role": NOT_ROLE}, role_ok, aws))
+
+    newest = lambda x: -int(x[0]["id"][3:])  # 최신 공고(번호가 큰 것) 먼저
+    aws_pool = sorted((x for x in pool if x[2]), key=lambda x: (not x[1], newest(x)))  # 직무 통과 우선
+    want_aws = min(args.min_aws, args.n)  # --min-aws 가 --n 보다 크면 n 건으로 맞춘다(아래 슬라이스가 음수가 되지 않게)
+    picked = aws_pool[:want_aws]
+    taken = {x[0]["id"] for x in picked}
+    picked += sorted((x for x in pool if x[1] and x[0]["id"] not in taken), key=newest)[: args.n - len(picked)]
+    taken = {x[0]["id"] for x in picked}
+    if len(picked) < args.n:  # 직무 통과 공고가 모자라면 남은 AWS 언급 공고로 채운다
+        picked += [x for x in aws_pool if x[0]["id"] not in taken][: args.n - len(picked)]
+
+    EVAL_DIR.mkdir(parents=True, exist_ok=True)
+    for old in EVAL_DIR.glob("eval-*"):
+        old.unlink()  # 다시 내보내면 이전 결과를 지우고 새로 만든다
+    rows = []
+    for i, (p, role_ok, aws) in enumerate(picked, 1):
+        name = f"eval-{i:02d}_{posting_path(p).name.replace('.posting.json', '.json')}"
+        (EVAL_DIR / name).write_text(json.dumps(p, ensure_ascii=False, indent=2), encoding="utf-8")
+        rows.append([i, p["id"], p["company"], p["title"], "통과" if role_ok else "밖", "있음" if aws else "없음",
+                     len(headings(p["text"])), p["url"]])
+    import csv
+    with (EVAL_DIR / "eval-목록.csv").open("w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["번호", "id", "회사", "제목", "직무 필터", "AWS 언급", "칸 제목 수", "링크"])
+        w.writerows(rows)
+    n_aws = sum(1 for r in rows if r[5] == "있음")
+    n_out = sum(1 for r in rows if r[4] == "밖")
+    print(f"튜닝에 쓴 {len(tuned)}건을 빼고 받아 둔 원본 {len(pool)}건 중 {len(rows)}건을 {EVAL_DIR} 에 내보냈습니다.")
+    print(f"  직무 필터 통과 {len(rows) - n_out}건, 밖 {n_out}건 / AWS 언급 {n_aws}건")
+    if args.min_aws > args.n:
+        print(f"  참고: --min-aws({args.min_aws})가 --n({args.n})보다 커서 AWS 언급 기준을 {args.n}건으로 맞췄습니다.")
+    if len(rows) < args.n or n_aws < want_aws:
+        print(f"  ⚠ 목표(전체 {args.n}건, AWS 언급 {want_aws}건 이상)에 못 미칩니다: "
+              f"{args.n - len(rows)}건, AWS 언급 {max(want_aws - n_aws, 0)}건 부족. collect 로 더 받아 오세요.")
+    for r in rows:
+        print(f"  {r[0]:02d} {r[1]} | {r[2]} | {r[3][:34]} | 직무 {r[4]} | AWS {r[5]}")
 
 
 def main() -> None:
@@ -233,7 +328,11 @@ def main() -> None:
     c.add_argument("--size", type=int, default=10, help="문서는 50이라지만 실제 최대는 10")
     c.add_argument("--pages", type=int, default=1)
     c.add_argument("-n", type=int, default=10, help="통과 목표 건수")
-    for sp, run in ((f, cmd_fetch), (c, cmd_collect)):
+    c.add_argument("--any-title", action="store_true", help="제목 선판정을 하지 않고 상세까지 받는다(AWS 언급 공고를 찾을 때)")
+    e = sub.add_parser("export-eval", help="채점용 공고를 data/raw/eval/ 로 내보낸다(호출 없음)")
+    e.add_argument("--n", type=int, default=10, help="내보낼 건수")
+    e.add_argument("--min-aws", type=int, default=4, help="AWS 언급 공고 최소 건수")
+    for sp, run in ((f, cmd_fetch), (c, cmd_collect), (e, cmd_export_eval)):
         sp.add_argument("--role", default="클라우드 엔지니어", help="posting 의 role(직무 이름)")
         sp.add_argument("--terms", nargs="+", default=list(ROLE_TERMS), help="직무 필터 단어(제목에서 찾음)")
         sp.set_defaults(run=run)
