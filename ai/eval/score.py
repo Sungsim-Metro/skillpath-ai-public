@@ -4,7 +4,7 @@
   가짜 모드:  $env:BEDROCK_MOCK="1"; .venv\\Scripts\\python -m ai.eval.score --runs 1
   실제 모드:  $env:BEDROCK_MOCK="0"; .venv\\Scripts\\python -m ai.eval.score --runs 3
               (공고 10건 x 3회 = Bedrock 호출 30번 이상. 재시도가 있으면 더 늘어남)
-  프롬프트:   --prompt v1(기본) 또는 v2
+  프롬프트:   --prompt v1(기본), v2, v2.1 (#21 채점용 공고로 판단할 버전은 v2.1)
 
 채점은 전부 코드로 한다.
 - 기본 점수: 공고마다 (normalized, type) 묶음을 정답과 비교해 모두 더한 micro P/R/F1

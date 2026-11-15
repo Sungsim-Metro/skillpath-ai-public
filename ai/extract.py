@@ -5,10 +5,13 @@ LLM 은 raw, normalized, type, evidence 만 낸다. posting_id, section, confide
 - section 은 근거 문장이 들어 있는 칸(ai.sections). 혜택·회사소개 같은 제외 칸에서 나온 기술은 버린다.
 - 같은 기술이 여러 번 나오면 수요 가중치(ai.sections.weight)가 가장 큰 것 하나만 남긴다.
 
-프롬프트 버전 (기본은 v1. v2 로 바꾸는 시점은 #21 채점 뒤에 정한다)
+프롬프트 버전 (기본은 v1. 기본값을 v2.1 로 바꾸는 시점은 #21 채점 뒤에 정한다)
 - v1: confidence 는 근거가 공고에 있고 normalized 가 v1 대표명 12개 안이면 high
 - v2: 이름을 팀 별칭 사전(pipeline.aliases.normalize_skill)으로 대표명에 맞춘 **뒤에** 중복을 합친다.
       confidence 는 근거가 공고에 있고 사전에 있는 기술이면 high. 마지막에 pipeline.standardize 로 ncs_unit 을 채운다.
+- v2.1: 프롬프트만 다르고(종류 이름·괄호 별칭·'/' 나열 규칙, 정답지와 겹치지 않는 예시) 후처리는 v2 와 같다.
+        #21 채점용 공고로 판단할 버전이다.
+PROMPTS 에 없는 버전을 주면 ValueError 를 낸다.
 """
 from __future__ import annotations
 
@@ -40,6 +43,13 @@ def validate_llm_output(data: dict) -> None:
             raise ValueError(f"skills[{i}].type 이 {s['type']!r} 입니다")
 
 
+def prompt_of(prompt_version: str):
+    """버전 이름 → 프롬프트 모듈. 없는 버전이면 다른 버전으로 조용히 돌지 않게 ValueError."""
+    if prompt_version not in PROMPTS:
+        raise ValueError(f"지원하지 않는 프롬프트 버전: {prompt_version!r} (가능: {', '.join(PROMPTS)})")
+    return PROMPTS[prompt_version]
+
+
 def _canonical(s: dict, prompt_version: str) -> tuple[str, bool]:
     """(② 에 쓸 이름, 대표명 목록·사전 안의 기술인가)."""
     name = s["normalized"].strip()
@@ -53,6 +63,7 @@ def to_contract_with_dropped(
     llm_skills: list[dict], text: str, prompt_version: str = DEFAULT_PROMPT
 ) -> tuple[list[dict], list[dict]]:
     """LLM 출력을 ② skills 형식으로 바꾼다. (② skills, 제외 칸이라 버린 LLM 출력) 을 돌려준다."""
+    prompt_of(prompt_version)  # 없는 버전이면 여기서 멈춘다 (v1 이 아니라는 이유로 v2 후처리로 가지 않게)
     by_name: dict[str, dict] = {}
     dropped: list[dict] = []
     for s in llm_skills:
@@ -89,7 +100,7 @@ def extract_with_details(
     posting: dict, prompt_version: str = DEFAULT_PROMPT
 ) -> tuple[dict, ConverseResult, list[dict]]:
     """채점용. (추출 결과 ②, 시도 횟수·토큰 사용량, 제외 칸이라 버린 LLM 출력)."""
-    prompt = PROMPTS[prompt_version]
+    prompt = prompt_of(prompt_version)
     result = converse_json(
         prompt.SYSTEM,
         prompt.user_message(posting["text"]),
