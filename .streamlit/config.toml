@@ -1,0 +1,14 @@
+# 화면 테마: 밝은 바탕, 고딕 글꼴, 파란 강조색 하나.
+# 글꼴 파일을 받지 못하면(오프라인) 맑은 고딕 등 PC에 있는 고딕으로 보인다.
+[theme]
+base = "light"
+primaryColor = "#1F5FBF"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F5F8"
+textColor = "#1A1F2B"
+linkColor = "#1F5FBF"
+borderColor = "#E3E7ED"
+font = "Noto Sans KR:https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap, Malgun Gothic, Apple SD Gothic Neo, sans-serif"
+headingFontWeights = 700
+baseRadius = "0.5rem"
+showSidebarBorder = true

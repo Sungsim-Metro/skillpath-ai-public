@@ -1,0 +1,19 @@
+{
+  "source": "sample",
+  "total_courses": 48,
+  "note": "가짜 데이터입니다. 교과목 표본에서 기술별 교과목 수를 세어 교체합니다.",
+  "skills": [
+    {"skill": "Python", "courses": 9},
+    {"skill": "Java", "courses": 8},
+    {"skill": "SQL", "courses": 6},
+    {"skill": "Spring", "courses": 5},
+    {"skill": "Network", "courses": 5},
+    {"skill": "Linux", "courses": 4},
+    {"skill": "React", "courses": 4},
+    {"skill": "Git", "courses": 3},
+    {"skill": "AWS", "courses": 2},
+    {"skill": "Docker", "courses": 2},
+    {"skill": "Kubernetes", "courses": 1},
+    {"skill": "CI/CD", "courses": 1}
+  ]
+}

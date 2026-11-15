@@ -10,6 +10,7 @@
 | ③ 추천 | `data/sample/recommendation.json` | 형식 예시 (1건) |
 | ③ 추천 목록 | `data/sample/recommendations.json` | 가짜 모드에서 화면이 읽는 파일 |
 | ④ 수요 집계 | `data/sample/demand.json` | 가짜 모드에서 화면이 읽는 파일 |
+| ⑤ 교육 공급 | `data/sample/supply.json` | 가짜 모드에서 시장 Gap 계산이 읽는 파일 |
 
 예시 파일의 숫자는 서로 맞춰 둡니다(공고 40건 기준).
 
@@ -67,4 +68,19 @@
 | `skills[].postings` | number | 이 기술을 요구한 공고 수 (코드로 계산) |
 | `skills[].required` | number | 그중 필수로 표기한 공고 수 |
 | `skills[].preferred` | number | 그중 우대로 표기한 공고 수 |
-| `skills[].evidence_samples[]` | object[] | 근거 예시 `{posting_id, evidence}` 1~3개 |
+| `skills[].evidence_samples[]` | object[] | 근거 예시 `{posting_id, url, evidence}` 1~3개. `url`은 원본 공고 링크이고, 링크가 없는 공고(수동 수집)는 `null`이거나 생략 |
+
+화면은 `url`이 있으면 근거 문장 옆에 "공고 원문 열기" 링크를 붙입니다(2026-11-15 추가).
+
+## ⑤ 교육 공급 (`supply`) — pipeline → backend  · 11/15 추가, 회의 확인 대기
+
+시장 Gap(공고는 원하는데 교육이 덜 다루는 기술)을 계산할 때 쓰는 공급 쪽 집계입니다. 예시는 `data/sample/supply.json`.
+계산식은 `backend/api.py`의 `get_market_gap` 설명에 있습니다.
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| `source` | string | 교과목 데이터 출처 |
+| `total_courses` | number | 전체 교과목 수 |
+| `note` | string | 화면에 함께 보여줄 안내(한계 등). 없으면 생략 |
+| `skills[].skill` | string | 표준 기술 이름 |
+| `skills[].courses` | number | 이 기술을 다루는 교과목 수 (코드로 계산) |
