@@ -11,6 +11,8 @@
 - extra: 정답에 없는데 뽑은 것. 정답이 빈 공고(0025)에서 하나라도 뽑으면 그만큼 extra
 - 빈 공고 정답: 정답이 빈 공고에서 모델도 빈 목록을 내면 정답
 - 지어낸 근거: evidence 가 공고 본문에 없는 결과 수 (uncertain 으로 남긴 것)
+- section 일치: 이름이 맞은 기술 중 section 이 정답과 같은 수 (section 은 코드가 칸 제목으로 정한다)
+- 제외 칸 버림: 혜택·회사소개 같은 칸에서 LLM 이 뽑아 코드가 버린 수 (기본 점수에는 넣지 않음)
 결과 원본은 outputs/eval/ 에 저장한다 (.gitignore 대상).
 """
 from __future__ import annotations
@@ -32,7 +34,7 @@ except ImportError:
 
 from ai.bedrock import BedrockJSONError, is_mock  # noqa: E402
 from ai.evidence import evidence_in_text  # noqa: E402
-from ai.extract import PROMPT_VERSION, extract_with_meta  # noqa: E402
+from ai.extract import PROMPT_VERSION, extract_with_details  # noqa: E402
 
 POSTINGS = ROOT / "data" / "sample" / "postings.json"
 GOLD = ROOT / "ai" / "eval" / "gold_extraction.json"
@@ -51,6 +53,7 @@ def run_once(postings: list[dict], gold: dict[str, dict]) -> dict:
     name_tp = name_fp = name_fn = 0
     fabricated = uncertain = retries = 0
     empty_total = empty_ok = 0
+    section_ok = section_total = excluded_dropped = 0
     tokens = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
     rows, errors = [], []
 
@@ -61,7 +64,7 @@ def run_once(postings: list[dict], gold: dict[str, dict]) -> dict:
         if not gold_pairs:
             empty_total += 1
         try:
-            pred, meta = extract_with_meta(p)
+            pred, meta, dropped = extract_with_details(p)
         except BedrockJSONError as e:
             errors.append({"posting_id": pid, "error": str(e)})
             fn += len(gold_pairs)
@@ -79,6 +82,17 @@ def run_once(postings: list[dict], gold: dict[str, dict]) -> dict:
         if not gold_pairs and not pairs:
             empty_ok += 1
 
+        gold_section = {s["normalized"]: s["section"] for s in gold[pid]["skills"]}
+        section_wrong = []
+        for s in pred["skills"]:
+            if s["normalized"] in gold_section:
+                section_total += 1
+                if s["section"] == gold_section[s["normalized"]]:
+                    section_ok += 1
+                else:
+                    section_wrong.append((s["normalized"], gold_section[s["normalized"]], s["section"]))
+        excluded_dropped += len(dropped)
+
         made_up = [s for s in pred["skills"] if not evidence_in_text(s["evidence"], p["text"])]
         fabricated += len(made_up)
         uncertain += sum(s["confidence"] == "uncertain" for s in pred["skills"])
@@ -92,6 +106,8 @@ def run_once(postings: list[dict], gold: dict[str, dict]) -> dict:
             "extra": sorted(pairs - gold_pairs),
             "missing": sorted(gold_pairs - pairs),
             "fabricated_evidence": [(s["normalized"], s["evidence"]) for s in made_up],
+            "section_wrong": section_wrong,  # (기술, 정답 section, 예측 section)
+            "excluded_dropped": [(s["normalized"], s["evidence"]) for s in dropped],
             "prediction": pred,
         })
 
@@ -103,6 +119,7 @@ def run_once(postings: list[dict], gold: dict[str, dict]) -> dict:
             "fabricated_evidence": fabricated, "uncertain": uncertain,
             "empty_posting_ok": f"{empty_ok}/{empty_total}",
             "retried": retries, "errors": len(errors),
+            "section_ok": f"{section_ok}/{section_total}", "excluded_dropped": excluded_dropped,
         },
         "tokens": tokens,
         "errors": errors,
@@ -118,9 +135,15 @@ def print_run(i: int, r: dict) -> None:
           f" / 지어낸 근거 {c['fabricated_evidence']} / uncertain {c['uncertain']}")
     print(f"  빈 공고 정답 {c['empty_posting_ok']} / 재시도 {c['retried']}건 / 오류 {c['errors']}건"
           f" / 토큰 {r['tokens']['totalTokens']}")
+    print(f"  section 일치 {c['section_ok']} / 제외 칸 버림 {c['excluded_dropped']}")
     for row in r["rows"]:
-        if row["extra"] or row["missing"] or row["fabricated_evidence"] or row["attempts"] > 1:
+        if (row["extra"] or row["missing"] or row["fabricated_evidence"] or row["attempts"] > 1
+                or row["section_wrong"] or row["excluded_dropped"]):
             print(f"  - {row['posting_id']}: 시도 {row['attempts']}회")
+            for name, want, got in row["section_wrong"]:
+                print(f"      section {name}: 정답 {want} / 예측 {got}")
+            for name, ev in row["excluded_dropped"]:
+                print(f"      제외 칸 버림 {name}: {ev!r}")
             if row["extra"]:
                 print(f"      extra   {row['extra']}")
             if row["missing"]:

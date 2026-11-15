@@ -39,9 +39,17 @@
 | `skills[].raw` | string | 공고에 쓰인 표현 그대로 |
 | `skills[].normalized` | string | 표준 이름. 예: `AWS` |
 | `skills[].type` | string | `required` 또는 `preferred` |
+| `skills[].section` | string \| null | 근거 문장이 들어 있는 공고 칸. `qualification`(자격요건), `duty`(주요업무), `preference`(우대사항), `other`(표에 없는 칸 제목이나 첫 칸 제목 앞의 글), `null`(칸 제목이 없는 공고, 또는 근거 문장을 본문에서 못 찾음). 코드가 정한다 |
 | `skills[].evidence` | string | 근거 문장. ①의 `text`에 그대로 있어야 함 |
 | `skills[].confidence` | string | `high` 또는 `uncertain` |
 | `skills[].ncs_unit` | string \| null | 연결된 NCS 능력단위. 없으면 `null` |
+
+**칸(section)** (2026-11-15 추가): ①의 `text`는 칸마다 `[주요업무]`, `[자격요건]`, `[우대사항]`처럼 제목을 한 줄에 단독으로 쓴다(수업 4주차 실습 방식).
+코드(`ai/sections.py`)가 근거 문장이 어느 칸 제목 아래에 있는지 보고 `section`을 정한다. 혜택·회사소개처럼 지원자에게 요구하지 않는 칸에서 나온 기술은 ②에 넣지 않는다.
+
+**수요 가중치** (2026-11-15 팀 결정, 회의록 추가 예정): 자격요건 1.0 / 주요업무 0.7 / 우대사항 0.5(수업 5주차 실습 값).
+칸이 있으면 칸 기준, 칸이 없거나 모르는 칸이면 type 기준(required 1.0 / preferred 0.5).
+가중치는 코드가 계산한다(`ai/sections.py`의 `weight`). 같은 공고에 같은 기술이 여러 번 나오면 가중치가 가장 큰 것 하나만 ②에 남긴다.
 
 ## ③ 추천 (`recommendation`) — backend + ai → app
 

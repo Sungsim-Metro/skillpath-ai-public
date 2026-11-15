@@ -1,6 +1,12 @@
 {
   "_note": "BEDROCK_MOCK=1 일 때 ai/bedrock.py 가 돌려주는 가짜 LLM 응답. 키는 posting_id, 없으면 default. 값이 목록이면 n번째 시도에 n번째 응답. 재시도, 근거 검사, 채점 경로를 확인하려고 일부러 틀린 응답을 넣었다.",
   "default": {"skills": []},
+  "sample-0012": {"skills": [
+    {"raw": "Slack", "normalized": "Slack", "type": "required", "evidence": "당사는 Slack과 Notion으로 협업하는 원격 근무 회사입니다."},
+    {"raw": "Docker", "normalized": "Docker", "type": "required", "evidence": "컨테이너(Docker) 기반 배포 환경 구축 경험"},
+    {"raw": "리눅스(Ubuntu)", "normalized": "Linux", "type": "required", "evidence": "리눅스(Ubuntu) 환경에 대한 이해"},
+    {"raw": "Kubernetes(EKS)", "normalized": "Kubernetes", "type": "preferred", "evidence": "Kubernetes(EKS) 클러스터 운영 경험자 우대"}
+  ]},
   "sample-0001": "```json\n{\"skills\": [{\"raw\": \"Python\", \"normalized\": \"Python\", \"type\": \"required\", \"evidence\": \"Python을 활용한 개발 경험\"}, {\"raw\": \"AWS\", \"normalized\": \"AWS\", \"type\": \"required\", \"evidence\": \"AWS 환경 운영 경험 필수\"}, {\"raw\": \"Docker\", \"normalized\": \"Docker\", \"type\": \"preferred\", \"evidence\": \"Docker 사용 경험 우대\"}]}\n```",
   "sample-0003": [
     "다음은 추출 결과입니다. Linux(필수), Network(필수), Prometheus(우대), Grafana(우대)",

@@ -200,11 +200,16 @@ def extract_posting(text: str, posting_id: str = "manual-input") -> dict:
         from ai.extract import extract_skills
 
         return extract_skills({"id": posting_id, "text": text})
+    from ai.sections import EXCLUDED, find_section
+
     vocab = {s["skill"]: s["skill"] for s in _load("demand.json")["skills"]}
     vocab.update(_MOCK_ALIASES)
     clauses = [c.strip() for c in re.split(r"[.\n,·;]", text) if c.strip()]
     skills, seen = [], set()
     for clause in clauses:
+        section = find_section(text, clause)
+        if section == EXCLUDED:
+            continue  # 혜택·회사소개 칸은 지원자에게 요구하는 기술이 아니다
         for raw, normalized in vocab.items():
             if raw.lower() in clause.lower() and normalized not in seen:
                 seen.add(normalized)
@@ -212,6 +217,7 @@ def extract_posting(text: str, posting_id: str = "manual-input") -> dict:
                     "raw": raw,
                     "normalized": normalized,
                     "type": "preferred" if "우대" in clause else "required",
+                    "section": section,
                     "evidence": clause,
                     "confidence": "high" if raw == normalized else "uncertain",
                     "ncs_unit": None,
