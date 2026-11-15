@@ -1,4 +1,4 @@
-"""추천 이유 v1 데모 (#15). 임시 연결표의 기술로 ③ 을 만들고 검사 결과와 토큰을 보여준다.
+"""추천 이유 v1 데모 (#15). search_courses(#14)가 고른 과정으로 ③ 을 만들고 검사 결과와 토큰을 보여준다.
 
 실행 (저장소 루트에서):
   가짜 모드:  $env:BEDROCK_MOCK="1"; .venv\\Scripts\\python -m ai.eval.recommend_demo
@@ -32,7 +32,7 @@ from ai.recommend import PROMPT_VERSION, build_recommendation, candidate_courses
 
 DEMAND = ROOT / "data" / "sample" / "demand.json"
 OUT_DIR = ROOT / "outputs" / "eval"
-DEFAULT_SKILLS = ["Kubernetes", "Docker"]
+DEFAULT_SKILLS = ["Kubernetes", "Docker", "AWS"]
 
 
 def demand_of(skill: str) -> dict:

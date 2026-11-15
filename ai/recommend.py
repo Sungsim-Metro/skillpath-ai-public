@@ -1,7 +1,9 @@
 """부족 기술 → 추천(③) (#15). LLM 은 reason 만 쓴다.
 
-- 과정 후보: data/sample/skill_courses_temp.json (임시, #14 search_courses 로 교체)
-- match: data/courses/course_subskill.csv 의 (course_id, subskill_id) 행 값을 코드가 그대로 쓴다
+- 과정 후보: pipeline.search.search_courses(skill) (#14). 반환 [{"course_id", "subskill_id", "match"}]
+- match: search_courses 가 돌려준 값을 그대로 쓴다(그 과정이 '이 기술'을 다루는지를 search 가 판단한다).
+  course_subskill.csv 의 match 는 '세부 능력'을 다룬다는 증거라 쓰지 않는다.
+  subskill_id 가 None 이면(AWS 처럼 넓은 기술에 지정한 과정 등) 규칙으로 찾은 연결이 아니므로 uncertain 으로 둔다
 - retiring 과정과 학습 목표(objectives)가 빈 과정은 제외한다 (근거로 삼을 내용이 없음)
 - 입력 숫자는 ③ demand 그대로. 지금은 건수로 가정한다 (건수인지 가중 합인지 미정: docs/development.md)
 - 공고 원문과 근거 문장은 넣지 않는다 (CLAUDE.md 원칙 3, 2026-11-12)
@@ -17,14 +19,15 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from ai.bedrock import ConverseResult, converse_json
+from ai.bedrock import SAMPLE_DIR, USAGE_KEYS, ConverseResult, converse_json, is_mock
 from ai.prompts import recommend_v1 as prompt
+from pipeline.search import search_courses
 
 ROOT = Path(__file__).resolve().parent.parent
 COURSES_CSV = ROOT / "data" / "courses" / "courses.csv"
-LINKS_CSV = ROOT / "data" / "courses" / "course_subskill.csv"
-TEMP_LINKS = ROOT / "data" / "sample" / "skill_courses_temp.json"
 MOCK_FILE = "mock_bedrock_recommend.json"
+# 가짜 모드에서 기술별 가짜 응답이 없을 때 과정마다 쓰는 문장. 숫자·영문 이름이 없어 reason 검사를 늘 통과한다
+MOCK_FALLBACK_REASON = "이 과정은 부족한 역량을 보완하는 데 도움이 되는 내용을 다룹니다."
 PROMPT_VERSION = prompt.VERSION
 NO_PREREQ = "표기 없음"
 # 모든 과정이 AWS Skill Builder 과정이라 reason 에 써도 지어낸 것으로 보지 않는 영문 낱말
@@ -45,28 +48,23 @@ def _courses() -> dict[str, dict]:
         return {r["course_id"]: r for r in csv.DictReader(f)}
 
 
-@lru_cache(maxsize=1)
-def _subskill_links() -> dict[tuple[str, str], dict]:
-    with LINKS_CSV.open(encoding="utf-8-sig", newline="") as f:
-        return {(r["course_id"], r["subskill_id"]): r for r in csv.DictReader(f)}
-
-
-@lru_cache(maxsize=1)
-def _temp_links() -> dict[str, list[dict]]:
-    return json.loads(TEMP_LINKS.read_text(encoding="utf-8"))["links"]
+MATCHES = ("certain", "uncertain")
 
 
 def candidate_courses(skill: str) -> list[dict]:
-    """임시 연결표에서 기술의 과정 후보를 고른다. 연결표가 데이터와 맞지 않으면 오류를 낸다."""
+    """search_courses 결과에서 과정 후보를 고른다. 결과가 과정 데이터와 맞지 않으면 오류를 낸다."""
     out = []
-    for link in _temp_links().get(skill, []):
+    for link in search_courses(skill):
         cid, sid = link["course_id"], link["subskill_id"]
         course = _courses().get(cid)
         if course is None:
-            raise KeyError(f"임시 연결표의 과정 {cid} 가 courses.csv 에 없습니다")
-        row = _subskill_links().get((cid, sid))
-        if row is None:
-            raise KeyError(f"course_subskill.csv 에 ({cid}, {sid}) 연결이 없습니다")
+            raise KeyError(f"search_courses 가 준 과정 {cid} 가 courses.csv 에 없습니다")
+        if sid is None:
+            match = "uncertain"  # 세부 능력 규칙으로 찾은 연결이 아니라 지정한 과정
+        else:
+            match = link.get("match")
+            if match not in MATCHES:
+                raise ValueError(f"search_courses 가 준 {cid} 의 match 가 {match!r} 입니다")
         objectives = [o.strip() for o in re.split(r"\s+/\s+|\n", course["objectives"]) if o.strip()]
         if course["retiring"].strip() or not objectives:
             continue
@@ -77,7 +75,7 @@ def candidate_courses(skill: str) -> list[dict]:
             "level": course["level"],
             "prerequisites": course["prerequisites"].strip() or NO_PREREQ,
             "objectives": objectives,
-            "match": row["match"],
+            "match": match,
             "subskill_id": sid,
         })
     return out
@@ -136,24 +134,42 @@ def validate_reasons(data: dict, llm_input: dict) -> None:
             raise ValueError(f"{c['course_id']} reason 이 한국어가 아닙니다")
 
 
+@lru_cache(maxsize=1)
+def _mock_skills() -> frozenset[str]:
+    table = json.loads((SAMPLE_DIR / MOCK_FILE).read_text(encoding="utf-8"))
+    return frozenset(k for k in table if k not in ("_note", "default"))
+
+
+def _mock_fallback(llm_input: dict) -> ConverseResult:
+    """가짜 모드에서 기술별 가짜 응답이 없을 때: 받은 과정마다 정해진 문장 하나. 검사는 실제 응답과 똑같이 한다."""
+    data = {"reasons": [{"course_id": c["course_id"], "reason": MOCK_FALLBACK_REASON} for c in llm_input["courses"]]}
+    validate_reasons(data, llm_input)
+    return ConverseResult(data, 1, {k: 0 for k in USAGE_KEYS}, ({"attempt": 1, **{k: 0 for k in USAGE_KEYS}},))
+
+
 def build_recommendation(skill: str, demand: dict) -> tuple[dict, Optional[ConverseResult]]:
     """③ 추천 1건과 LLM 호출 결과(시도 횟수·usage)를 돌려준다. 과정이 없으면 LLM 을 부르지 않는다.
 
     demand 는 ③ 의 demand 형식 {"postings", "of", "required_ratio"} 이다.
+    가짜 모드에서 mock_bedrock_recommend.json 에 그 기술의 응답이 없으면 _mock_fallback 을 쓴다
+    (화면 연결과 시연을 가짜 모드로 할 때 어떤 기술이 와도 오류가 나지 않게).
     """
     rec = {"gap_skill": skill, "demand": dict(demand), "courses": []}
     courses = candidate_courses(skill)
     if not courses:
         return rec, None
     llm_input = llm_input_of(skill, demand, courses)
-    result = converse_json(
-        prompt.SYSTEM,
-        prompt.user_message(llm_input),
-        mock_file=MOCK_FILE,
-        mock_key=skill,
-        validate=lambda data: validate_reasons(data, llm_input),
-        max_tokens=2048,
-    )
+    if is_mock() and skill not in _mock_skills():
+        result = _mock_fallback(llm_input)
+    else:
+        result = converse_json(
+            prompt.SYSTEM,
+            prompt.user_message(llm_input),
+            mock_file=MOCK_FILE,
+            mock_key=skill,
+            validate=lambda data: validate_reasons(data, llm_input),
+            max_tokens=2048,
+        )
     reasons = {r["course_id"]: r["reason"].strip() for r in result.data["reasons"]}
     rec["courses"] = [
         {

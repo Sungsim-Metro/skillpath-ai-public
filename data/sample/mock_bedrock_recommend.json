@@ -1,15 +1,20 @@
 {
-  "_note": "BEDROCK_MOCK=1 일 때 ai/recommend.py 가 받는 가짜 LLM 응답. 키는 gap_skill, 없으면 default. 값이 목록이면 n번째 시도에 n번째 응답. Kubernetes 첫 응답은 일부러 LLM 이 계산한 숫자(8건)를 넣어 숫자 검사와 재시도 경로를 확인한다.",
+  "_note": "BEDROCK_MOCK=1 일 때 ai/recommend.py 가 받는 가짜 LLM 응답. 키는 gap_skill, 없으면 default. 값이 목록이면 n번째 시도에 n번째 응답. 과정은 pipeline.search.search_courses(#14) 결과에 맞춘다. Kubernetes 첫 응답은 일부러 LLM 이 계산한 숫자(8건)를 넣어 숫자 검사와 재시도 경로를 확인한다. AWS 는 search_courses 가 subskill_id None 으로 지정 과정을 줄 때(종훈 변경 후) 쓰인다.",
   "default": {"reasons": []},
   "Kubernetes": [
     {"reasons": [
       {"course_id": "6MCV5DBF5N", "reason": "목표 직무 공고 40건 중 17건이 Kubernetes를 요구하고, 그중 8건이 필수입니다. 이 과정은 AWS에서 Kubernetes를 운영하는 이유를 설명합니다."},
-      {"course_id": "TXYJ7YH7EU", "reason": "공고 40건 중 17건이 Kubernetes를 요구합니다. 이 과정은 Amazon EKS 클러스터에 마이크로서비스를 배포하는 방법을 다룹니다."}
+      {"course_id": "TYAAKGU914", "reason": "공고 40건 중 17건이 Kubernetes를 요구합니다. 이 과정은 Amazon EKS 네트워킹을 다룹니다."},
+      {"course_id": "WU72QMK76B", "reason": "공고 40건 중 17건이 Kubernetes를 요구합니다. 이 과정은 컨테이너의 기본 개념을 다룹니다."}
     ]},
     {"reasons": [
       {"course_id": "6MCV5DBF5N", "reason": "목표 직무 공고 40건 중 17건이 Kubernetes를 요구하고, 그중 47%는 필수입니다. 이 과정은 AWS에서 Kubernetes를 운영하는 이유와 AWS 서비스와의 연동을 설명합니다."},
-      {"course_id": "TXYJ7YH7EU", "reason": "공고 40건 중 17건이 Kubernetes를 요구합니다. 이 과정은 Amazon EKS 클러스터의 구성 요소를 익히고 Kustomize와 Helm 차트로 마이크로서비스를 배포하는 방법을 다룹니다."}
+      {"course_id": "TYAAKGU914", "reason": "공고 40건 중 17건이 Kubernetes를 요구합니다. 이 과정은 Amazon EKS 네트워킹의 핵심 구성 요소, Amazon VPC 설계, Ingress와 NetworkPolicies를 다룹니다."},
+      {"course_id": "WU72QMK76B", "reason": "공고 40건 중 17건이 Kubernetes를 요구합니다. 이 과정은 컨테이너를 쓰는 이유와 기본 개념, 애플리케이션을 컨테이너로 만드는 방법을 다룹니다."}
     ]}
   ],
-  "Docker": "```json\n{\"reasons\": [{\"course_id\": \"WU72QMK76B\", \"reason\": \"목표 직무 공고 40건 중 20건이 Docker를 요구하고, 그중 45%는 필수입니다. 이 과정은 컨테이너를 쓰는 이유와 기본 개념, 애플리케이션을 컨테이너로 만드는 방법을 다룹니다.\"}, {\"course_id\": \"JV8N39BFYH\", \"reason\": \"공고 40건 중 20건이 Docker를 요구합니다. 이 과정은 Linux에서 Docker Engine으로 컨테이너 격리를 실습하고 Dockerfile과 multi-stage 빌드로 이미지를 만드는 방법을 다룹니다.\"}]}\n```"
+  "Docker": "```json\n{\"reasons\": [{\"course_id\": \"JV8N39BFYH\", \"reason\": \"목표 직무 공고 40건 중 20건이 Docker를 요구하고, 그중 45%는 필수입니다. 이 과정은 Linux에서 Docker Engine으로 컨테이너 격리를 실습하고 Dockerfile과 multi-stage 빌드로 이미지를 만드는 방법을 다룹니다.\"}, {\"course_id\": \"WU72QMK76B\", \"reason\": \"공고 40건 중 20건이 Docker를 요구합니다. 이 과정은 컨테이너를 쓰는 이유와 기본 개념, 애플리케이션을 컨테이너로 만드는 방법을 다룹니다.\"}, {\"course_id\": \"CUCA1DK47V\", \"reason\": \"공고 40건 중 20건이 Docker를 요구합니다. 이 과정은 컨테이너의 역사와 용어, 다른 가상화 방식과의 차이를 다룹니다.\"}]}\n```",
+  "AWS": {"reasons": [
+    {"course_id": "94T2BEN85A", "reason": "목표 직무 공고 40건 중 31건이 AWS를 요구하고, 그중 77%는 필수입니다. 이 과정은 AWS Cloud의 기본 기능과 컴퓨팅·스토리지·데이터베이스·네트워킹 서비스, AWS Well-Architected Framework를 다룹니다."}
+  ]}
 }
