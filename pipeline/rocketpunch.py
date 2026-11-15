@@ -8,6 +8,9 @@
   python -m pipeline.rocketpunch collect -k Kubernetes --codes dev --pages 5 --any-title -n 999
                                                              # 제목 선판정 없이 상세까지 받는다(AWS 언급 공고를 찾을 때)
   python -m pipeline.rocketpunch export-eval --n 10 --min-aws 4  # 채점용 공고를 data/raw/eval/ 로 내보낸다
+  python -m pipeline.rocketpunch add-ids -q AI 159001 159002 ...   # 사이트 검색에서 모은 번호를 중복 없이 기록한다
+  python -m pipeline.rocketpunch fetch --manual                    # 기록한 번호 중 아직 안 받은 것을 받는다(429 면 멈춤, 다시 실행하면 이어서)
+  python -m pipeline.rocketpunch dedupe                            # 같은 회사·같은 제목의 오래된 공고는 최신 것만 남긴다(호출 없음)
 
 - 사람이 열어 볼 posting 은 data/raw/rp-<id>_<회사>_<제목>.posting.json 으로 저장한다.
 - 원본 응답은 data/raw/rp-<jobId>.raw.json 에 저장한다(저장소에 올리지 않는다).
@@ -70,6 +73,11 @@ def load_env_file() -> None:
             os.environ[key] = value
 
 
+class JobNotFound(SystemExit):
+    """404: 없는 공고(번호 오타나 삭제된 공고). 잡지 않으면 예전처럼 메시지를 내고 종료하고,
+    fetch 는 이것을 잡아 그 번호만 기록하고 건너뛴다(번호 하나 때문에 전체 받기가 멈추지 않게)."""
+
+
 def api_get(path: str, params: dict | None = None) -> dict:
     """GET 1회. 429 면 기다리지 않고 Retry-After 를 알리고 종료한다. 한도 헤더는 stderr 에 남긴다."""
     key = os.getenv("ROCKETPUNCH_API_KEY")
@@ -85,7 +93,8 @@ def api_get(path: str, params: dict | None = None) -> dict:
     except HTTPError as e:
         if e.code == 429:
             raise SystemExit(f"호출 한도 초과(429). {e.headers.get('Retry-After', '?')}초 뒤에 다시 실행하세요.")
-        raise SystemExit(f"HTTP {e.code} {path}: {e.read().decode('utf-8', 'replace')[:300]}")
+        message = f"HTTP {e.code} {path}: {e.read().decode('utf-8', 'replace')[:300]}"
+        raise (JobNotFound if e.code == 404 else SystemExit)(message)
     except URLError as e:
         raise SystemExit(f"연결 실패: {e.reason}")
 
@@ -237,6 +246,115 @@ def process(job_id, role: str, terms) -> bool:
     return bool(hits)
 
 
+MANUAL_FILE = ROOT / "data" / "manual_job_ids.json"  # 사람이 사이트 검색 결과에서 모은 공고 번호(번호만, 원문 없음)
+
+
+def _manual_data() -> dict:
+    return json.loads(MANUAL_FILE.read_text(encoding="utf-8")) if MANUAL_FILE.exists() else {"batches": []}
+
+
+def _manual_batches() -> list[dict]:
+    return _manual_data()["batches"]
+
+
+def manual_ids() -> list[int]:
+    """모아 둔 번호 전부(저장된 순서, 중복 없음). 번호는 처음 나온 검색의 묶음에 한 번만 들어 있다."""
+    return list(dict.fromkeys(i for b in _manual_batches() for i in b["ids"]))
+
+
+def found_by() -> dict[str, list[str]]:
+    """공고 번호 → 그 번호가 나온 검색어 목록. 여러 검색에 나온 번호(예: 클라우드와 AI)는 함께 표시한다."""
+    data = _manual_data()
+    out: dict[str, list[str]] = {}
+    for b in data["batches"]:
+        for i in b["ids"]:
+            queries = out.setdefault(str(i), [])
+            if b["query"] not in queries:
+                queries.append(b["query"])
+    for i, queries in data.get("found_by", {}).items():
+        merged = out.setdefault(i, [])
+        merged += [q for q in queries if q not in merged]
+    return out
+
+
+def cmd_add_ids(args) -> None:
+    """사이트 검색에서 모은 번호를 기록한다. 입력 안의 중복은 하나만 남긴다.
+    이미 기록된 번호는 다시 받지 않고 번호도 그대로 두되, 어느 검색에 또 나왔는지(found_by)는 표시한다.
+    번호만 저장한다(원문 없음). 어떤 검색어로 언제 모았는지를 같이 남긴다(docs/data-sources.md 의 수동 수집 규칙)."""
+    known = set(manual_ids())
+    unique = list(dict.fromkeys(args.ids))
+    fresh = [i for i in unique if i not in known]
+    tags = found_by()
+    for i in unique:  # 이미 있던 번호도 이 검색어에서 나왔다고 표시한다
+        queries = tags.setdefault(str(i), [])
+        if args.query not in queries:
+            queries.append(args.query)
+    batches = _manual_batches()
+    if fresh:
+        batches.append({"collected_at": datetime.now(KST).date().isoformat(), "source": "rocketpunch 사이트 검색",
+                        "query": args.query, "ids": fresh})
+    note = ("사람이 로켓펀치 사이트 검색 결과에서 모은 공고 번호(번호만, 원문 없음). fetch --manual 로 상세를 받는다. "
+            "번호는 한 번만 기록하고, found_by 에 그 번호가 나온 검색어를 모두 적는다.")
+    MANUAL_FILE.write_text(json.dumps({"note": note, "batches": batches, "found_by": tags}, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    both = len(unique) - len(fresh)
+    print(f"입력 {len(args.ids)}개(입력 안 중복 {len(args.ids) - len(unique)}개 제외) → 새 번호 {len(fresh)}개 기록, "
+          f"이미 있던 번호 {both}개는 다시 기록하지 않고 '{args.query}' 에서도 나왔다고만 표시. 모아 둔 번호 전체 {len(known) + len(fresh)}개")
+
+
+def _dup_key(raw: dict) -> tuple[str, str]:
+    return ((raw.get("company") or {}).get("name") or "", clean(raw.get("title")).lower())
+
+
+def older_duplicates(raws: list[dict]) -> dict[str, str]:
+    """같은 회사·같은 제목인데 번호가 다른 공고는 가장 최신(startAt 이 늦은 것, 같으면 번호가 큰 것) 하나만 남긴다.
+    반환: {밀려난 jobId: 남긴 jobId}. 제목이 비어 있으면 같은 공고인지 알 수 없어 묶지 않는다."""
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for r in raws:
+        groups.setdefault(_dup_key(r), []).append(r)
+    dropped: dict[str, str] = {}
+    for key, rs in groups.items():
+        if len(rs) > 1 and key[1]:
+            keep = max(rs, key=lambda r: (r.get("startAt") or r.get("createdAt") or "", int(r["jobId"])))
+            dropped.update({str(r["jobId"]): str(keep["jobId"]) for r in rs if r is not keep})
+    return dropped
+
+
+def _all_raws() -> list[dict]:
+    return [json.loads(f.read_text(encoding="utf-8")) for f in sorted(RAW_DIR.glob("rp-*.raw.json"))]
+
+
+def cmd_dedupe(_args) -> None:
+    """받아 둔 원본에서 같은 회사·같은 제목의 오래된 공고를 정리한다(호출 없음).
+    원본(raw)은 남기고 오래된 쪽의 posting 파일만 지운다. 무엇을 지웠는지는 data/raw/중복공고.csv 에 남긴다."""
+    import csv
+
+    raws = _all_raws()
+    by_id = {str(r["jobId"]): r for r in raws}
+    dropped = older_duplicates(raws)
+    rows = []
+    for old, keep in dropped.items():
+        for f in _posting_files(f"rp-{old}"):
+            f.unlink()
+        r_old, r_keep = by_id[old], by_id[keep]
+        rows.append([keep, r_keep.get("startAt") or r_keep.get("createdAt"), old, r_old.get("startAt") or r_old.get("createdAt"),
+                     (r_keep.get("company") or {}).get("name"), clean(r_keep.get("title"))])
+    with (RAW_DIR / "중복공고.csv").open("w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["남긴 번호", "남긴 게시일", "밀려난 번호", "밀려난 게시일", "회사", "제목"])
+        w.writerows(rows)
+    print(f"받아 둔 원본 {len(raws)}건 중 같은 회사·같은 제목의 오래된 공고 {len(dropped)}건을 정리했습니다(최신 것만 남김).")
+    for r in rows[:10]:
+        print(f"  남김 {r[0]}({str(r[1])[:10]}) ← 밀려남 {r[2]}({str(r[3])[:10]}) | {r[4]} | {r[5][:30]}")
+
+
+MISSING_FILE = RAW_DIR / "없는공고.json"  # 404 가 난 번호(번호 오타나 삭제된 공고). 다시 받으려 하지 않는다
+
+
+def _missing_ids() -> set[int]:
+    return set(json.loads(MISSING_FILE.read_text(encoding="utf-8"))) if MISSING_FILE.exists() else set()
+
+
 def batch_options(args) -> dict | None:
     """테이블 설정이 있으면 API 호출 전에 추출 배치의 실행 설정을 검사한다."""
     table_names = (
@@ -282,9 +400,27 @@ def persist_extractions(options: dict | None) -> None:
 
 
 def cmd_fetch(args) -> None:
-    options = batch_options(args)
-    for job_id in args.ids:
-        process(job_id, args.role, args.terms)
+    options = batch_options(args)  # 설정이 틀리면 API 호출 전에 멈춘다
+    ids = list(args.ids)
+    queries = getattr(args, "queries", None)
+    if getattr(args, "manual", False):  # 모아 둔 번호 중 아직 안 받은 것만(받은 것은 호출이 들지 않지만 출력이 길어진다)
+        missing = _missing_ids()
+        tags = found_by()
+        wanted = lambda i: not queries or any(q in queries for q in tags.get(str(i), []))  # --queries 가 있으면 그 검색에서 나온 번호만
+        todo = [i for i in manual_ids() if i not in missing and wanted(i) and not (RAW_DIR / f"rp-{i}.raw.json").exists()]
+        held = sum(1 for i in manual_ids() if not wanted(i) and not (RAW_DIR / f"rp-{i}.raw.json").exists())
+        print(f"모아 둔 번호 {len(manual_ids())}개 중 아직 안 받은 것 {len(todo)}개(상세 호출 {len(todo)}회), "
+              f"없는 공고로 기록된 번호 {len(missing)}개는 건너뜀" + (f", --queries 밖이라 보류 {held}개" if queries else ""))
+        ids += todo
+    if not ids:
+        print("받을 번호가 없습니다.")
+    for job_id in ids:
+        try:
+            process(job_id, args.role, args.terms)
+        except JobNotFound as e:  # 없는 번호는 기록하고 건너뛴다. 429 같은 다른 종료는 그대로 멈춘다
+            print(f"없음\trp-{job_id}\t로켓펀치에 없는 공고(번호 오타나 삭제). 기록하고 건너뜀: {str(e)[:80]}")
+            RAW_DIR.mkdir(parents=True, exist_ok=True)
+            MISSING_FILE.write_text(json.dumps(sorted(_missing_ids() | {int(job_id)})), encoding="utf-8")
     persist_extractions(options)
 
 
@@ -364,10 +500,11 @@ def cmd_export_eval(args) -> None:
     from ai.sections import headings
 
     tuned = {str(i) for i in json.loads(TUNING_FILE.read_text(encoding="utf-8"))["ids"]}
+    raws = _all_raws()
+    stale = older_duplicates(raws)  # 같은 회사·같은 제목의 오래된 공고는 최신 것만 쓴다
     pool = []  # (posting, 직무 필터 통과, AWS 언급)
-    for f in sorted(RAW_DIR.glob("rp-*.raw.json")):
-        raw = json.loads(f.read_text(encoding="utf-8"))
-        if str(raw["jobId"]) in tuned:
+    for raw in raws:
+        if str(raw["jobId"]) in tuned or str(raw["jobId"]) in stale:
             continue
         posting = to_posting(raw, args.role)
         role_ok = bool(matched_terms(posting, args.terms))
@@ -425,7 +562,14 @@ def main() -> None:
     s.add_argument("--page", type=int, default=1)
     s.set_defaults(run=cmd_search)
     f = sub.add_parser("fetch")
-    f.add_argument("ids", nargs="+")
+    f.add_argument("ids", nargs="*", type=int)
+    f.add_argument("--manual", action="store_true", help="add-ids 로 모아 둔 번호 중 아직 안 받은 것을 받는다")
+    f.add_argument("--queries", nargs="+", help="--manual 과 함께: 이 검색어에서 나온 번호만 받는다(나머지는 보류). 예: --queries AWS 클라우드")
+    a = sub.add_parser("add-ids", help="사이트 검색에서 모은 공고 번호를 중복 없이 기록한다")
+    a.add_argument("-q", "--query", required=True, help="번호를 모은 검색어(예: AWS, 클라우드, AI)")
+    a.add_argument("ids", nargs="+", type=int)
+    a.set_defaults(run=cmd_add_ids)
+    sub.add_parser("dedupe", help="같은 회사·같은 제목의 오래된 공고를 정리한다(호출 없음)").set_defaults(run=cmd_dedupe)
     c = sub.add_parser("collect", help="목록 → 제목 선판정 → 상세 → 직무 필터, 통과 n건까지")
     c.add_argument("-k", "--keyword")
     c.add_argument("--codes", nargs="+", help="API 직군 코드(jobCategories)")

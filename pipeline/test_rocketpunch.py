@@ -211,9 +211,142 @@ def collect_and_process():
             rp.RAW_DIR, rp.list_page, rp.load_or_fetch = old
 
 
+def manual_ids():
+    """사이트 검색에서 모은 번호: 중복은 하나만, 검색어·날짜와 함께 기록, fetch --manual 은 아직 안 받은 번호만 받는다."""
+    import contextlib
+    import io
+    import json
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import pipeline.rocketpunch as rp
+
+    old = rp.RAW_DIR, rp.MANUAL_FILE, rp.MISSING_FILE, rp.load_or_fetch
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        calls: list[str] = []
+
+        def fake_fetch(job_id):
+            calls.append(job_id)
+            if job_id == "3":  # 로켓펀치에 없는 번호(404)
+                raise rp.JobNotFound("HTTP 404 /jobs/3: 공고 정보를 찾을 수 없습니다.")
+            raw = {"jobId": int(job_id), "title": "클라우드 엔지니어", "company": {"name": "회사"}, "description": "AWS"}
+            (tmp / f"rp-{job_id}.raw.json").write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")  # 받으면 원본이 남는다
+            return raw
+
+        rp.RAW_DIR, rp.MANUAL_FILE, rp.MISSING_FILE, rp.load_or_fetch = (
+            tmp, tmp / "manual_job_ids.json", tmp / "없는공고.json", fake_fetch)
+        try:
+            def out_of(fn, **kw):
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    fn(SimpleNamespace(**kw))
+                return out.getvalue()
+
+            # 입력 안의 중복(3 이 두 번)은 하나만 기록한다
+            out = out_of(rp.cmd_add_ids, query="AWS", ids=[1, 2, 3, 3])
+            assert rp.manual_ids() == [1, 2, 3] and "새 번호 3개" in out, out
+            # 두 번째 검색: 이미 기록한 번호(2, 3)는 빼고 새 번호만 두 번째 묶음에 남긴다. 순서는 처음 모은 순서
+            out = out_of(rp.cmd_add_ids, query="클라우드", ids=[3, 2, 4])
+            assert rp.manual_ids() == [1, 2, 3, 4] and "새 번호 1개" in out, out
+            batches = json.loads(rp.MANUAL_FILE.read_text(encoding="utf-8"))["batches"]
+            assert [(b["query"], b["ids"]) for b in batches] == [("AWS", [1, 2, 3]), ("클라우드", [4])]
+            assert all(b["collected_at"] and b["source"] for b in batches)  # 검색어·날짜·출처를 남긴다
+            # 여러 검색에 나온 번호는 버리지 않고 어느 검색에서 나왔는지 표시한다(예: AWS 와 클라우드 둘 다에 나온 2, 3)
+            assert rp.found_by() == {"1": ["AWS"], "2": ["AWS", "클라우드"], "3": ["AWS", "클라우드"], "4": ["클라우드"]}
+            # 새 번호가 없으면 묶음을 늘리지 않고 표시만 더한다
+            out_of(rp.cmd_add_ids, query="AWS", ids=[1, 4])
+            assert len(json.loads(rp.MANUAL_FILE.read_text(encoding="utf-8"))["batches"]) == 2
+            assert rp.found_by()["4"] == ["클라우드", "AWS"] and rp.manual_ids() == [1, 2, 3, 4]
+
+            # fetch --manual 은 아직 안 받은 번호만 받는다(이미 받은 2 는 호출 0회)
+            (tmp / "rp-2.raw.json").write_text("{}", encoding="utf-8")
+            args = dict(ids=[], manual=True, queries=None, role="클라우드 엔지니어", terms=list(rp.ROLE_TERMS))
+            out = out_of(rp.cmd_fetch, **args)
+            # 3 은 없는 공고(404)라도 멈추지 않고 4 까지 계속 받으며, 3 은 없는 번호로 기록된다
+            assert calls == ["1", "3", "4"] and "아직 안 받은 것 3개" in out and "없음\trp-3" in out, (calls, out)
+            assert rp._missing_ids() == {3}
+            assert (tmp / "rp-1.raw.json").exists() and (tmp / "rp-4.raw.json").exists()
+            # 다시 실행하면 받은 번호와 없는 번호(3)를 다시 받으려 하지 않는다(호출 0회)
+            calls.clear()
+            out = out_of(rp.cmd_fetch, **args)
+            assert calls == [] and "아직 안 받은 것 0개" in out and "받을 번호가 없습니다" in out, (calls, out)
+
+            # --queries: 지정한 검색어에서 나온 번호만 받고 나머지는 보류한다(겹친 번호는 지정한 검색에 나왔으면 받는다)
+            out_of(rp.cmd_add_ids, query="AI", ids=[4, 8, 9])      # 4 는 클라우드에도 나왔고, 8·9 는 AI 에서만 나왔다
+            for n in (8, 9):
+                assert str(n) not in {f.stem.split("-")[1].split(".")[0] for f in tmp.glob("rp-*.raw.json")}
+            calls.clear()
+            out = out_of(rp.cmd_fetch, ids=[], manual=True, queries=["AWS", "클라우드"], role="클라우드 엔지니어",
+                         terms=list(rp.ROLE_TERMS))
+            assert calls == [] and "--queries 밖이라 보류 2개" in out, (calls, out)   # 8, 9 는 보류, 나머지는 이미 받았다
+            out = out_of(rp.cmd_fetch, ids=[], manual=True, queries=["AI"], role="클라우드 엔지니어",
+                         terms=list(rp.ROLE_TERMS))
+            assert calls == ["8", "9"], calls                                         # AI 만 지정하면 AI 에서 나온 번호만 받는다
+
+            # 404 가 아닌 종료(429 한도 초과 등)는 삼키지 않고 그대로 멈춘다
+            def limited(job_id):
+                raise SystemExit("호출 한도 초과(429). 5초 뒤에 다시 실행하세요.")
+
+            rp.load_or_fetch = limited
+            try:
+                out_of(rp.cmd_fetch, ids=[7], manual=False, role="클라우드 엔지니어", terms=list(rp.ROLE_TERMS))
+                raise AssertionError("429 에서 멈추지 않았다")
+            except SystemExit as stop:
+                assert not isinstance(stop, rp.JobNotFound) and "429" in str(stop)
+            assert rp._missing_ids() == {3}  # 429 번호는 없는 공고로 기록되지 않는다
+        finally:
+            rp.RAW_DIR, rp.MANUAL_FILE, rp.MISSING_FILE, rp.load_or_fetch = old
+
+
+def dedupe_flow():
+    """같은 회사·같은 제목의 공고가 번호만 다르게 여러 번 올라오면 가장 최신 게시일의 것만 남긴다."""
+    import contextlib
+    import csv
+    import io
+    import json
+    import tempfile
+    from pathlib import Path
+
+    import pipeline.rocketpunch as rp
+
+    def job(job_id, company, title, start=None, created=None):
+        return {"jobId": job_id, "title": title, "company": {"name": company}, "startAt": start, "createdAt": created,
+                "description": "본문"}
+
+    raws = [job(10, "X", "AI Engineer", "2026-10-01T00:00:00Z"),
+            job(20, "X", "AI Engineer ", "2026-11-01T00:00:00Z"),    # 가장 최신 → 남는다(제목 끝 공백은 같게 본다)
+            job(30, "X", "ai engineer", None, "2026-09-01T00:00:00Z"),  # startAt 이 없으면 createdAt 으로 비교
+            job(40, "Y", "AI Engineer", "2026-11-05T00:00:00Z"),      # 다른 회사라 묶지 않는다
+            job(50, "Z", "", "2026-11-01T00:00:00Z"), job(60, "Z", "", "2026-11-02T00:00:00Z"),  # 제목이 비면 묶지 않는다
+            job(70, "W", "DevOps", "2026-11-03T00:00:00Z"), job(80, "W", "DevOps", "2026-11-03T00:00:00Z")]  # 같으면 번호가 큰 것
+    assert rp.older_duplicates(raws) == {"10": "20", "30": "20", "70": "80"}
+
+    old = rp.RAW_DIR
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        rp.RAW_DIR = tmp
+        try:
+            for r in raws:
+                (tmp / f"rp-{r['jobId']}.raw.json").write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
+                (tmp / f"rp-{r['jobId']}_회사_제목.posting.json").write_text("{}", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rp.cmd_dedupe(None)
+            left = sorted(p.name.split("_")[0] for p in tmp.glob("*.posting.json"))
+            assert left == ["rp-20", "rp-40", "rp-50", "rp-60", "rp-80"], left      # 오래된 posting 만 지워진다
+            assert len(list(tmp.glob("rp-*.raw.json"))) == 8                         # 원본은 모두 남는다
+            rows = list(csv.DictReader((tmp / "중복공고.csv").open(encoding="utf-8-sig", newline="")))
+            assert sorted((r["밀려난 번호"], r["남긴 번호"]) for r in rows) == [("10", "20"), ("30", "20"), ("70", "80")]
+            assert "3건" in out.getvalue()
+        finally:
+            rp.RAW_DIR = old
+
+
 if __name__ == "__main__":
     demo()
     names()
     export_eval()
     collect_and_process()
+    manual_ids()
+    dedupe_flow()
     print("통과")
