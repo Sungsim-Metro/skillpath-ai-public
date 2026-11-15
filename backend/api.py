@@ -26,8 +26,6 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SAMPLE_DIR = DATA_DIR / "sample"
 
 UNCLASSIFIED = "미분류"
-# 시장 Gap 의 구분별 가중치(5주차 실습 값). 주요 업무(duty) 건수는 ④에 필드가 생기면(#52) 함께 센다.
-SECTION_WEIGHT = {"required": 1.0, "duty": 0.7, "preferred": 0.5}
 
 # 가짜 모드에서만 쓰는 최소 별칭 표. 실제 표준화는 pipeline 의 별칭 사전(#13)이 맡는다.
 _MOCK_ALIASES = {
@@ -137,17 +135,21 @@ def _shares(rates: dict[str, float]) -> dict[str, float]:
 def get_market_gap(job_category: str) -> dict:
     """시장 Gap: 공고는 원하는데 교육이 덜 다루는 기술. 5주차 실습 정의를 그대로 따른다.
 
-    - 수요율 = 가중치 합 / 공고 수. 공고 1건은 기술마다 가장 강한 구분의 가중치 하나로 센다(SECTION_WEIGHT).
+    - 수요율 = 가중치 합 / 공고 수. 가중치 표는 ai/sections.py 한 곳에만 둔다(팀 기준: 칸이 있으면 칸, 없으면 type).
+      ④에는 칸별 건수가 없어 지금은 type 기준(필수·우대 건수)으로만 계산한다.
+      ④에 가중 합이 들어오면(docs/development.md 의 미정 항목) 그 값을 쓰도록 바꾼다.
     - 공급율 = 그 기술을 다루는 교과목 수 / 전체 교과목 수
     - 비중 = 각 값 / 전체 합. Gap(%p) = (수요 비중 - 공급 비중) × 100
     + 이면 시장은 원하는데 교육이 덜 다루는 기술, - 이면 교육이 상대적으로 많이 다루는 기술이다.
     rows 는 Gap 이 큰 순서. 계산은 전부 코드로 한다.
     """
+    from ai.sections import SECTION_WEIGHT, TYPE_WEIGHT
+
     demand = get_demand(job_category)
     supply = _get_supply()
     total = demand["total_postings"]
     demand_rate = {
-        s["skill"]: sum(w * s.get(kind, 0) for kind, w in SECTION_WEIGHT.items()) / total if total else 0
+        s["skill"]: sum(w * s.get(kind, 0) for kind, w in TYPE_WEIGHT.items()) / total if total else 0
         for s in demand["skills"]
     }
     courses = supply["total_courses"]
@@ -159,7 +161,7 @@ def get_market_gap(job_category: str) -> dict:
         rows.append({"skill": skill, "demand_pct": round(d, 1), "supply_pct": round(p, 1), "gap_pp": round(d - p, 1)})
     rows.sort(key=lambda r: r["gap_pp"], reverse=True)
     return {
-        "weights": dict(SECTION_WEIGHT),
+        "weights": {"section": dict(SECTION_WEIGHT), "type": dict(TYPE_WEIGHT), "applied": "type"},
         "total_postings": total,
         "supply": {k: supply.get(k) for k in ("source", "total_courses", "note")},
         "rows": rows,

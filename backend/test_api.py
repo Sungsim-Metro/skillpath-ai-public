@@ -25,6 +25,8 @@ def demo():
 
     # 시장 Gap: 비중은 각각 합이 100, Gap 은 그 차이
     market = api.get_market_gap(JOB)
+    from ai.sections import SECTION_WEIGHT, TYPE_WEIGHT
+    assert market["weights"] == {"section": SECTION_WEIGHT, "type": TYPE_WEIGHT, "applied": "type"}  # 가중치 표는 한 곳
     rows = {r["skill"]: r for r in market["rows"]}
     assert abs(sum(r["demand_pct"] for r in rows.values()) - 100) < 1
     assert abs(sum(r["supply_pct"] for r in rows.values()) - 100) < 1

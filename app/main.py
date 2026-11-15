@@ -26,14 +26,24 @@ except ImportError:
 from backend import api  # noqa: E402
 
 JOBS = {"cloud_engineer": "클라우드 엔지니어"}
+# 칸 제목([주요업무] 등)을 한 줄에 단독으로 써야 추출 결과의 칸(section)이 정해진다(contracts ②).
 SAMPLE_POSTING = (
-    "클라우드 엔지니어 채용\n"
-    "Python을 활용한 개발 경험과 AWS 환경 운영 경험 필수, Docker 사용 경험 우대.\n"
-    "Linux 서버 운영 및 트러블슈팅 경험. 쿠버네티스 운영 경험자 우대."
+    "[주요업무]\n"
+    "AWS 기반 서비스 인프라 운영\n"
+    "[자격요건]\n"
+    "Python을 활용한 개발 경험\n"
+    "Linux 서버 운영 및 트러블슈팅 경험\n"
+    "[우대사항]\n"
+    "Docker 사용 경험 우대\n"
+    "쿠버네티스 운영 경험자 우대"
 )
 UNCERTAIN = ":orange-badge[불확실]"
 DEFAULT_OWNED = ["Python", "Linux", "Git"]
-TYPE_LABEL = {"required": "필수", "duty": "주요 업무", "preferred": "우대"}
+PENDING = ":orange-badge[개발 중]"
+EMPTY = "-"  # 값을 아직 못 받은 칸에 넣는 표시
+TYPE_LABEL = {"required": "필수", "preferred": "우대"}
+SECTION_LABEL = {"qualification": "자격요건", "duty": "주요업무", "preference": "우대사항", "other": "기타"}
+COMMON_AREA = "공통"  # data/skill_areas.json 의 COMMON 영역 이름
 
 # 차트 색. 파랑은 "내 것", 주황은 "시장이 원하는 것"으로만 쓴다.
 ACCENT = "#1F5FBF"
@@ -50,20 +60,40 @@ def md_escape(text: str) -> str:
     return re.sub(r"([\\`*_{}\[\]<>#+\-!|~:$])", r"\\\1", text)
 
 
+class Pending(str):
+    """아직 구현 전이라 값을 못 받은 구역의 안내 문구. 오류와 구분해 '개발 중'으로 보여준다."""
+
+
 def load(fn, *args):
     """backend 함수를 부르고 (결과, 안내 문구)를 돌려준다.
 
-    M2 통합 때 함수가 하나씩 실제 구현으로 바뀌므로, 한 함수가 아직 없거나 실패해도
-    화면 전체가 멈추지 않고 그 구역에만 안내를 띄운다.
+    함수가 하나씩 실제 구현으로 바뀌므로, 한 함수가 아직 없거나 실패해도
+    화면 전체가 멈추지 않고 그 구역에만 안내를 띄운다. 구현 전이면 안내 문구가 Pending 이다.
     오류 내용에는 계정 ID 같은 값이 들어 있을 수 있어 화면에는 오류 종류만 보이고 전체는 터미널 로그에 남긴다.
     """
     try:
         return fn(*args), None
     except NotImplementedError as e:
-        return None, f"아직 실제 구현 전입니다. {e}"
+        return None, Pending(str(e))
     except Exception as e:  # noqa: BLE001 - 시연 중 한 구역 오류로 화면 전체가 멈추지 않게
         logger.exception("%s 호출 실패", fn.__name__)
         return None, f"불러오지 못했습니다({type(e).__name__}). 실행한 터미널의 로그를 확인하세요."
+
+
+def notice(title: str, err: str, will_show: str = ""):
+    """값을 못 받은 구역에 띄우는 안내. 구현 전이면 '개발 중' 칸을 비워 두고, 오류면 오류 종류를 보여준다."""
+    if isinstance(err, Pending):
+        with st.container(border=True):
+            st.markdown(f"**{title}** {PENDING}")
+            st.caption(" ".join(x for x in (will_show, str(err)) if x))
+    else:
+        st.info(f"{title}: {err}")
+
+
+def empty_metrics(labels: list[str]):
+    """숫자 카드 자리를 값 없이 보여준다."""
+    for col, label in zip(st.columns(len(labels)), labels):
+        col.metric(label, EMPTY, border=True)
 
 
 st.set_page_config(page_title="skillpath-ai", layout="wide")
@@ -75,14 +105,19 @@ with st.sidebar:
     job = st.selectbox("목표 직무", options=list(JOBS), format_func=JOBS.get, key="job")
     demand, demand_err = load(api.get_demand, job)
     skill_options = [s["skill"] for s in demand["skills"]] if demand else []
-    owned = st.pills(
-        "보유 기술",
-        options=skill_options,
-        selection_mode="multi",
-        default=[s for s in DEFAULT_OWNED if s in skill_options],
-        key="owned",
-        help="이미 다룰 수 있는 기술을 누르세요. 부족 역량과 추천이 바로 바뀝니다.",
-    )
+    if skill_options:
+        owned = st.pills(
+            "보유 기술",
+            options=skill_options,
+            selection_mode="multi",
+            default=[s for s in DEFAULT_OWNED if s in skill_options],
+            key="owned",
+            help="이미 다룰 수 있는 기술을 누르세요. 부족 역량과 추천이 바로 바뀝니다.",
+        )
+    else:
+        owned = []
+        st.markdown(f"보유 기술 {PENDING}")
+        st.caption("고를 수 있는 기술 목록은 채용공고 수요 집계가 연결되면 나옵니다.")
     st.divider()
     if api.is_mock():
         st.caption("가짜 데이터 모드입니다 (BEDROCK_MOCK=1). 숫자와 과정은 예시입니다.")
@@ -91,16 +126,21 @@ with st.sidebar:
 
 if demand:
     gap_rows, gap_err = load(api.get_gap, job, owned)
-else:
-    gap_rows, gap_err = None, "시장 수요 집계가 있어야 계산할 수 있습니다."
+else:  # 수요 집계가 구현 전이면 이어지는 구역도 '개발 중', 오류면 오류로 보여준다
+    needs_demand = "시장 수요 집계가 있어야 계산할 수 있습니다."
+    gap_rows, gap_err = None, Pending(needs_demand) if isinstance(demand_err, Pending) else needs_demand
 missing = [r for r in gap_rows if not r["owned"]] if gap_rows is not None else []
 
 st.title(f"{JOBS[job]} 역량 진단")
 if demand:
+    origin = [f"수집일 {demand['collected']}"] if demand.get("collected") else []
+    origin += [f"출처 {', '.join(demand['sources'])}"] if demand.get("sources") else []
     st.caption(
-        f"채용공고 {demand['total_postings']}건을 분석해 부족한 역량과 AWS 교육과정을 근거와 함께 보여줍니다. "
-        f"수집일 {demand['collected']}, 출처 {', '.join(demand['sources'])}."
+        f"채용공고 {demand['total_postings']}건을 분석해 부족한 역량과 AWS 교육과정을 근거와 함께 보여줍니다."
+        + (f" {', '.join(origin)}." if origin else "")
     )
+else:
+    st.caption("채용공고를 분석해 부족한 역량과 AWS 교육과정을 근거와 함께 보여줍니다.")
 
 
 # ── 탭 1: 시장 수요 (Q1 어떤 데이터를 분석했나) ──────────────────
@@ -109,7 +149,7 @@ def render_demand():
     c1, c2, c3 = st.columns(3)
     c1.metric("분석한 공고", f"{total}건", border=True)
     c2.metric("추출한 기술", f"{len(demand['skills'])}개", border=True)
-    c3.metric("수집일", demand["collected"], border=True)
+    c3.metric("수집일", demand.get("collected") or EMPTY, border=True)
     if demand.get("note"):
         st.caption(demand["note"])
 
@@ -135,7 +175,7 @@ def render_area_gap():
     """능력 범주별 Gap: 영역마다 공고 수요(옅은 막대) 위에 내가 가진 몫(진한 막대)을 겹친다."""
     rows, err = load(api.get_area_gap, job, owned)
     if err:
-        st.info(f"능력 범주별 Gap: {err}")
+        notice("능력 범주별 Gap", err)
         return
     shown = [r for r in rows if r["demand"] > 0]
     empty = [r["area"] for r in rows if r["demand"] == 0 and r["area_id"] != "UNCLASSIFIED"]
@@ -172,7 +212,7 @@ def render_market_gap():
     """채용 시장 Gap: 차트 ① 수요 vs 공급 비중, 차트 ② 기술별 Gap(%p). 계산은 backend 가 한다."""
     market, err = load(api.get_market_gap, job)
     if err:
-        st.info(f"채용 시장 Gap: {err}")
+        notice("채용 시장 Gap", err, "공고가 원하는 기술과 교육이 다루는 기술의 차이가 여기에 나옵니다.")
         return
     rows = market["rows"]
     if len(rows) > MARKET_ROWS:  # Gap 이 큰 쪽과 작은 쪽을 함께 보여준다
@@ -208,10 +248,12 @@ def render_market_gap():
         minus = base.transform_filter("datum.Gap < 0").mark_text(align="right", dx=-4, color="#566070").encode(
             x="Gap:Q", text="표시:N")
         st.altair_chart((bars + plus + minus).properties(height=30 * len(df) + 70), width="stretch")
-    w, sup = market["weights"], market["supply"]
+    by_section, by_type, sup = market["weights"]["section"], market["weights"]["type"], market["supply"]
     st.caption(
         "+면 시장은 원하는데 교육이 덜 다루는 기술, −면 교육이 상대적으로 많이 다루는 기술입니다. "
-        f"수요 가중치는 필수 {w['required']}, 주요 업무 {w['duty']}, 우대 {w['preferred']}이고, "
+        f"수요 가중치의 팀 기준은 자격요건 {by_section['qualification']}, 주요업무 {by_section['duty']}, "
+        f"우대사항 {by_section['preference']}입니다. 지금 집계에는 칸별 건수가 없어 "
+        f"필수 {by_type['required']}, 우대 {by_type['preferred']}로 계산했습니다. "
         f"공급은 교과목 {sup['total_courses']}개(출처 {sup['source']}) 기준입니다."
         + (f" {sup['note']}" if sup.get("note") else "")
     )
@@ -277,14 +319,18 @@ def render_recommendations():
         return
     recs, err = load(api.get_recommendations, job, [r["skill"] for r in missing])
     if err:
-        st.info(f"학습 추천: {err}")
+        notice("학습 추천", err, "부족한 기술마다 AWS 교육과정과 추천 이유가 여기에 나옵니다.")
         return
+    area_of = {r["skill"]: r["area"] for r in missing}
     for rec in recs:
         d = rec["demand"]
         with st.container(border=True):
             st.subheader(rec["gap_skill"])
             st.caption(f"공고 {d['of']}건 중 {d['postings']}건이 요구 · 그중 필수 {d['required_ratio']:.0%}")
-            if not rec["courses"]:
+            if not rec["courses"] and area_of.get(rec["gap_skill"]) == COMMON_AREA:
+                st.markdown(f"여러 영역에 걸친 기술이라 한 영역의 과정으로 잇지 않았습니다. "
+                            f"AWS 기초·자격증 과정 연결을 준비하고 있습니다. {PENDING}")
+            elif not rec["courses"]:
                 st.write("이 기술을 다루는 교육과정을 찾지 못했습니다.")
             for i, c in enumerate(rec["courses"]):
                 if i:
@@ -303,11 +349,11 @@ def render_recommendations():
 # ── 탭 4: 공고 직접 분석 (라이브 시연용) ──────────────────────────
 def render_extract():
     st.write("채용공고 본문을 붙여 넣으면 요구 기술과 근거 문장을 뽑습니다.")
-    text = st.text_area("공고 본문", value=SAMPLE_POSTING, height=160, key="posting_text")
+    text = st.text_area("공고 본문", value=SAMPLE_POSTING, height=220, key="posting_text")
     if st.button("분석하기", type="primary", key="extract_btn") and text.strip():
         result, err = load(api.extract_posting, text)
         if err:
-            st.info(f"공고 분석: {err}")
+            notice("공고 분석", err)
         st.session_state["extraction"] = result
         st.session_state["extracted_text"] = text
     result = st.session_state.get("extraction")
@@ -330,6 +376,7 @@ def render_extract():
                         "기술": sk["normalized"],
                         "공고 표현": sk["raw"],
                         "구분": TYPE_LABEL.get(sk["type"], sk["type"]),
+                        "칸": SECTION_LABEL.get(sk.get("section"), EMPTY),
                         "근거 문장": sk["evidence"],
                         "확신": "높음" if sk["confidence"] == "high" else "불확실",
                     }
@@ -345,17 +392,25 @@ tab_demand, tab_gap, tab_rec, tab_extract = st.tabs(
 )
 with tab_demand:
     if demand_err:
-        st.info(f"시장 수요: {demand_err}")
+        if isinstance(demand_err, Pending):
+            empty_metrics(["분석한 공고", "추출한 기술", "수집일"])
+        notice("이 직무가 요구하는 기술", demand_err, "채용공고에서 뽑은 기술 순위와 근거 문장이 여기에 나옵니다.")
     else:
         render_demand()
 with tab_gap:
     if gap_err:
-        st.info(f"부족 역량: {gap_err}")
+        if isinstance(gap_err, Pending):
+            empty_metrics(["분석한 공고", "주요 요구 기술", "그중 보유", "부족"])
+            notice("능력 범주별 Gap", gap_err, "영역마다 공고 수요와 내가 가진 몫이 여기에 나옵니다.")
+            notice("채용 시장 Gap", gap_err, "공고가 원하는 기술과 교육이 다루는 기술의 차이가 여기에 나옵니다.")
+            notice("부족한 기술", gap_err, "보유 기술과 비교해 부족한 기술이 수요 높은 순으로 여기에 나옵니다.")
+        else:
+            notice("부족 역량", gap_err)
     else:
         render_gap()
 with tab_rec:
     if gap_err:
-        st.info(f"학습 추천: {gap_err}")
+        notice("학습 추천", gap_err, "부족한 기술마다 AWS 교육과정과 추천 이유가 여기에 나옵니다.")
     else:
         render_recommendations()
 with tab_extract:
