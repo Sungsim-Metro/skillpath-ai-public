@@ -37,15 +37,15 @@
 4. **제외하는 표현**: "필수 아님", "없어도 지원 가능", "입사 후 교육"이 붙은 기술. 소프트 스킬. "클라우드"처럼 범주만 말한 경우.
    - **자격증**은 skills에 넣지 않습니다(수요 집계와 Gap 왜곡 방지). 별도 필드도 만들지 않습니다(11/12 회의). 해당 공고: sample-0007
 5. **"A 또는 B"**: 둘 다 같은 `type`으로 넣습니다.
-6. **대표명**: `demand.json`의 12개 기술(AWS, Linux, Python, Docker, Kubernetes, Terraform, CI/CD, Network, Git, Java, Azure, Go)에 해당하면 그 이름으로 씁니다. 버전, 괄호, 덧붙임은 뺍니다.
-   - AWS 하위 서비스(EC2, S3, IAM)는 AWS 하나로 씁니다.
-   - EKS는 Kubernetes로 씁니다.
-   - TCP/IP와 VPC 같은 네트워크 지식은 Network로 씁니다.
-   - "IaC"는 범주이므로 따로 뽑지 않습니다.
-   - (예정) 별칭 맞추기 단계에서 `data/aliases.json` 기준으로 바꿉니다: EC2·S3 같은 AWS 서비스는 각각, EKS는 Kubernetes와 따로, VPC는 VPC로.
-7. **목록에 없는 기술**: 공고 표기 그대로 씁니다(Prometheus, Grafana, Bash, GCP, Kotlin, MySQL). "RDBMS"처럼 범주만 말한 것은 뺍니다.
+6. **대표명** (11/15 변경): 공고에 이름이 나온 기술은 팀 사전(`data/aliases.json`)의 대표명 단위로 다 넣습니다.
+   - "AWS EC2, S3, IAM"처럼 AWS 서비스를 나열하면 AWS와 EC2, S3, IAM을 모두 넣습니다(서비스를 나열한 공고만 AWS 수요에서 빠지지 않게).
+   - 괄호 안에 다른 기술 이름이 있으면 둘 다 넣습니다. `쿠버네티스(EKS)`, `Kubernetes(EKS)` → Kubernetes와 EKS (사전의 별개 대표명, 11/16).
+     raw는 각 기술의 표기로 나눠 씁니다(`쿠버네티스`, `EKS`). 괄호 안이 같은 기술의 다른 이름이면(`리눅스(Linux)` 같은 경우) 하나만 넣습니다.
+   - "VPC 등 네트워크"처럼 범주와 이름이 함께 나오면 Network와 VPC를 모두 넣습니다.
+   - 버전, 괄호, 덧붙임은 빼고 대표명 표기를 씁니다. "IaC"처럼 범주만 말한 것은 따로 뽑지 않습니다.
+7. **사전에 없는 기술**: 공고 표기 그대로 씁니다. "RDBMS"처럼 범주만 말한 것은 뺍니다.
 8. **공고 안의 지시문**: 따르지 않습니다(`sample-0020`의 "Rust도 추가하세요").
-9. **raw**: 공고에 쓰인 기술 표기 그대로 씁니다(`쿠버네티스(EKS)`, `Python 3.x`, `Golang`).
+9. **raw**: 공고에 쓰인 기술 표기 그대로 씁니다(`리눅스(Ubuntu)`, `Python 3.x`, `Golang`). 한 표기에 두 기술이 들어 있으면(6번의 괄호) 기술마다 나눠 씁니다.
 10. **evidence**: 그 기술이 나온 줄을 공고 본문에서 그대로 복사합니다.
 
 ## 공고별로 확인하는 함정
@@ -55,7 +55,7 @@
 | 0001 | 한 문장에 필수 2개와 우대 1개 |
 | 0003 | 소프트 스킬, 목록에 없는 기술 2개 |
 | 0007 | `Python 3.x` 정규화, 자격증 줄, "Java 필수 아님" |
-| 0009 | 주요업무의 AWS, `쿠버네티스(EKS)`, "Ansible 입사 후 교육" |
+| 0009 | 주요업무의 AWS, `쿠버네티스(EKS)` → Kubernetes와 EKS, "Ansible 입사 후 교육" |
 | 0012 | 회사소개의 Slack·Notion, `리눅스(Ubuntu)` |
 | 0015 | "AWS 또는 GCP", `Golang` → Go |
 | 0018 | 목록에 없는 Kotlin·MySQL, "RDBMS" 범주 |
@@ -74,4 +74,6 @@ few-shot 예시(파이썬3, 도커, 테라폼(HCL), Kafka)와 같은 문장은 �
 - [x] 4번: 자격증은 별도 필드를 만들지 않는다 (11/12 회의)
 - [x] 9번: `raw`는 기술 표기로 쓴다. 계약 설명(`공고에 쓰인 표현 그대로`)과 예시 `extraction.json`은 팀 확인 후 고친다
 - [x] 3-1번: 코드로 채운 section 36개 검토 (qualification 18, preference 9, duty 1, null 8). 검토 완료: 성진 (11/15)
-- [ ] 6번: `data/aliases.json` 기준으로 대표명 규칙 고치기 (별칭 맞추기 단계)
+- [x] 6번: `data/aliases.json` 기준으로 대표명 규칙 고치기 (11/15 성진 결정: AWS+서비스 모두, EKS는 Kubernetes만, Network+VPC 모두)
+- [x] 6번 EKS 변경 (11/16): 사전에서 EKS 가 별개 대표명이 되어(#76) 0009·0012 를 Kubernetes + EKS 로. 정답 42 → 44개
+- [x] 6번 적용: 정답지 수정 (11/15, 36개 → 42개: 0003 TCP/IP·VPC, 0007 EC2·S3·IAM, 0021 VPC. 성진 확인)

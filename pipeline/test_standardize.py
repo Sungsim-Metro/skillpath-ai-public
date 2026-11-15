@@ -3,6 +3,7 @@ import copy
 import json
 from pathlib import Path
 
+from pipeline.aliases import normalize_skill
 from pipeline.standardize import standardize
 
 GOLD = Path(__file__).resolve().parent.parent / "ai" / "eval" / "gold_extraction.json"
@@ -53,16 +54,20 @@ def demo():
     assert unknown == ["Rust"]
 
     # 성진의 정답지: LLM 이름이 엉망이어도(normalized = raw) 사전이 아는 raw 는 정답지의 normalized 로 맞춰진다.
-    # 사전 밖 raw(TCP/IP, EKS 분리 전 정답지의 쿠버네티스(EKS) 등)는 uncertain 으로 낮추고 unknown 에 모일 뿐 막지 않는다.
+    # 사전 밖 raw(TCP/IP 등)는 uncertain 으로 낮추고 unknown 에 모일 뿐 막지 않는다.
+    # 사전 밖인지는 standardize 결과가 아니라 사전(normalize_skill)으로 따로 정하고, unknown 이 그 목록과
+    # 정확히 같은지(빠지거나 더해진 것 없음) 확인한다. 정답지가 늘어도 이 테스트는 고치지 않는다. (종훈·성진 11/16)
     for posting in json.loads(GOLD.read_text(encoding="utf-8")):
+        pid = posting["posting_id"]
         skills = [skill(s["raw"], s["raw"], s["type"]) for s in posting["skills"]]
-        out, unknown = standardize({"posting_id": posting["posting_id"], "skills": skills})
-        gold_raws = {s["raw"] for s in posting["skills"]}
-        assert set(unknown) <= gold_raws, (posting["posting_id"], unknown)
-        known = [s for s in posting["skills"] if s["raw"] not in unknown]
-        got = {(s["normalized"], s["type"]) for s in out["skills"] if s["raw"] not in unknown}
+        out, unknown = standardize({"posting_id": pid, "skills": skills})
+        outside = sorted(s["raw"] for s in posting["skills"] if normalize_skill(s["raw"]) is None)
+        assert sorted(unknown) == outside, (pid, unknown, outside)
+        assert all(s["confidence"] == "uncertain" for s in out["skills"] if normalize_skill(s["raw"]) is None), pid
+        known = [s for s in posting["skills"] if normalize_skill(s["raw"]) is not None]
+        got = {(s["normalized"], s["type"]) for s in out["skills"] if normalize_skill(s["raw"]) is not None}
         want = {(s["normalized"], s["type"]) for s in known}
-        assert got == want, (posting["posting_id"], got ^ want)
+        assert got == want, (pid, got ^ want)
 
 
 if __name__ == "__main__":

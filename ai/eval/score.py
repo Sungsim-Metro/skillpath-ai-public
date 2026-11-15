@@ -4,6 +4,7 @@
   가짜 모드:  $env:BEDROCK_MOCK="1"; .venv\\Scripts\\python -m ai.eval.score --runs 1
   실제 모드:  $env:BEDROCK_MOCK="0"; .venv\\Scripts\\python -m ai.eval.score --runs 3
               (공고 10건 x 3회 = Bedrock 호출 30번 이상. 재시도가 있으면 더 늘어남)
+  프롬프트:   --prompt v1(기본) 또는 v2
 
 채점은 전부 코드로 한다.
 - 기본 점수: 공고마다 (normalized, type) 묶음을 정답과 비교해 모두 더한 micro P/R/F1
@@ -34,7 +35,7 @@ except ImportError:
 
 from ai.bedrock import BedrockJSONError, is_mock  # noqa: E402
 from ai.evidence import evidence_in_text  # noqa: E402
-from ai.extract import PROMPT_VERSION, extract_with_details  # noqa: E402
+from ai.extract import DEFAULT_PROMPT, PROMPTS, extract_with_details  # noqa: E402
 
 POSTINGS = ROOT / "data" / "sample" / "postings.json"
 GOLD = ROOT / "ai" / "eval" / "gold_extraction.json"
@@ -48,7 +49,7 @@ def prf(tp: int, fp: int, fn: int) -> dict:
     return {"precision": round(p, 3), "recall": round(r, 3), "f1": round(f1, 3)}
 
 
-def run_once(postings: list[dict], gold: dict[str, dict]) -> dict:
+def run_once(postings: list[dict], gold: dict[str, dict], prompt_version: str = DEFAULT_PROMPT) -> dict:
     tp = fp = fn = 0
     name_tp = name_fp = name_fn = 0
     fabricated = uncertain = retries = 0
@@ -64,7 +65,7 @@ def run_once(postings: list[dict], gold: dict[str, dict]) -> dict:
         if not gold_pairs:
             empty_total += 1
         try:
-            pred, meta, dropped = extract_with_details(p)
+            pred, meta, dropped = extract_with_details(p, prompt_version)
         except BedrockJSONError as e:
             errors.append({"posting_id": pid, "error": str(e)})
             fn += len(gold_pairs)
@@ -157,18 +158,22 @@ def print_run(i: int, r: dict) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="추출 정답지 채점")
     ap.add_argument("--runs", type=int, default=3, help="반복 측정 횟수 (기본 3)")
+    ap.add_argument("--prompt", choices=sorted(PROMPTS), default=DEFAULT_PROMPT, help="프롬프트 버전 (기본 v1)")
     args = ap.parse_args()
 
+    prompt = PROMPTS[args.prompt]
+    version = prompt.VERSION
     postings = json.loads(POSTINGS.read_text(encoding="utf-8"))
     gold = {g["posting_id"]: g for g in json.loads(GOLD.read_text(encoding="utf-8"))}
+    n_gold = sum(len(g["skills"]) for g in gold.values())
     mode = "mock" if is_mock() else "bedrock"
-    print(f"프롬프트 {PROMPT_VERSION} / 모드 {mode} / 공고 {len(postings)}건 / {args.runs}회")
+    print(f"프롬프트 {version} / 모드 {mode} / 공고 {len(postings)}건 / 정답 {n_gold}개 / {args.runs}회")
     if mode == "mock":
         print("가짜 모드: data/sample/mock_bedrock_extract.json 의 응답입니다. 점수는 코드 경로 확인용이며 의미 없습니다.")
 
     runs = []
     for i in range(1, args.runs + 1):
-        r = run_once(postings, gold)
+        r = run_once(postings, gold, args.prompt)
         runs.append(r)
         print_run(i, r)
 
@@ -177,11 +182,9 @@ def main() -> int:
         print(f"\n{len(runs)}회 F1 범위: {min(f1s):.3f} ~ {max(f1s):.3f}")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"{PROMPT_VERSION}_{mode}_{time.strftime('%Y%m%d-%H%M%S')}.json"
-    out.write_text(
-        json.dumps({"prompt": PROMPT_VERSION, "mode": mode, "runs": runs}, ensure_ascii=False, indent=1),
-        encoding="utf-8",
-    )
+    out = OUT_DIR / f"{version}_{mode}_{time.strftime('%Y%m%d-%H%M%S')}.json"
+    meta = {"prompt": version, "mode": mode, "gold": n_gold, "alias_sha256": getattr(prompt, "ALIAS_SHA256", None)}
+    out.write_text(json.dumps({**meta, "runs": runs}, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"\n원본 저장: {out.relative_to(ROOT)}")
     return 1 if any(r["errors"] for r in runs) else 0
 
