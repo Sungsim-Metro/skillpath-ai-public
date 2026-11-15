@@ -231,3 +231,6 @@ outputs/
 # OS·에디터
 .DS_Store
 .vscode/
+
+# Claude Review 실행 점검 결과 (.github/review/run_checks.sh)
+.review/
