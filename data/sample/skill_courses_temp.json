@@ -1,0 +1,13 @@
+{
+  "_note": "임시, #14로 교체. 시연용 기술↔과정 연결표(2026-11-15, 성진). match 는 data/courses/course_subskill.csv 의 (course_id, subskill_id) 행에서 코드가 가져온다. AWS 처럼 COMMON 영역 기술은 세부 능력 연결이 없어 과정을 고를 기준이 없으므로 넣지 않았다(#14에서 결정).",
+  "links": {
+    "Kubernetes": [
+      {"course_id": "6MCV5DBF5N", "subskill_id": "C7-2", "title_hint": "Why run your Kubernetes workloads on Amazon EKS"},
+      {"course_id": "TXYJ7YH7EU", "subskill_id": "C7-2", "title_hint": "Deploying Microservices to Amazon EKS"}
+    ],
+    "Docker": [
+      {"course_id": "WU72QMK76B", "subskill_id": "C1-4", "title_hint": "Introduction to Container Basics"},
+      {"course_id": "JV8N39BFYH", "subskill_id": "C1-4", "title_hint": "ECS Introduction to Containers"}
+    ]
+  }
+}

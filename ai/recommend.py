@@ -1,0 +1,169 @@
+"""부족 기술 → 추천(③) (#15). LLM 은 reason 만 쓴다.
+
+- 과정 후보: data/sample/skill_courses_temp.json (임시, #14 search_courses 로 교체)
+- match: data/courses/course_subskill.csv 의 (course_id, subskill_id) 행 값을 코드가 그대로 쓴다
+- retiring 과정과 학습 목표(objectives)가 빈 과정은 제외한다 (근거로 삼을 내용이 없음)
+- 입력 숫자는 ③ demand 그대로. 지금은 건수로 가정한다 (건수인지 가중 합인지 미정: docs/development.md)
+- 공고 원문과 근거 문장은 넣지 않는다 (CLAUDE.md 원칙 3, 2026-11-12)
+- reason 검사는 코드로 한다: course_id 집합, 숫자, 입력에 없는 영문 이름, 한국어 여부.
+  실패하면 converse_json 이 1회 재시도하고, 그래도 실패하면 BedrockJSONError 를 그대로 낸다.
+"""
+from __future__ import annotations
+
+import csv
+import json
+import re
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
+from ai.bedrock import ConverseResult, converse_json
+from ai.prompts import recommend_v1 as prompt
+
+ROOT = Path(__file__).resolve().parent.parent
+COURSES_CSV = ROOT / "data" / "courses" / "courses.csv"
+LINKS_CSV = ROOT / "data" / "courses" / "course_subskill.csv"
+TEMP_LINKS = ROOT / "data" / "sample" / "skill_courses_temp.json"
+MOCK_FILE = "mock_bedrock_recommend.json"
+PROMPT_VERSION = prompt.VERSION
+NO_PREREQ = "표기 없음"
+# 모든 과정이 AWS Skill Builder 과정이라 reason 에 써도 지어낸 것으로 보지 않는 영문 낱말
+ALWAYS_ALLOWED_WORDS = {"aws", "amazon"}
+
+# 글자에 붙은 숫자(EC2, S3)는 빼고 따로 선 숫자만 본다
+_NUMBER = re.compile(r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?(?![A-Za-z0-9])")
+_LATIN = re.compile(r"[A-Za-z][A-Za-z0-9+#]*(?:[./-][A-Za-z0-9+#]+)*")
+
+
+def _numbers(text: str) -> set[float]:
+    return {float(n) for n in _NUMBER.findall(text)}
+
+
+@lru_cache(maxsize=1)
+def _courses() -> dict[str, dict]:
+    with COURSES_CSV.open(encoding="utf-8-sig", newline="") as f:
+        return {r["course_id"]: r for r in csv.DictReader(f)}
+
+
+@lru_cache(maxsize=1)
+def _subskill_links() -> dict[tuple[str, str], dict]:
+    with LINKS_CSV.open(encoding="utf-8-sig", newline="") as f:
+        return {(r["course_id"], r["subskill_id"]): r for r in csv.DictReader(f)}
+
+
+@lru_cache(maxsize=1)
+def _temp_links() -> dict[str, list[dict]]:
+    return json.loads(TEMP_LINKS.read_text(encoding="utf-8"))["links"]
+
+
+def candidate_courses(skill: str) -> list[dict]:
+    """임시 연결표에서 기술의 과정 후보를 고른다. 연결표가 데이터와 맞지 않으면 오류를 낸다."""
+    out = []
+    for link in _temp_links().get(skill, []):
+        cid, sid = link["course_id"], link["subskill_id"]
+        course = _courses().get(cid)
+        if course is None:
+            raise KeyError(f"임시 연결표의 과정 {cid} 가 courses.csv 에 없습니다")
+        row = _subskill_links().get((cid, sid))
+        if row is None:
+            raise KeyError(f"course_subskill.csv 에 ({cid}, {sid}) 연결이 없습니다")
+        objectives = [o.strip() for o in re.split(r"\s+/\s+|\n", course["objectives"]) if o.strip()]
+        if course["retiring"].strip() or not objectives:
+            continue
+        out.append({
+            "course_id": cid,
+            "title": course["title"],
+            "url": course["url"],
+            "level": course["level"],
+            "prerequisites": course["prerequisites"].strip() or NO_PREREQ,
+            "objectives": objectives,
+            "match": row["match"],
+            "subskill_id": sid,
+        })
+    return out
+
+
+def llm_input_of(skill: str, demand: dict, courses: list[dict]) -> dict:
+    """LLM 에 넣는 값. 비율은 코드가 % 로 바꿔 넣어 LLM 이 계산하지 않게 한다."""
+    return {
+        "skill": skill,
+        "demand": {
+            "postings": demand["postings"],
+            "of": demand["of"],
+            "required_pct": round(demand["required_ratio"] * 100),
+        },
+        "courses": [
+            {k: c[k] for k in ("course_id", "title", "level", "prerequisites", "objectives")}
+            for c in courses
+        ],
+    }
+
+
+def validate_reasons(data: dict, llm_input: dict) -> None:
+    """LLM 출력 검사. 틀리면 ValueError (converse_json 이 한 번 재시도한다)."""
+    reasons = data.get("reasons")
+    if not isinstance(reasons, list):
+        raise ValueError('"reasons" 목록이 없습니다')
+    for i, r in enumerate(reasons):
+        if not (isinstance(r, dict) and isinstance(r.get("course_id"), str)
+                and isinstance(r.get("reason"), str) and r["reason"].strip()):
+            raise ValueError(f"reasons[{i}] 에 course_id 와 reason 문자열이 필요합니다")
+    expected = [c["course_id"] for c in llm_input["courses"]]
+    got = [r["course_id"] for r in reasons]
+    if sorted(got) != sorted(expected):
+        raise ValueError(f"course_id 가 입력과 다릅니다: 입력 {expected}, 응답 {got}")
+
+    d = llm_input["demand"]
+    by_id = {c["course_id"]: c for c in llm_input["courses"]}
+    for r in reasons:
+        c, text = by_id[r["course_id"]], r["reason"]
+        source = " ".join([llm_input["skill"], c["title"], c["level"], c["prerequisites"], *c["objectives"]])
+        allowed = {float(d["postings"]), float(d["of"]), float(d["required_pct"])} | _numbers(source)
+        bad = sorted(_numbers(text) - allowed)
+        if bad:
+            raise ValueError(
+                f"{c['course_id']} reason 에 입력에 없는 숫자 {bad}. "
+                f"쓸 수 있는 숫자: 공고 {d['of']}건 중 {d['postings']}건, 필수 {d['required_pct']}%"
+            )
+        haystack = source.lower()
+        unknown = sorted({
+            w for w in _LATIN.findall(text)
+            if len(w) >= 2 and w.lower() not in ALWAYS_ALLOWED_WORDS and w.lower() not in haystack
+        })
+        if unknown:
+            raise ValueError(f"{c['course_id']} reason 에 입력(objectives 등)에 없는 이름 {unknown}")
+        if not re.search(r"[가-힣]", text):
+            raise ValueError(f"{c['course_id']} reason 이 한국어가 아닙니다")
+
+
+def build_recommendation(skill: str, demand: dict) -> tuple[dict, Optional[ConverseResult]]:
+    """③ 추천 1건과 LLM 호출 결과(시도 횟수·usage)를 돌려준다. 과정이 없으면 LLM 을 부르지 않는다.
+
+    demand 는 ③ 의 demand 형식 {"postings", "of", "required_ratio"} 이다.
+    """
+    rec = {"gap_skill": skill, "demand": dict(demand), "courses": []}
+    courses = candidate_courses(skill)
+    if not courses:
+        return rec, None
+    llm_input = llm_input_of(skill, demand, courses)
+    result = converse_json(
+        prompt.SYSTEM,
+        prompt.user_message(llm_input),
+        mock_file=MOCK_FILE,
+        mock_key=skill,
+        validate=lambda data: validate_reasons(data, llm_input),
+        max_tokens=2048,
+    )
+    reasons = {r["course_id"]: r["reason"].strip() for r in result.data["reasons"]}
+    rec["courses"] = [
+        {
+            "title": c["title"],
+            "url": c["url"],
+            "level": c["level"],
+            "prerequisites": c["prerequisites"],
+            "reason": reasons[c["course_id"]],
+            "match": c["match"],
+        }
+        for c in courses
+    ]
+    return rec, result
