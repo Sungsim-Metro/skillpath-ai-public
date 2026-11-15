@@ -29,7 +29,23 @@ def demo():
     out, _ = standardize({"posting_id": "x", "skills": [skill("S3", "S3"), skill("도커", "도커"), skill("Rust", "Rust")]})
     assert [s["ncs_unit"] for s in out["skills"]] == ["2001021507", None, None]
 
-    # 합쳐져 같은 기술이 되면 required 를 남긴다, 같은 모르는 표현은 한 번만
+    # 합칠 때는 가중치가 가장 큰 것 하나(칸이 있으면 칸 기준): 자격요건(1.0)이 주요업무(0.7)보다 크다.
+    # 이전 규칙(required 우선)이면 주요업무의 required 가 남는다
+    out, _ = standardize({"posting_id": "x", "skills": [
+        {**skill("k8s", "Kubernetes", "required"), "section": "duty"},
+        {**skill("쿠버네티스", "쿠버네티스", "preferred"), "section": "qualification"}]})
+    assert [(s["normalized"], s["section"]) for s in out["skills"]] == [("Kubernetes", "qualification")]
+    # 가중치가 같으면 먼저 나온 것을 남긴다
+    out, _ = standardize({"posting_id": "x", "skills": [
+        {**skill("Docker", "Docker", "required"), "section": "other"}, skill("도커", "도커", "required")]})
+    assert out["skills"][0]["raw"] == "Docker"
+    # 둘 다 required 여도 칸이 다르면 칸 기준: 주요업무(0.7)가 우대사항(0.5)보다 커서 주요업무가 남는다(type 이 같아도 칸이 이긴다)
+    out, _ = standardize({"posting_id": "x", "skills": [
+        {**skill("k8s", "Kubernetes", "required"), "section": "preference"},
+        {**skill("쿠버네티스", "쿠버네티스", "required"), "section": "duty"}]})
+    assert [(s["raw"], s["section"]) for s in out["skills"]] == [("쿠버네티스", "duty")]
+
+    # 칸이 없으면 type 기준 가중치(required 1.0 > preferred 0.5)로 합친다, 같은 모르는 표현은 한 번만
     out, unknown = standardize({"posting_id": "x", "skills": [
         skill("Docker", "Docker", "preferred"), skill("도커", "도커", "required"),
         skill("Rust", "Rust"), skill("Rust", "Rust")]})

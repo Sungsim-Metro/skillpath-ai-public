@@ -18,8 +18,20 @@ def demo():
     assert search_courses("쿠버네티스") == search_courses("Kubernetes")  # 별칭도 같은 결과
     assert len(search_courses("Docker", k=1)) == 1
     # 맞는 세부 능력이 없으면 빈 목록(그럴듯하게 채우지 않는다)
-    for skill in ("AWS", "Azure", "GCP", "JavaScript", "Network", ""):
+    for skill in ("Azure", "GCP", "JavaScript", "Network", ""):
         assert search_courses(skill) == [], skill
+
+    # AWS 는 넓어서 세부 능력으로 고를 수 없으므로 지정한 입문 과정을 준다(subskill_id 는 None)
+    assert search_courses("AWS") == [{"course_id": "94T2BEN85A", "subskill_id": None}]
+    assert search_courses("아마존 웹 서비스") == search_courses("AWS")  # 별칭도 같은 결과
+    # 지정한 과정은 실제 데이터에 있고, 기초 난이도이며, 종료 예정이 아니고, 학습 목표가 있어야 한다
+    import csv
+    from pathlib import Path
+    rows = {r["course_id"]: r for r in csv.DictReader(
+        (Path(__file__).resolve().parent.parent / "data" / "courses" / "courses.csv").open(encoding="utf-8-sig", newline=""))}
+    for f in search_courses("AWS"):
+        c = rows[f["course_id"]]
+        assert c["level"] == "기초" and not c["retiring"].strip() and c["objectives"].strip(), c["title"]
 
 
 if __name__ == "__main__":
