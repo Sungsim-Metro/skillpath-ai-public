@@ -1,0 +1,8 @@
+{
+  "posting_id": "sample-0001",
+  "skills": [
+    {"raw": "Python을 활용한 개발", "normalized": "Python", "type": "required", "evidence": "Python을 활용한 개발 경험", "confidence": "high", "ncs_unit": null},
+    {"raw": "AWS 환경 운영", "normalized": "AWS", "type": "required", "evidence": "AWS 환경 운영 경험 필수", "confidence": "high", "ncs_unit": null},
+    {"raw": "Docker 사용", "normalized": "Docker", "type": "preferred", "evidence": "Docker 사용 경험 우대", "confidence": "high", "ncs_unit": null}
+  ]
+}

@@ -1,0 +1,5 @@
+# GitHub Pages 설정 (공개용 저장소에 그대로 복사됨). README.md가 첫 화면이 된다.
+title: SkillPath AI
+description: 채용공고 기술 수요 분석과 AWS 교육과정 추천 AI 에이전트 · 팀 ASAP하게
+theme: jekyll-theme-minimal
+lang: ko

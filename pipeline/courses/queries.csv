@@ -1,0 +1,32 @@
+subskill_id,area_id,area,subskill,search_text,aliases
+C1-1,C1,컴퓨팅·서버,가상 서버 구성·운영,Amazon EC2,EC2|Elastic Compute Cloud|virtual server|instance
+C1-2,C1,컴퓨팅·서버,운영체제(Linux) 운영,Linux,Linux|operating system|shell|command line
+C1-3,C1,컴퓨팅·서버,용량 산정·확장,Auto Scaling,Auto Scaling|scaling|scalab|capacity
+C1-4,C1,컴퓨팅·서버,컨테이너,containers,container|Docker|ECS|EKS|Kubernetes|Fargate
+C1-5,C1,컴퓨팅·서버,서버리스,AWS Lambda,Lambda|serverless
+C2-1,C2,스토리지·데이터베이스,객체·블록·파일 스토리지,Amazon S3,S3|Simple Storage Service|object storage|EBS|EFS|block storage|file storage
+C2-2,C2,스토리지·데이터베이스,스토리지 용량·가용성 설계,storage,storage class|lifecycle|durability|storage tier|replication
+C2-3,C2,스토리지·데이터베이스,데이터베이스,Amazon RDS,RDS|database|Aurora|DynamoDB|SQL
+C3-1,C3,네트워크,가상 네트워크·라우팅,Amazon VPC,VPC|Virtual Private Cloud|subnet|route table|routing
+C3-2,C3,네트워크,부하 분산,Elastic Load Balancing,load balanc|ELB|ALB|NLB
+C3-3,C3,네트워크,DNS·콘텐츠 전송,Amazon CloudFront,DNS|Route 53|CloudFront|content delivery|CDN
+C3-4,C3,네트워크,트래픽 분석,VPC Flow Logs,Flow Logs|traffic|network monitoring
+C4-1,C4,보안,계정·권한 관리,IAM,IAM|Identity and Access Management|permission|polic|least privilege|MFA
+C4-2,C4,보안,네트워크 보안·접근제어,AWS WAF,security group|network ACL|WAF|firewall|Shield|DDoS
+C4-3,C4,보안,데이터 암호화·키 관리,AWS KMS,encrypt|KMS|Key Management|keys
+C4-4,C4,보안,위협 탐지·로그 감사,Amazon GuardDuty,GuardDuty|CloudTrail|threat|detect|audit|Security Hub
+C4-5,C4,보안,컴플라이언스,compliance,compliance|governance|Config|regulat
+C5-1,C5,배포 자동화(DevOps),CI/CD 파이프라인,CI/CD,CI/CD|continuous integration|continuous delivery|CodePipeline|CodeBuild|CodeDeploy|pipeline
+C5-2,C5,배포 자동화(DevOps),스크립트·자동화,AWS CLI,CLI|command line|SDK|script|automat
+C5-3,C5,배포 자동화(DevOps),형상관리,Git,Git|version control|source control|repository
+C5-4,C5,배포 자동화(DevOps),코드형 인프라(IaC),AWS CloudFormation,CloudFormation|infrastructure as code|IaC|CDK|template|Terraform
+C6-1,C6,운영·모니터링,모니터링·로그,Amazon CloudWatch,CloudWatch|monitor|metric|logs|logging|alarm|observability
+C6-2,C6,운영·모니터링,장애 대응,AWS Systems Manager,troubleshoot|incident|Systems Manager|remediat|failure
+C6-3,C6,운영·모니터링,백업·복구·DR,AWS Backup,backup|restore|recovery|disaster
+C6-4,C6,운영·모니터링,성능·품질 관리,AWS Trusted Advisor,performance|Trusted Advisor|optimi|reliab
+C7-1,C7,아키텍처 설계,고가용성 설계,high availability,high availability|highly available|fault toleran|Multi-AZ|resilien|Well-Architected
+C7-2,C7,아키텍처 설계,MSA·서버리스·컨테이너 아키텍처,microservices,microservice|serverless|architect|decoupl|event-driven
+C7-3,C7,아키텍처 설계,클라우드 전환,migration,migrat|Migration Hub|Application Migration Service|rehost
+C8-1,C8,비용 최적화,과금 체계 이해,AWS pricing,pricing|billing|cost|Free Tier
+C8-2,C8,비용 최적화,비용 추적·태깅·예산 알람,AWS Cost Explorer,Cost Explorer|Budgets|cost allocation|tagging|tags|budget
+C8-3,C8,비용 최적화,할인 모델,Savings Plans,Savings Plans|Reserved Instance|Spot|discount
