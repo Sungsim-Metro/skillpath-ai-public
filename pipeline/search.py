@@ -65,15 +65,21 @@ def _mentions(text: str, names: list[str]) -> bool:
     )
 
 
-def search_courses(skill: str, k: int = 3) -> list[dict]:
-    """기술 이름(대표명이나 별칭)으로 과정 후보 최대 k개. 없으면 빈 목록."""
-    canon = normalize_skill(skill) or skill
-    names = _names(canon)
-    subskills: list[str] = []
+def subskills_of(skill: str) -> list[str]:
+    """기술(대표명이나 별칭)이 속한 세부 능력 id 목록. 없으면 빈 목록."""
+    names = _names(normalize_skill(skill) or skill)
+    out: list[str] = []
     for name in names:
         for sid in _subskills_by_alias().get(_key(name), []):
-            if sid not in subskills:
-                subskills.append(sid)
+            if sid not in out:
+                out.append(sid)
+    return out
+
+
+def search_courses(skill: str, k: int = 3) -> list[dict]:
+    """기술 이름(대표명이나 별칭)으로 과정 후보 최대 k개. 없으면 빈 목록."""
+    names = _names(normalize_skill(skill) or skill)
+    subskills = subskills_of(skill)
     texts = _course_text()
     rows = [r for sid in subskills for r in _links_by_subskill().get(sid, [])]
     rows.sort(key=lambda r: (

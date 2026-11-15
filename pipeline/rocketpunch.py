@@ -37,11 +37,15 @@ def load_env_file() -> None:
     env_file = ROOT / ".env"
     if not env_file.exists():
         return
+    values: dict[str, str] = {}
     for line in env_file.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+            values[key.strip()] = value.strip().strip("\"'")  # 같은 이름이 둘이면 나중 줄이 이긴다(python-dotenv 와 같음)
+    for key, value in values.items():
+        if not os.environ.get(key):  # 이미 값이 있는 환경변수는 덮지 않는다
+            os.environ[key] = value
 
 
 def api_get(path: str, params: dict | None = None) -> dict:

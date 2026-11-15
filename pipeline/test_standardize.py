@@ -25,6 +25,10 @@ def demo():
     assert unknown == ["Rust"]
     assert {s["raw"] for s in out["skills"]} == {"k8s", "Rust"}  # raw 는 그대로
 
+    # NCS 단위: 확신 있는 연결(S3)만 채우고, 없는 기술(Docker)과 모르는 표현(Rust)은 None
+    out, _ = standardize({"posting_id": "x", "skills": [skill("S3", "S3"), skill("도커", "도커"), skill("Rust", "Rust")]})
+    assert [s["ncs_unit"] for s in out["skills"]] == ["2001021507", None, None]
+
     # 합쳐져 같은 기술이 되면 required 를 남긴다, 같은 모르는 표현은 한 번만
     out, unknown = standardize({"posting_id": "x", "skills": [
         skill("Docker", "Docker", "preferred"), skill("도커", "도커", "required"),
