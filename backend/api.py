@@ -9,7 +9,7 @@
 | get_gap              | Gap 목록            | 일현 (#12)              |
 | get_area_gap         | 영역별 Gap 목록      | 일현 (#12, #17)         |
 | get_market_gap       | 시장 Gap 표          | 담당 미정 (⑤ 공급 데이터) |
-| get_recommendations  | ③ 추천 목록          | 종훈·성진 (#14, #15)     |
+| get_recommendations  | ③ 추천 목록          | 종훈·성진 (#14, #15) 연결됨 |
 | extract_posting      | ② 추출 결과          | 성진·일현 (#9, #11)      |
 
 형식은 contracts/README.md 를 따른다.
@@ -194,27 +194,31 @@ def get_market_gap(job_category: str) -> dict:
 
 
 def get_recommendations(job_category: str, gap_skills: list[str]) -> list[dict]:
-    """부족 기술마다 추천(③)을 돌려준다. 찾은 과정이 없으면 courses 가 빈 목록이다."""
-    if not is_mock():
-        raise NotImplementedError("실제 추천은 #14, #15 에서 구현합니다.")
-    by_skill = {r["gap_skill"]: r for r in _load("recommendations.json")}
-    demand = {s["skill"]: s for s in get_demand(job_category)["skills"]}
-    total = get_demand(job_category)["total_postings"]
+    """부족 기술마다 추천(③)을 돌려준다. 찾은 과정이 없으면 courses 가 빈 목록이다.
+
+    가짜 모드는 data/sample 의 추천을 읽는다. 실제 모드는 수요 숫자를 코드로 만들고(get_demand),
+    과정 찾기와 추천 이유는 ai.recommend 가 맡는다(Bedrock 은 reason 만 쓴다).
+    """
+    demand_all = get_demand(job_category)
+    by_demand = {s["skill"]: s for s in demand_all["skills"]}
+    by_skill = {r["gap_skill"]: r for r in _load("recommendations.json")} if is_mock() else {}
     out = []
     for skill in gap_skills:
         if skill in by_skill:
             out.append(by_skill[skill])
             continue
-        d = demand.get(skill, {"postings": 0, "required": 0})
-        out.append({
-            "gap_skill": skill,
-            "demand": {
-                "postings": d["postings"],
-                "of": total,
-                "required_ratio": round(d["required"] / d["postings"], 2) if d["postings"] else 0,
-            },
-            "courses": [],
-        })
+        d = by_demand.get(skill, {"postings": 0, "required": 0})
+        demand = {
+            "postings": d["postings"],
+            "of": demand_all["total_postings"],
+            "required_ratio": round(d["required"] / d["postings"], 2) if d["postings"] else 0,
+        }
+        if is_mock():
+            out.append({"gap_skill": skill, "demand": demand, "courses": []})
+        else:
+            from ai.recommend import build_recommendation
+
+            out.append(build_recommendation(skill, demand)[0])
     return out
 
 
