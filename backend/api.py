@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+from collections import OrderedDict
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
@@ -32,6 +34,15 @@ SAMPLE_DIR = DATA_DIR / "sample"
 DEMAND_CACHE_SECONDS = 60
 _demand_cache: dict[tuple[str, str, str, str], tuple[float, dict]] = {}
 _demand_cache_lock = Lock()
+# 실제 모드 추천: 부족 기술 중 앞(수요 높은 순)에서 몇 개만 Bedrock 으로 추천할지. 기술마다 호출 1번(비용·화면 길이)
+RECOMMEND_TOP_N = 3
+# (직무, (기술, postings, of, required_ratio)...) → ③ 목록. 수요 숫자가 바뀌면 키가 달라져 다시 부른다.
+# 최근에 쓴 RECOMMEND_CACHE_MAX 개만 두고, 넘으면 가장 오래 안 쓴 것부터 버린다
+RECOMMEND_CACHE_MAX = 32
+_recommend_cache: OrderedDict[tuple, list[dict]] = OrderedDict()
+_recommend_cache_lock = Lock()
+
+logger = logging.getLogger(__name__)
 
 UNCLASSIFIED = "미분류"
 
@@ -198,27 +209,48 @@ def get_recommendations(job_category: str, gap_skills: list[str]) -> list[dict]:
 
     가짜 모드는 data/sample 의 추천을 읽는다. 실제 모드는 수요 숫자를 코드로 만들고(get_demand),
     과정 찾기와 추천 이유는 ai.recommend 가 맡는다(Bedrock 은 reason 만 쓴다).
+    실제 모드는 gap_skills 앞에서부터(화면은 수요 높은 순으로 준다) RECOMMEND_TOP_N 개만 추천하고,
+    같은 직무·같은 기술·같은 수요 숫자면 Bedrock 을 다시 부르지 않고 캐시를 돌려준다.
     """
+    mock = is_mock()
     demand_all = get_demand(job_category)
     by_demand = {s["skill"]: s for s in demand_all["skills"]}
-    by_skill = {r["gap_skill"]: r for r in _load("recommendations.json")} if is_mock() else {}
-    out = []
+    by_skill = {r["gap_skill"]: r for r in _load("recommendations.json")} if mock else {}
+    if not mock:
+        gap_skills = gap_skills[:RECOMMEND_TOP_N]  # 기술마다 Bedrock 을 한 번 부른다(비용·화면 길이)
+    pairs = []
     for skill in gap_skills:
-        if skill in by_skill:
-            out.append(by_skill[skill])
-            continue
-        d = by_demand.get(skill, {"postings": 0, "required": 0})
-        demand = {
+        d = by_demand.get(skill, {"postings": 0, "required": 0})  # 수요에 없는 기술은 0 으로 넘긴다
+        pairs.append((skill, {
             "postings": d["postings"],
             "of": demand_all["total_postings"],
             "required_ratio": round(d["required"] / d["postings"], 2) if d["postings"] else 0,
-        }
-        if is_mock():
-            out.append({"gap_skill": skill, "demand": demand, "courses": []})
-        else:
-            from ai.recommend import build_recommendation
+        }))
+    if mock:
+        return [by_skill[skill] if skill in by_skill else {"gap_skill": skill, "demand": demand, "courses": []}
+                for skill, demand in pairs]
 
-            out.append(build_recommendation(skill, demand)[0])
+    key = (job_category, tuple((skill, d["postings"], d["of"], d["required_ratio"]) for skill, d in pairs))
+    with _recommend_cache_lock:
+        cached = _recommend_cache.get(key)
+        if cached is not None:
+            _recommend_cache.move_to_end(key)  # 방금 쓴 것으로 표시
+    if cached is not None:
+        return deepcopy(cached)
+
+    from ai.recommend import build_recommendation
+
+    out = []
+    for skill, demand in pairs:
+        rec, result = build_recommendation(skill, demand)
+        out.append(rec)
+        if result is not None:
+            logger.info("추천 %s: 시도 %d회, 토큰 %s", skill, result.attempts, result.usage.get("totalTokens", 0))
+    with _recommend_cache_lock:  # 실패하면 여기까지 오지 않으므로 오류는 캐시하지 않는다
+        _recommend_cache[key] = deepcopy(out)
+        _recommend_cache.move_to_end(key)
+        while len(_recommend_cache) > RECOMMEND_CACHE_MAX:
+            _recommend_cache.popitem(last=False)
     return out
 
 
