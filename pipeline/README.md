@@ -136,3 +136,14 @@ uv run --python 3.11 --with boto3 python -m unittest ai.test_extract backend.tes
 ```
 
 단위 테스트는 임시 파일과 모의 S3를 사용하며 실제 API나 AWS를 호출하지 않는다.
+
+## 교육과정 검색 (`search_courses`)
+
+부족한 기술 → AWS 교육과정 후보. 반환은 `[{course_id, subskill_id, match}]`이고 형식은 바뀌지 않았다.
+규칙(별칭 사전 → 세부 능력 → 이름이 제목·학습 목표에 있는 과정)이 먼저이고, 자리가 남으면 키워드 점수와 임베딩 점수를 Reciprocal Rank Fusion으로 합쳐 채운다. 채운 과정은 `match: "uncertain"`이다.
+`search_courses(skill, k, mode)`의 `mode`는 `rules`, `keyword`, `embedding`, `hybrid`, `final`(기본)이다. Reranking은 하지 않는다.
+
+- 벡터를 쓸 수 없으면(가짜 모드, `data/courses/course_vectors.json` 없음, `EMBED_MODEL_ID`가 벡터를 만든 모델과 다름) `final`은 규칙 결과 그대로다.
+- 과정 벡터 만들기(과정 본문을 바꾼 뒤에만): `BEDROCK_MOCK=0 python -X utf8 -m pipeline.build_course_vectors` (`--dry-run`은 호출 없이 건수만). 청크는 제목·학습 목표·설명 필드별이고 추천할 수 있는 과정 122개에서 366개다.
+- 방식 비교표: `BEDROCK_MOCK=0 python -X utf8 -m pipeline.eval_search --detail final`. 정답은 `ai/eval/search_gold.json`(34개 기술, 초안이며 검토 전)이다.
+- 키워드 기준(`KEYWORD_MIN`)과 의미 기준(`SEM_MIN`)은 그 34개 기술로 정한 값이라 기술이 늘면 다시 본다.
