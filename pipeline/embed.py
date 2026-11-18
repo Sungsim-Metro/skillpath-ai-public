@@ -16,6 +16,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from ai.usage import record as record_usage
 from pipeline.rocketpunch import load_env_file
 
 CACHE_FILE = Path(__file__).resolve().parent.parent / "data" / "raw" / "embed_cache.json"
@@ -66,15 +67,18 @@ def _model_id() -> str:
 
 
 def _titan(text: str) -> list[float]:
+    model_id = _model_id()
     res = _client().invoke_model(
-        modelId=_model_id(),
+        modelId=model_id,
         body=json.dumps({"inputText": text, "normalize": True}),
         contentType="application/json",
         accept="application/json",
     )
     body = json.loads(res["body"].read())
     _usage["calls"] += 1
-    _usage["tokens"] += body.get("inputTextTokenCount", 0)
+    input_tokens = body.get("inputTextTokenCount", 0)
+    _usage["tokens"] += input_tokens
+    record_usage("embedding", 1, {"inputTokens": input_tokens}, mock=False, model_id=model_id)
     return body["embedding"]
 
 

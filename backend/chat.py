@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from ai import chat as intake
 from ai.bedrock import BedrockJSONError
+from ai.usage import SessionUsage, track_session
 from backend import api, chat_profiles
 from backend.jobs import JOBS
 from pipeline.aliases import normalize_skill
@@ -25,6 +26,7 @@ class Conversation:
     experiences: dict[str, bool] = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
     last_changes: dict = field(default_factory=dict)
+    usage: SessionUsage = field(default_factory=SessionUsage)
 
 
 @dataclass
@@ -216,6 +218,11 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     if state.nickname and nickname != state.nickname:
         state.__init__()
     state.nickname = nickname
+    with track_session(state.usage):
+        return _handle_turn(state, message, job, sidebar_skills)
+
+
+def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: list[str]) -> Reply:
     if not message.strip():
         return Reply("이어서 말씀해 주세요.")
     try:
@@ -225,9 +232,9 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     if not allowed:
         return Reply("이 요청은 학습 상담 범위에서 처리할 수 없습니다.")
     read_failed = False
-    if nickname and state.profile is None:
+    if state.nickname and state.profile is None:
         try:
-            state.profile = chat_profiles.load_profile(nickname)
+            state.profile = chat_profiles.load_profile(state.nickname)
         except Exception:
             read_failed = True
     try:

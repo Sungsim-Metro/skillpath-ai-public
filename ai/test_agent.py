@@ -13,6 +13,7 @@ os.environ["BEDROCK_MOCK"] = "1"
 import ai.bedrock as bedrock  # noqa: E402
 from ai import agent  # noqa: E402
 from ai.bedrock import BedrockJSONError  # noqa: E402
+from ai.usage import SessionUsage, track_session  # noqa: E402
 
 QUESTION = "Python, Docker 해봤는데 클라우드 엔지니어 되려면 뭐부터 공부해요?"
 KEYS = {"answer", "tool_calls", "usage", "latency_ms", "uncertain", "uncertain_reason"}
@@ -260,7 +261,7 @@ def test_converse_tools_real_request_shape():
     fake = FakeClient()
     old_client, old_env = bedrock._client, dict(os.environ)
     bedrock._client = lambda: fake
-    os.environ.update({"BEDROCK_MOCK": "0", "BEDROCK_MODEL_ID": "test-model"})
+    os.environ.update({"BEDROCK_MOCK": "0", "BEDROCK_MODEL_ID": "test-model", "USAGE_LOG": "off"})
 
     def run_tool(name, inp):
         if name == "broken":
@@ -268,8 +269,11 @@ def test_converse_tools_real_request_shape():
         return {"skill": inp["skill"], "postings": 31}
 
     try:
-        res = bedrock.converse_tools("시스템", [{"role": "user", "content": [{"text": "질문"}]}],
-                                     agent.prompt.TOOLS, run_tool, mock_file=agent.MOCK_FILE, mock_key="x")
+        session = SessionUsage()
+        with track_session(session):
+            res = bedrock.converse_tools("시스템", [{"role": "user", "content": [{"text": "질문"}]}],
+                                         agent.prompt.TOOLS, run_tool, mock_file=agent.MOCK_FILE, mock_key="x")
+        assert (session.input_tokens, session.output_tokens) == (200, 20)
     finally:
         bedrock._client = old_client
         os.environ.clear()
@@ -309,7 +313,7 @@ def test_converse_tools_final_tool():
     fake = FakeFinalClient()
     old_client, old_env = bedrock._client, dict(os.environ)
     bedrock._client = lambda: fake
-    os.environ.update({"BEDROCK_MOCK": "0", "BEDROCK_MODEL_ID": "test-model"})
+    os.environ.update({"BEDROCK_MOCK": "0", "BEDROCK_MODEL_ID": "test-model", "USAGE_LOG": "off"})
     ran = []
     try:
         res = bedrock.converse_tools("시스템", [{"role": "user", "content": [{"text": "질문"}]}], agent.prompt.TOOLS,
@@ -361,7 +365,7 @@ def test_answer_called_twice_in_one_turn():
     fake = FakeDoubleAnswerClient()
     old_client, old_env = bedrock._client, dict(os.environ)
     bedrock._client = lambda: fake
-    os.environ.update({"BEDROCK_MOCK": "0", "BEDROCK_MODEL_ID": "test-model"})
+    os.environ.update({"BEDROCK_MOCK": "0", "BEDROCK_MODEL_ID": "test-model", "USAGE_LOG": "off"})
     try:
         res = bedrock.converse_tools("시스템", [{"role": "user", "content": [{"text": "질문"}]}], agent.prompt.TOOLS,
                                      lambda n, i: {}, mock_file=agent.MOCK_FILE, mock_key="x", final_tool="answer")

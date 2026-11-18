@@ -350,7 +350,7 @@ def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
         result = bedrock.converse_json(
             _SYSTEM + "\n" + json.dumps(schema, ensure_ascii=False),
             json.dumps({"message": message, "context": state}, ensure_ascii=False),
-            mock_file="", mock_key="chat_intake", max_tokens=1200,
+            mock_file="", mock_key="chat_intake", usage_stage="chat_intake", max_tokens=1200,
             validate=lambda data: _validate(data, message, state),
         )
     except Exception:

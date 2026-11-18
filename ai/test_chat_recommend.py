@@ -38,7 +38,7 @@ def model_response(data) -> tuple[str, str, dict]:
 
 class ReviewTest(unittest.TestCase):
     def setUp(self):
-        self.enterContext(patch.dict(os.environ, {"BEDROCK_MOCK": "0"}))
+        self.enterContext(patch.dict(os.environ, {"BEDROCK_MOCK": "0", "USAGE_LOG": "off"}))
         self.search = self.enterContext(patch.object(recommend, "candidate_courses", return_value=[COURSE]))
         self.model = self.enterContext(patch.object(bedrock, "_call"))
 

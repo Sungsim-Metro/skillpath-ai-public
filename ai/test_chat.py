@@ -158,7 +158,7 @@ class MockIntakeTest(unittest.TestCase):
 
 class RealBoundaryTest(unittest.TestCase):
     def setUp(self):
-        self.config = patch.dict(os.environ, BEDROCK_MOCK="0", BEDROCK_GUARDRAIL_ID="test",
+        self.config = patch.dict(os.environ, USAGE_LOG="off", BEDROCK_MOCK="0", BEDROCK_GUARDRAIL_ID="test",
                                  BEDROCK_GUARDRAIL_VERSION="1")
         self.config.start()
         self.addCleanup(self.config.stop)

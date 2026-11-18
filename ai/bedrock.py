@@ -17,6 +17,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
+from ai.usage import record as record_usage
+
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / "data" / "sample"
 DEFAULT_REGION = "ap-northeast-2"
 USAGE_KEYS = ("inputTokens", "outputTokens", "totalTokens")
@@ -79,6 +81,7 @@ def converse_json(
     max_tokens: int = 4096,
     temperature: float = 0.0,
     max_attempts: int = 2,
+    usage_stage: Optional[str] = None,
 ) -> ConverseResult:
     """JSON 응답을 검사한다. 기본은 1회 재시도이며 1을 지정하면 재시도하지 않는다."""
     if type(max_attempts) is not int or max_attempts not in (1, 2):
@@ -93,6 +96,7 @@ def converse_json(
             system, messages, max_tokens, temperature, mock_file, mock_key, attempt
         )
         add_usage(usage, call_usage)
+        record_usage(usage_stage or mock_file, attempt, call_usage, is_mock())
         calls.append({"attempt": attempt, **{k: call_usage.get(k, 0) for k in USAGE_KEYS}})
         logger.info(
             "Bedrock 호출 key=%s 시도=%d 입력=%d 출력=%d 토큰 (stopReason=%s)",
@@ -173,6 +177,7 @@ def converse_tools(
     max_tokens: int = 2048,
     temperature: float = 0.0,
     final_tool: Optional[str] = None,
+    attempt: int = 1,
 ) -> ToolLoopResult:
     """Converse 도구 호출 반복 (#25). 모델이 도구를 고르면 run_tool 로 실행해 결과를 돌려주고, 글로 답하면 멈춘다.
 
@@ -191,6 +196,7 @@ def converse_tools(
             system, messages, tools, max_tokens, temperature, mock_file, mock_key, mock_turn_start + turn
         )
         add_usage(usage, call_usage)
+        record_usage(mock_file, attempt, call_usage, is_mock())
         logger.info(
             "Bedrock 도구 호출 key=%s 회차=%d 입력=%d 출력=%d 토큰 (stopReason=%s)",
             mock_key, turn + 1, call_usage.get("inputTokens", 0), call_usage.get("outputTokens", 0), stop_reason,

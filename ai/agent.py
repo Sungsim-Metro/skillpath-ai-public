@@ -377,7 +377,7 @@ def chat(message: str, history: Optional[list] = None) -> dict:
         if error is not None:
             retried = "number" if bad else "pair" if pairs_bad else "format"
             retry = converse_tools(prompt.SYSTEM, loop.messages + [_retry_turn(loop, error)], prompt.TOOLS, run_tool,
-                                   max_turns=1, mock_turn_start=model_calls + 1, **tool_args)
+                                   max_turns=1, mock_turn_start=model_calls + 1, attempt=2, **tool_args)
             add_usage(usage, retry.usage)
             calls += list(retry.tool_calls)
             model_calls += retry.model_calls

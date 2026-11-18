@@ -1,6 +1,8 @@
 """학습 상담 화면의 호출 범위와 세션 분리를 확인한다."""
+import json
 import os
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -8,6 +10,7 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
+from ai.chat import Turn
 from backend import api, chat_profiles
 from backend.jobs import JOBS
 
@@ -16,7 +19,9 @@ MAIN = str(Path(__file__).with_name("main.py"))
 
 class ChatScreenTest(unittest.TestCase):
     def setUp(self):
-        self.enterContext(patch.dict(os.environ, {"BEDROCK_MOCK": "1", "PYTHON_DOTENV_DISABLED": "1"}))
+        self.enterContext(patch.dict(os.environ, {
+            "BEDROCK_MOCK": "1", "PYTHON_DOTENV_DISABLED": "1", "USAGE_LOG": "off",
+        }))
 
     def open_screen(self, view="chat"):
         at = AppTest.from_file(MAIN, default_timeout=60)
@@ -24,6 +29,74 @@ class ChatScreenTest(unittest.TestCase):
         at.run()
         self.assertFalse(at.exception)
         return at
+
+    def test_token_usage_counts_retries_and_failed_turns_only_for_this_chat(self):
+        log = Path(self.enterContext(TemporaryDirectory())) / "usage.jsonl"
+        self.enterContext(patch.dict(os.environ, {"USAGE_LOG": str(log), "ADMIN_KEY": "test-key"}))
+        at = self.open_screen()
+        other = self.open_screen()
+        session_id = at.session_state["chat_conversation"].usage.session_id
+        self.assertNotEqual(session_id, other.session_state["chat_conversation"].usage.session_id)
+
+        def response(body, inputs, outputs):
+            return body, "end_turn", {"inputTokens": inputs, "outputTokens": outputs,
+                                      "totalTokens": inputs + outputs}
+
+        replies = [
+            response("invalid", 10, 1),
+            response(json.dumps(asdict(Turn(action="summary"))), 20, 2),
+            response("invalid", 30, 3),
+            response("invalid", 40, 4),
+        ]
+        with (patch("ai.chat.guard_input", return_value=True),
+              patch("ai.bedrock.is_mock", return_value=False),
+              patch("ai.bedrock._call", side_effect=replies) as call):
+            at.chat_input[0].set_value("내 경험을 정리해줘").run()
+            self.assertIn("보유 기술", at.chat_message[-1].text[0].value)
+            self.assertEqual(at.metric[0].value, "33")
+            at.chat_input[0].set_value("다시 정리해줘").run()
+            self.assertIn("해석하지 못했습니다", at.chat_message[-1].text[0].value)
+            self.assertEqual(at.metric[0].value, "110")
+            self.assertTrue(any(f"입력 100 · 출력 10 · 세션 ID `{session_id}`" in c.value for c in at.caption))
+            at.run()
+            other.run()
+            self.assertEqual(at.metric[0].value, "110")
+            self.assertEqual(other.metric[0].value, "0")
+            self.assertEqual(call.call_count, 4)
+
+        at.text_input(key="chat_nickname").set_value("처음 닉네임").run()
+        at.radio(key="view").set_value("dashboard").run()
+        at.radio(key="view").set_value("chat").run()
+        self.assertEqual(at.metric[0].value, "110")
+        self.assertEqual(session_id, at.session_state["chat_conversation"].usage.session_id)
+        at.text_input(key="chat_nickname").set_value("새 닉네임").run()
+        self.assertEqual(at.metric[0].value, "0")
+        self.assertNotEqual(session_id, at.session_state["chat_conversation"].usage.session_id)
+
+        admin = AppTest.from_file(MAIN, default_timeout=60)
+        admin.query_params["admin"] = "test-key"
+        admin.run()
+        self.assertFalse(admin.exception)
+        session_table = next(
+            frame.value for frame in admin.tabs[-1].dataframe if "세션 ID" in frame.value.columns
+        )
+        self.assertEqual(session_table["세션 ID"].tolist(), [session_id])
+        row = session_table.iloc[0]
+        self.assertEqual((row["입력 토큰"], row["출력 토큰"], row["합계 토큰"], row["재시도"]), (100, 10, 110, 2))
+
+    def test_in_progress_chat_starts_tracking_with_existing_history(self):
+        at = self.open_screen()
+        at.chat_input[0].set_value("제가 Docker로 API를 배포했어요.").run()
+        messages = [item.text[0].value for item in at.chat_message]
+        del at.session_state["chat_conversation"].usage
+
+        at.run()
+        self.assertFalse(at.exception)
+        self.assertEqual([item.text[0].value for item in at.chat_message], messages)
+        self.assertEqual(at.metric[0].value, "0")
+        session_id = at.session_state["chat_conversation"].usage.session_id
+        at.run()
+        self.assertEqual(at.session_state["chat_conversation"].usage.session_id, session_id)
 
     def test_chat_entry_and_experience_do_not_run_dashboard(self):
         with (patch.object(api, "get_demand", wraps=api.get_demand) as demand,

@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 import streamlit as st
 
+from ai.usage import SessionUsage
 from pipeline.aliases import skill_aliases
 
 
@@ -58,12 +59,15 @@ def render(job: str, sidebar_skills: list[str], nickname: str) -> None:
     if "chat_conversation" not in st.session_state:
         st.session_state.chat_conversation = chat.Conversation()
         st.session_state.chat_history = []
+    conversation = st.session_state.chat_conversation
+    if not hasattr(conversation, "usage"):
+        conversation.usage = SessionUsage()
     history = st.session_state.chat_history
     message = st.chat_input("경험을 적거나 궁금한 점을 물어보세요.", key="chat_message")
     if message and message.strip():
         try:
             reply = chat.handle_message(
-                st.session_state.chat_conversation, message,
+                conversation, message,
                 job=job, sidebar_skills=sidebar_skills, nickname=nickname,
             )
             response = (reply.text, reply.courses)
@@ -71,6 +75,11 @@ def render(job: str, sidebar_skills: list[str], nickname: str) -> None:
             # 예외에 닉네임, 프로필 또는 원문이 포함될 수 있다.
             response = ("메시지 처리 결과를 확인할 수 없습니다.", [])
         history.append((message, *response))
+
+    usage = conversation.usage
+    st.metric("이 대화의 누적 토큰", f"{usage.total_tokens:,}",
+              help="기록을 시작한 뒤 모델이 보고한 사용량입니다. 재시도를 포함하며 모의 호출은 0토큰입니다.")
+    st.caption(f"입력 {usage.input_tokens:,} · 출력 {usage.output_tokens:,} · 세션 ID `{usage.session_id}`")
 
     for prompt, answer, courses in history:
         with st.chat_message("user"):

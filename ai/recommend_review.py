@@ -69,6 +69,7 @@ def reviewed_reasons(source: dict) -> ConverseResult:
     def ask(system: str, payload: dict, key: str, expected: list[str]) -> dict[str, dict]:
         result = converse_json(
             system, json.dumps(payload, ensure_ascii=False), mock_file="", mock_key=f"recommend_{key}",
+            usage_stage="recommend" if key == "reasons" else "review",
             validate=lambda data: _validate_rows(data, key, expected),
             max_tokens=2048, max_attempts=1 if key == "corrections" else 2,
         )

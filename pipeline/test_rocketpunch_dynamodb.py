@@ -25,6 +25,7 @@ class RocketpunchDynamoDBTest(unittest.TestCase):
         patch.dict(os.environ, {
             "BEDROCK_MOCK": "0",
             "BEDROCK_MODEL_ID": "test-model",
+            "USAGE_LOG": "off",  # 테스트의 가짜 호출이 운영 기록에 쌓이지 않게
             "ROCKETPUNCH_S3_BUCKET": "example-postings",
             "DYNAMODB_EXTRACTIONS_TABLE": "test-extractions",
             "DYNAMODB_DEMAND_TABLE": "test-demand",
