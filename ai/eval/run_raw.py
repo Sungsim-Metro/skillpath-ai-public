@@ -1,4 +1,4 @@
-"""실제 공고(data/raw/*.posting.json)로 추출을 한 바퀴 돌려 보는 확인용 스크립트.
+"""검토된 AI·클라우드 공고로 추출을 한 바퀴 돌려 보는 확인용 스크립트.
 
 실행 (저장소 루트에서):
   가짜 모드:  $env:BEDROCK_MOCK="1"; .venv\\Scripts\\python -m ai.eval.run_raw
@@ -36,6 +36,7 @@ from ai.bedrock import BedrockJSONError, add_usage, is_mock  # noqa: E402
 from ai.extract import DEFAULT_PROMPT, PROMPTS, extract_with_details  # noqa: E402
 from ai.sections import OTHER, SECTION_WEIGHT, _find, headings, weight  # noqa: E402
 from pipeline.aliases import normalize_skill  # noqa: E402
+from pipeline.reviewed_postings import reviewed_paths  # noqa: E402
 from pipeline.standardize import standardize  # noqa: E402
 
 OUT_DIR = ROOT / "outputs" / "eval"
@@ -182,26 +183,36 @@ def print_summary(s: dict) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="실제 공고로 추출 한 바퀴")
-    ap.add_argument("--glob", default=str(ROOT / "data" / "raw" / "*.posting.json"))
+    ap.add_argument("--glob", help="직접 지정할 공고 파일 패턴 (기본은 검토된 AI·클라우드 공고)")
     ap.add_argument("--limit", type=int, default=0, help="앞에서부터 N건만 (0 이면 전부)")
     ap.add_argument("--prompt", choices=sorted(PROMPTS), default=DEFAULT_PROMPT, help="프롬프트 버전 (기본 v1)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
-    files = sorted(glob.glob(args.glob))  # 기본값은 data/raw 바로 아래만 본다(하위 폴더의 채점용 공고는 읽지 않음)
-    if args.limit:
-        files = files[: args.limit]
-    if not files:
-        print(f"공고 파일이 없습니다: {args.glob}")
+    try:
+        files = (sorted(map(Path, glob.glob(args.glob))) if args.glob is not None
+                 else reviewed_paths(raw_dir=ROOT / "data" / "raw"))
+    except (FileNotFoundError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    postings = {}
+    for path in files:
+        posting = json.loads(path.read_text(encoding="utf-8"))
+        postings.setdefault(posting["id"], posting)
+        if len(postings) == args.limit:
+            break
+    selected = list(postings.values())[:args.limit or None]
+    if not selected:
+        print(f"공고 파일이 없습니다: {args.glob or '검토된 AI·클라우드 공고'}")
         return 1
     prompt = PROMPTS[args.prompt]
     version = prompt.VERSION
     mode = "mock" if is_mock() else "bedrock"
-    print(f"프롬프트 {version} / 모드 {mode} / 공고 {len(files)}건")
+    print(f"프롬프트 {version} / 모드 {mode} / 공고 {len(selected)}건")
     if mode == "mock":
         print("가짜 모드: 실제 공고 id 에 맞는 가짜 응답이 없어 모두 빈 결과입니다. 읽기·저장·표 출력만 확인합니다.")
 
-    rows = [run_posting(json.loads(Path(f).read_text(encoding="utf-8")), args.prompt) for f in files]
+    rows = [run_posting(posting, args.prompt) for posting in selected]
     summary = summarize(rows)
     print_table(rows)
     print_summary(summary)

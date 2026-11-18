@@ -12,10 +12,10 @@
   python -m pipeline.rocketpunch fetch --manual                    # 기록한 번호 중 아직 안 받은 것을 받는다(429 면 멈춤, 다시 실행하면 이어서)
   python -m pipeline.rocketpunch dedupe                            # 같은 회사·같은 제목의 오래된 공고는 최신 것만 남긴다(호출 없음)
 
-- 사람이 열어 볼 posting 은 data/raw/rp-<id>_<회사>_<제목>.posting.json 으로 저장한다.
+- 제목 필터를 통과한 검토 후보는 data/raw/rp-<id>_<회사>_<제목>.posting.json 으로 저장한다.
 - 원본 응답은 data/raw/rp-<jobId>.raw.json 에 저장한다(저장소에 올리지 않는다).
-- ROCKETPUNCH_S3_BUCKET 이 있으면 목록·상세·전처리 JSON을 구분해 S3에도 저장한다.
-- DynamoDB 테이블 설정이 있으면 fetch·collect 후 기술 추출과 수요 집계까지 저장한다.
+- ROCKETPUNCH_S3_BUCKET 이 있으면 수집한 목록·상세 응답을 S3에 보관한다.
+- DynamoDB가 설정된 fetch·collect는 지정한 직무의 postings-reviewed 공고로 수요를 집계한다.
 - python -m pipeline.rocketpunch upload --dry-run 으로 기존 파일 업로드를 확인한다.
 - 이미 받은 공고는 API 를 다시 부르지 않는다. 429 가 오면 멈추고, 다시 실행하면 이어서 받는다.
 """
@@ -33,10 +33,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from backend.jobs import ANALYSIS_JOBS, REVIEWED_DOMAINS
+from pipeline.reviewed_postings import DOMAINS, RAW_DIR, reviewed_paths
 from pipeline.storage import S3Target, maybe_upload, target_from_env, upload_json
 
 ROOT = Path(__file__).resolve().parent.parent
-RAW_DIR = ROOT / "data" / "raw"
 KST = timezone(timedelta(hours=9))
 BASE = "https://openapi.rocketpunch.com/v1"  # 문서의 /api/v1 은 404 라서 /v1 을 쓴다
 # 본문 필드와 칸 제목. text 에는 칸마다 제목을 한 줄에 단독으로 쓰고 다음 줄부터 본문을 쓴다.
@@ -238,10 +239,9 @@ def process(job_id, role: str, terms) -> bool:
     out = posting_path(posting)
     if hits:
         write_json(out, posting)
-        maybe_upload(out)
     for old in _posting_files(posting["id"]):
         if not hits or old != out:
-            old.unlink()  # 새 파일 저장과 업로드가 끝난 뒤 예전 이름의 파일을 정리한다
+            old.unlink()  # 로컬 후보 갱신 후 예전 이름의 파일을 정리한다
     print(f"{'통과' if hits else '탈락'}\t{posting['id']}\t필터 {hits or '없음'}\t본문 {len(posting['text'])}자\t{posting['title'][:40]}")
     return bool(hits)
 
@@ -364,14 +364,12 @@ def batch_options(args) -> dict | None:
     if not any(table_names):
         return None
 
-    from backend.jobs import validate_role
     from pipeline.extraction_batch import (
         parse_exclusions, selection_version_for_terms, validate_configuration,
     )
 
     job_category = getattr(args, "job_category", "cloud_engineer")
     validate_configuration(job_category)
-    validate_role(job_category, args.role)
     collected = getattr(args, "collected", None)
     if not collected or not collected.strip():
         raise ValueError("DynamoDB 저장에는 --collected로 수집일 또는 기간을 지정하세요.")
@@ -381,19 +379,19 @@ def batch_options(args) -> dict | None:
         "force": getattr(args, "force", False),
         "exclusions": parse_exclusions(getattr(args, "exclude", [])),
         "selection_version": selection_version_for_terms(
-            args.terms, getattr(args, "selection_version", None)
+            None, getattr(args, "selection_version", None)
         ),
-        "terms": args.terms,
     }
 
 
 def persist_extractions(options: dict | None) -> None:
-    """현재 통과본 전체를 한 배치로 분석하고 완성된 집계만 공개한다."""
+    """수집 후보와 별도로 해당 직무의 검토본 전체를 분석한다."""
     if options is None:
         return
     from pipeline.extraction_batch import run_batch
 
-    summary = run_batch(sorted(RAW_DIR.glob("rp-*.posting.json")), **options)
+    paths = reviewed_paths(REVIEWED_DOMAINS[options["job_category"]], raw_dir=RAW_DIR)
+    summary = run_batch(paths, **options)
     print(json.dumps(summary, ensure_ascii=False))
     if not summary["published"]:
         raise SystemExit(1)
@@ -468,13 +466,15 @@ def cmd_upload(args) -> None:
     if prefix is None:
         prefix = configured.prefix if configured else S3Target(bucket).prefix
     target = S3Target(bucket, prefix)
-    patterns = ("list-*.json", "rp-*.raw.json", "rp-*.posting.json")
+    patterns = ("list-*.json", "rp-*.raw.json")
     paths = sorted({path for pattern in patterns for path in RAW_DIR.glob(pattern)})
+    for domain in DOMAINS:
+        paths.extend(reviewed_paths(domain, raw_dir=RAW_DIR))
     uploaded = existing = 0
     for path in paths:
         result = upload_json(path, target, dry_run=args.dry_run)
         if args.dry_run:
-            print(f"{path.name} -> s3://{bucket}/{result.key}")
+            print(f"{path.relative_to(RAW_DIR)} -> s3://{bucket}/{result.key}")
         elif result.uploaded:
             uploaded += 1
         else:
@@ -487,63 +487,59 @@ def cmd_upload(args) -> None:
 
 TUNING_FILE = ROOT / "data" / "tuning_ids.json"  # 성진님이 프롬프트를 고칠 때 본 공고 번호(번호만, 원문 없음)
 EVAL_DIR = RAW_DIR / "eval"
-NOT_ROLE = "기타(직무 필터 밖)"
 
 
 def cmd_export_eval(args) -> None:
-    """채점용 공고를 data/raw/eval/ 로 내보낸다. 받아 둔 원본(호출 없음)에서 고른다.
-
-    - 프롬프트 튜닝에 쓴 공고(data/tuning_ids.json)는 뺀다. 본 공고로 채점하면 점수가 부풀려진다.
-    - 직무 필터를 통과한 공고를 우선하고, AWS 언급 공고는 최소 --min-aws 건 넣는다. AWS 추출 성능을 재기 위해서다.
-      직무 필터 밖의 AWS 언급 공고도 들어갈 수 있고, 그때 role 은 '기타(직무 필터 밖)'로 표시한다(수요 집계에 섞지 않으려고).
-    - 공고 원문이 들어 있으므로 커밋하지 않는다(data/raw/ 는 .gitignore). 같이 만드는 eval-목록.csv 에는 원문이 없다."""
+    """검토된 AI·클라우드 공고에서 튜닝 공고와 중복 공고를 빼고 채점용 표본을 고른다."""
     from ai.sections import headings
 
+    domain_for_role = {ANALYSIS_JOBS[job]: domain for job, domain in REVIEWED_DOMAINS.items()}
+    domain = domain_for_role[args.role] if args.role else None
+    try:
+        paths = reviewed_paths(domain, raw_dir=RAW_DIR)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    if not paths:
+        raise SystemExit("검토된 공고가 없습니다. 채점 표본을 내보내려면 검토 디렉터리를 확인하세요.")
+    postings = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
     tuned = {str(i) for i in json.loads(TUNING_FILE.read_text(encoding="utf-8"))["ids"]}
-    raws = _all_raws()
-    stale = older_duplicates(raws)  # 같은 회사·같은 제목의 오래된 공고는 최신 것만 쓴다
-    pool = []  # (posting, 직무 필터 통과, AWS 언급)
-    for raw in raws:
-        if str(raw["jobId"]) in tuned or str(raw["jobId"]) in stale:
-            continue
-        posting = to_posting(raw, args.role)
-        role_ok = bool(matched_terms(posting, args.terms))
-        aws = bool(matched_terms(posting, ["aws"], fields=("title", "text")))
-        pool.append((posting if role_ok else {**posting, "role": NOT_ROLE}, role_ok, aws))
-
-    newest = lambda x: -int(x[0]["id"][3:])  # 최신 공고(번호가 큰 것) 먼저
-    aws_pool = sorted((x for x in pool if x[2]), key=lambda x: (not x[1], newest(x)))  # 직무 통과 우선
-    want_aws = min(args.min_aws, args.n)  # --min-aws 가 --n 보다 크면 n 건으로 맞춘다(아래 슬라이스가 음수가 되지 않게)
+    # 기존 재공고 판정에 필요한 메타데이터만 사용하고 내보내는 공고는 검토본 그대로 둔다.
+    stale = older_duplicates([
+        {"jobId": p["id"].removeprefix("rp-"), "title": p["title"], "company": {"name": p["company"]},
+         "startAt": p["posted_at"]} for p in postings
+    ])
+    excluded = tuned | stale.keys()
+    pool = [p for p in postings if p["id"].removeprefix("rp-") not in excluded]
+    pool.sort(key=lambda p: (not matched_terms(p, args.terms or ()), -int(p["id"].removeprefix("rp-"))))
+    aws_pool = [p for p in pool if matched_terms(p, ["aws"], fields=("title", "text"))]
+    aws_ids = {p["id"] for p in aws_pool}
+    want_aws = min(args.min_aws, args.n)
     picked = aws_pool[:want_aws]
-    taken = {x[0]["id"] for x in picked}
-    picked += sorted((x for x in pool if x[1] and x[0]["id"] not in taken), key=newest)[: args.n - len(picked)]
-    taken = {x[0]["id"] for x in picked}
-    if len(picked) < args.n:  # 직무 통과 공고가 모자라면 남은 AWS 언급 공고로 채운다
-        picked += [x for x in aws_pool if x[0]["id"] not in taken][: args.n - len(picked)]
+    taken = {p["id"] for p in picked}
+    picked.extend(p for p in pool if p["id"] not in taken)
+    picked = picked[:args.n]
 
     EVAL_DIR.mkdir(parents=True, exist_ok=True)
     for old in EVAL_DIR.glob("eval-*"):
         old.unlink()  # 다시 내보내면 이전 결과를 지우고 새로 만든다
     rows = []
-    for i, (p, role_ok, aws) in enumerate(picked, 1):
+    for i, p in enumerate(picked, 1):
         name = f"eval-{i:02d}_{posting_path(p).name.replace('.posting.json', '.json')}"
         (EVAL_DIR / name).write_text(json.dumps(p, ensure_ascii=False, indent=2), encoding="utf-8")
-        rows.append([i, p["id"], p["company"], p["title"], "통과" if role_ok else "밖", "있음" if aws else "없음",
+        rows.append([i, p["id"], p["company"], p["title"], p["role"], "있음" if p["id"] in aws_ids else "없음",
                      len(headings(p["text"])), p["url"]])
     import csv
     with (EVAL_DIR / "eval-목록.csv").open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["번호", "id", "회사", "제목", "직무 필터", "AWS 언급", "칸 제목 수", "링크"])
+        w.writerow(["번호", "id", "회사", "제목", "직무", "AWS 언급", "칸 제목 수", "링크"])
         w.writerows(rows)
     n_aws = sum(1 for r in rows if r[5] == "있음")
-    n_out = sum(1 for r in rows if r[4] == "밖")
-    print(f"튜닝에 쓴 {len(tuned)}건을 빼고 받아 둔 원본 {len(pool)}건 중 {len(rows)}건을 {EVAL_DIR} 에 내보냈습니다.")
-    print(f"  직무 필터 통과 {len(rows) - n_out}건, 밖 {n_out}건 / AWS 언급 {n_aws}건")
+    print(f"튜닝·중복을 제외한 검토 공고 {len(pool)}건 중 {len(rows)}건을 {EVAL_DIR} 에 내보냈습니다. AWS 언급 {n_aws}건.")
     if args.min_aws > args.n:
         print(f"  참고: --min-aws({args.min_aws})가 --n({args.n})보다 커서 AWS 언급 기준을 {args.n}건으로 맞췄습니다.")
     if len(rows) < args.n or n_aws < want_aws:
         print(f"  ⚠ 목표(전체 {args.n}건, AWS 언급 {want_aws}건 이상)에 못 미칩니다: "
-              f"{args.n - len(rows)}건, AWS 언급 {max(want_aws - n_aws, 0)}건 부족. collect 로 더 받아 오세요.")
+              f"{args.n - len(rows)}건, AWS 언급 {max(want_aws - n_aws, 0)}건 부족.")
     for r in rows:
         print(f"  {r[0]:02d} {r[1]} | {r[2]} | {r[3][:34]} | 직무 {r[4]} | AWS {r[5]}")
 
@@ -586,16 +582,20 @@ def main() -> None:
     e = sub.add_parser("export-eval", help="채점용 공고를 data/raw/eval/ 로 내보낸다(호출 없음)")
     e.add_argument("--n", type=int, default=10, help="내보낼 건수")
     e.add_argument("--min-aws", type=int, default=4, help="AWS 언급 공고 최소 건수")
-    for sp, run in ((f, cmd_fetch), (c, cmd_collect), (e, cmd_export_eval)):
+    e.add_argument("--role", choices=sorted(ANALYSIS_JOBS.values()), help="검토 직무를 한 가지로 제한")
+    e.add_argument("--terms", nargs="+", help="해당 단어가 제목에 있는 검토 공고를 우선 선택")
+    e.set_defaults(run=cmd_export_eval)
+    for sp, run in ((f, cmd_fetch), (c, cmd_collect)):
         sp.add_argument("--role", default="클라우드 엔지니어", help="posting 의 role(직무 이름)")
         sp.add_argument("--terms", nargs="+", default=list(ROLE_TERMS), help="제목 기준 직무 필터 단어")
         sp.set_defaults(run=run)
     for sp in (f, c):
-        sp.add_argument("--job-category", default="cloud_engineer", help="DynamoDB에 저장할 서비스 직무 코드")
+        sp.add_argument("--job-category", default="cloud_engineer", choices=sorted(ANALYSIS_JOBS),
+                        help="검토본을 집계할 분석 직무")
         sp.add_argument("--collected", help="수집일 또는 기간. DynamoDB 저장 시 필수")
         sp.add_argument("--force", action="store_true", help="저장된 동일 입력의 추출 결과도 다시 분석")
         sp.add_argument("--exclude", action="append", default=[], metavar="ID=REASON", help="집계에서 제외할 공고와 사유")
-        sp.add_argument("--selection-version", help="선정 규칙 버전. 기본값은 제목 기준 직무 필터에서 계산")
+        sp.add_argument("--selection-version", help="검토본 선정 규칙에 기록할 버전")
     args = p.parse_args()
     load_env_file()
     args.run(args)

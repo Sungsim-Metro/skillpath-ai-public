@@ -121,14 +121,13 @@ class RocketpunchStorageTest(unittest.TestCase):
         self.api.assert_called_once_with("/jobs", self.params)
         self.assertEqual(self.upload.call_count, 2)
 
-    def test_only_filter_matches_publish_normalized_postings(self) -> None:
+    def test_filter_matches_are_local_review_candidates(self) -> None:
         with patch.object(rocketpunch, "load_or_fetch", return_value=self.detail):
             with redirect_stdout(io.StringIO()):
                 self.assertTrue(rocketpunch.process("1", "Cloud Engineer", ["cloud"]))
         path = rocketpunch.posting_path(rocketpunch.to_posting(self.detail, "Cloud Engineer"))
         self.assertTrue(path.exists())
-        self.upload.assert_called_once_with(path)
-        self.upload.reset_mock()
+        self.upload.assert_not_called()
         with patch.object(rocketpunch, "load_or_fetch", return_value=self.detail):
             with redirect_stdout(io.StringIO()):
                 self.assertFalse(
@@ -161,6 +160,13 @@ class RocketpunchStorageTest(unittest.TestCase):
         self.save_cache(self.listing)
         for filename in ("rp-1.raw.json", "rp-1.posting.json", "unrelated.json"):
             (self.root / filename).write_text('{"id": 1}', encoding="utf-8")
+        reviewed = self.root / "rocketpunch-2026-11-17" / "postings-reviewed"
+        for domain in ("ai", "cloud"):
+            folder = reviewed / domain
+            folder.mkdir(parents=True)
+            (folder / "rp-2.posting.json").write_text(
+                json.dumps({"id": "rp-2", "role": domain}), encoding="utf-8"
+            )
         args = Namespace(bucket="example-postings", prefix="test", dry_run=True)
         output = io.StringIO()
         with patch.object(rocketpunch, "target_from_env", return_value=None):
@@ -170,24 +176,25 @@ class RocketpunchStorageTest(unittest.TestCase):
                 ) as upload:
                     with redirect_stdout(output):
                         rocketpunch.cmd_upload(args)
-        self.assertEqual(upload.call_count, 3)
+        self.assertEqual(upload.call_count, 4)
         self.assertTrue(all(call.kwargs["dry_run"] for call in upload.call_args_list))
         client.assert_not_called()
         self.api.assert_not_called()
         self.assertIn("test/raw/lists/", output.getvalue())
         self.assertIn("test/raw/details/", output.getvalue())
         self.assertIn("test/processed/postings/", output.getvalue())
+        self.assertNotIn("test/processed/postings/rp-1/", output.getvalue())
+        self.assertEqual(output.getvalue().count("test/processed/postings/rp-2/"), 2)
         self.assertNotIn("unrelated.json", output.getvalue())
 
-    def test_upload_failure_preserves_legacy_posting_until_retry_succeeds(self) -> None:
+    def test_write_failure_preserves_legacy_posting_until_retry_succeeds(self) -> None:
         legacy = self.root / "rp-1.posting.json"
         legacy.write_text('{"id":"rp-1","text":"previous"}', encoding="utf-8")
-        self.upload.side_effect = RuntimeError("S3 unavailable")
         with patch.object(rocketpunch, "load_or_fetch", return_value=self.detail):
-            with self.assertRaises(RuntimeError):
-                rocketpunch.process("1", "Cloud Engineer", ["cloud"])
+            with patch.object(rocketpunch, "write_json", side_effect=OSError("write failed")):
+                with self.assertRaises(OSError):
+                    rocketpunch.process("1", "Cloud Engineer", ["cloud"])
             self.assertTrue(legacy.exists())
-            self.upload.side_effect = None
             with redirect_stdout(io.StringIO()):
                 self.assertTrue(rocketpunch.process("1", "Cloud Engineer", ["cloud"]))
         self.assertFalse(legacy.exists())

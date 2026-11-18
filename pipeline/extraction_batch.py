@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,14 +16,11 @@ from ai.bedrock import USAGE_KEYS, add_usage
 from ai.extract import extraction_settings, extract_with_meta, input_fingerprint
 from backend.demand import build_snapshot
 from backend.dynamodb import DynamoDBStore
-from backend.jobs import JOBS, validate_role
+from backend.jobs import ANALYSIS_JOBS, REVIEWED_DOMAINS, validate_role
 from pipeline import storage
-from pipeline.rocketpunch import ROLE_TERMS
+from pipeline.reviewed_postings import RAW_DIR, reviewed_paths
 
-ROOT = Path(__file__).resolve().parent.parent
-RAW_DIR = ROOT / "data" / "raw"
-DEFAULT_SELECTION_VERSION = "cloud-role-title-v1"
-DEFAULT_TERMS = ROLE_TERMS
+DEFAULT_SELECTION_VERSION = "rocketpunch-reviewed-v1"
 
 
 @dataclass(frozen=True)
@@ -38,7 +36,7 @@ def validate_configuration(job_category: str) -> None:
     """공개 데이터 저장에 필요한 설정을 AWS 호출 전에 확인한다."""
     if os.getenv("BEDROCK_MOCK", "1") != "0":
         raise ValueError("DynamoDB 저장은 BEDROCK_MOCK=0에서만 실행할 수 있습니다.")
-    if job_category not in JOBS:
+    if job_category not in ANALYSIS_JOBS:
         raise ValueError(f"지원하지 않는 직무 코드: {job_category}")
     required = (
         "BEDROCK_MODEL_ID", "ROCKETPUNCH_S3_BUCKET",
@@ -63,7 +61,9 @@ def parse_exclusions(values: list[str]) -> dict[str, str]:
     return exclusions
 
 
-def _normalized_terms(terms: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+def _normalized_terms(terms: Sequence[str] | None) -> tuple[str, ...] | None:
+    if terms is None:
+        return None
     normalized = tuple(sorted({term.strip().lower() for term in terms if term.strip()}))
     if not normalized:
         raise ValueError("선정 필터 단어를 하나 이상 지정하세요.")
@@ -71,7 +71,7 @@ def _normalized_terms(terms: tuple[str, ...] | list[str]) -> tuple[str, ...]:
 
 
 def selection_version_for_terms(
-    terms: tuple[str, ...] | list[str], override: str | None = None,
+    terms: Sequence[str] | None, override: str | None = None,
 ) -> str:
     """실제로 적용하는 선정 필터에 맞는 규칙 버전을 만든다."""
     normalized = _normalized_terms(terms)
@@ -79,16 +79,16 @@ def selection_version_for_terms(
         if not override.strip():
             raise ValueError("선정 규칙 버전은 빈 문자열일 수 없습니다.")
         return override.strip()
-    if normalized == _normalized_terms(DEFAULT_TERMS):
+    if normalized is None:
         return DEFAULT_SELECTION_VERSION
     serialized = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:12]
-    return f"cloud-title-terms-{digest}"
+    return f"{DEFAULT_SELECTION_VERSION}-title-{digest}"
 
 
 def _freeze_inputs(
     paths: list[Path], job_category: str, settings: dict,
-    target: storage.S3Target, exclusions: dict[str, str], terms: tuple[str, ...],
+    target: storage.S3Target, exclusions: dict[str, str], terms: tuple[str, ...] | None,
 ) -> tuple[list[BatchInput], list[dict], int]:
     """파일 목록과 내용을 고정하고 공고별 입력 오류를 기록한다."""
     from pipeline.rocketpunch import matched_terms
@@ -113,7 +113,7 @@ def _freeze_inputs(
                 raise ValueError("공고 text는 문자열이어야 합니다.")
             if not isinstance(posting.get("title"), str):
                 raise ValueError("공고 title은 문자열이어야 합니다.")
-            if not matched_terms(posting, terms, fields=("title",)):
+            if terms is not None and not matched_terms(posting, terms, fields=("title",)):
                 continue
             eligible_ids.add(posting_id)
             if posting_id in exclusions:
@@ -176,7 +176,7 @@ def _extraction_item(
 def run_batch(
     paths: list[Path], *, job_category: str, collected: str,
     force: bool = False, exclusions: dict[str, str] | None = None,
-    selection_version: str | None = None, terms: tuple[str, ...] | list[str] = DEFAULT_TERMS,
+    selection_version: str | None = None, terms: Sequence[str] | None = None,
     store=None, s3_client=None,
 ) -> dict:
     """완성 집계만 공개하고 실행 요약을 반환한다. 호출자가 요약 JSON을 한 번 출력한다.
@@ -271,15 +271,16 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--collected", required=True, help="공고 수집일 또는 수집 기간")
-    parser.add_argument("--job-category", default="cloud_engineer", choices=sorted(JOBS))
+    parser.add_argument("--job-category", default="cloud_engineer", choices=sorted(ANALYSIS_JOBS))
     parser.add_argument("--force", action="store_true", help="같은 입력도 다시 추출")
     parser.add_argument("--exclude", action="append", default=[], metavar="ID=REASON")
-    parser.add_argument("--terms", nargs="+", default=list(DEFAULT_TERMS), help="공고 제목의 직무 선정 단어")
+    parser.add_argument("--terms", nargs="+", help="검토된 공고를 추가로 제한할 제목 단어 (기본: 전체)")
     parser.add_argument("--selection-version", help="선정 규칙 버전. 기본값은 필터에서 계산")
     args = parser.parse_args()
     load_env_file()
     summary = run_batch(
-        sorted(RAW_DIR.glob("rp-*.posting.json")), job_category=args.job_category,
+        reviewed_paths(REVIEWED_DOMAINS[args.job_category], raw_dir=RAW_DIR),
+        job_category=args.job_category,
         collected=args.collected, force=args.force,
         exclusions=parse_exclusions(args.exclude), selection_version=args.selection_version,
         terms=args.terms,

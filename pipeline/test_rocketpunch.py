@@ -67,7 +67,7 @@ def names():
 
 
 def export_eval():
-    """채점용 내보내기: 튜닝에 쓴 공고는 빼고, AWS 언급 공고를 먼저(직무 통과 우선), 나머지는 직무 통과 공고로 채운다."""
+    """검토 공고만 직무를 유지한 채 내보내고, 중복·튜닝 공고를 제외한다."""
     import contextlib
     import csv
     import io
@@ -75,69 +75,60 @@ def export_eval():
     import tempfile
     from pathlib import Path
     from types import SimpleNamespace
+    from unittest.mock import patch
 
     import pipeline.rocketpunch as rp
 
-    def raw(job_id, title, body):
-        return {"jobId": job_id, "title": title, "company": {"name": f"회사{job_id}"}, "description": body,
-                "webUrl": f"https://example.com/{job_id}"}
+    def posting(job_id, title, text, company=None, date="2026-11-17"):
+        return {"id": f"rp-{job_id}", "title": title, "text": text, "company": company or f"회사{job_id}",
+                "posted_at": date, "url": f"https://example.com/{job_id}"}
 
-    jobs = [raw(1, "클라우드 엔지니어", "AWS 운영"),            # 튜닝에 쓴 공고라 빠진다
-            raw(2, "클라우드 엔지니어", "AWS 운영 경험"),       # 직무 통과 + AWS
-            raw(3, "DevOps Engineer", "쿠버네티스 운영"),        # 직무 통과
-            raw(4, "백엔드 개발자", "AWS 사용 경험"),            # 직무 밖 + AWS
-            raw(5, "프론트엔드 개발자", "React 개발"),           # 직무 밖, AWS 없음 → 안 뽑힌다
-            raw(6, "SRE", "모니터링 운영")]                      # 직무 통과
-    old = rp.RAW_DIR, rp.EVAL_DIR, rp.TUNING_FILE
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        rp.RAW_DIR, rp.EVAL_DIR, rp.TUNING_FILE = tmp, tmp / "eval", tmp / "tuning_ids.json"
-        try:
-            rp.TUNING_FILE.write_text(json.dumps({"ids": [1]}), encoding="utf-8")
-            for j in jobs:
-                (tmp / f"rp-{j['jobId']}.raw.json").write_text(json.dumps(j, ensure_ascii=False), encoding="utf-8")
-            (tmp / "eval").mkdir()
-            (tmp / "eval" / "eval-99_예전.json").write_text("{}", encoding="utf-8")  # 다시 내보내면 지워진다
-            args = SimpleNamespace(n=4, min_aws=2, role="클라우드 엔지니어", terms=list(rp.ROLE_TERMS))
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                rp.cmd_export_eval(args)
-            files = sorted(p.name for p in (tmp / "eval").glob("eval-*.json"))
-            assert len(files) == 4 and not any("99" in f for f in files), files
-            rows = list(csv.DictReader((tmp / "eval" / "eval-목록.csv").open(encoding="utf-8-sig", newline="")))
-            ids = [r["id"] for r in rows]
-            assert ids[:2] == ["rp-2", "rp-4"], ids          # AWS 언급 공고 2건이 먼저(직무 통과가 앞)
-            assert set(ids) == {"rp-2", "rp-4", "rp-6", "rp-3"}  # 튜닝에 쓴 1번, AWS 없는 직무 밖 5번은 없다
-            assert [r["직무 필터"] for r in rows[:2]] == ["통과", "밖"] and rows[1]["AWS 언급"] == "있음"
-            # 직무 필터 밖 공고는 role 을 바꿔 수요 집계에 섞이지 않게 표시한다
-            out_file = next(p for p in (tmp / "eval").glob("eval-*_rp-4_*.json"))
-            assert json.loads(out_file.read_text(encoding="utf-8"))["role"] == rp.NOT_ROLE
-            # 목표에 못 미치면 경고를 낸다
-            args.n, args.min_aws = 10, 4
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                rp.cmd_export_eval(args)
-            assert "목표" in out.getvalue() and "부족" in out.getvalue()
+    with tempfile.TemporaryDirectory() as directory:
+        raw_dir = Path(directory)
+        reviewed = raw_dir / "rocketpunch-2026-11-17" / "postings-reviewed"
+        eval_dir = raw_dir / "eval"
+        tuning_file = raw_dir / "tuning.json"
+        roles = {"ai": "AI 엔지니어", "cloud": "클라우드 엔지니어"}
 
-            # --min-aws 가 --n 보다 커도 n 건을 넘지 않고 엉뚱하게 잘리지 않는다(음수 슬라이스 방지)
-            for old_raw in tmp.glob("rp-*.raw.json"):
-                old_raw.unlink()
-            many = [raw(11, "클라우드 엔지니어", "AWS 운영"), raw(12, "인프라 엔지니어", "AWS 운영"),
-                    raw(13, "DevOps Engineer", "AWS 운영"), raw(14, "백엔드 개발자", "AWS 사용"),
-                    raw(15, "풀스택 개발자", "AWS 사용"), raw(16, "SRE", "모니터링")]
-            for j in many:
-                (tmp / f"rp-{j['jobId']}.raw.json").write_text(json.dumps(j, ensure_ascii=False), encoding="utf-8")
-            args.n, args.min_aws = 3, 5
+        def write(domain, job):
+            path = reviewed / domain / (job["id"] + ".posting.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({**job, "role": roles[domain]}), encoding="utf-8")
+
+        shared = posting(4, "소프트웨어 엔지니어", "AWS 운영 경험")
+        write("ai", shared)
+        write("cloud", shared)
+        write("cloud", posting(1, "클라우드 엔지니어", "AWS 운영 경험"))
+        write("cloud", posting(2, "인프라 엔지니어", "AWS 경험"))
+        write("ai", posting(3, "엔지니어", "모델 학습"))
+        write("cloud", posting(5, "플랫폼 개발자", "서비스 배포"))
+        write("cloud", posting(6, "플랫폼 개발자", "서비스 배포", company="회사5", date="2025-11-17"))
+        unreviewed = {"jobId": 99, "title": "인프라 엔지니어", "description": "AWS 운영", "company": {"name": "회사99"}}
+        (raw_dir / "rp-99.raw.json").write_text(json.dumps(unreviewed), encoding="utf-8")
+        tuning_file.write_text(json.dumps({"ids": [1]}), encoding="utf-8")
+        eval_dir.mkdir()
+        (eval_dir / "eval-99_예전.json").write_text("{}", encoding="utf-8")
+
+        def run(n, min_aws, role=None, terms=None):
+            args = SimpleNamespace(n=n, min_aws=min_aws, role=role, terms=terms or [])
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 rp.cmd_export_eval(args)
-            rows = list(csv.DictReader((tmp / "eval" / "eval-목록.csv").open(encoding="utf-8-sig", newline="")))
-            assert len(rows) == 3 and len(list((tmp / "eval").glob("eval-*.json"))) == 3, rows
-            assert [r["id"] for r in rows] == ["rp-13", "rp-12", "rp-11"]  # AWS 언급 + 직무 통과가 먼저, 최신 번호 순
-            assert all(r["AWS 언급"] == "있음" for r in rows) and "참고" in out.getvalue()
-            args.n, args.min_aws = 1, 99
-            with contextlib.redirect_stdout(io.StringIO()):
-                rp.cmd_export_eval(args)
-            assert len(list((tmp / "eval").glob("eval-*.json"))) == 1
-        finally:
-            rp.RAW_DIR, rp.EVAL_DIR, rp.TUNING_FILE = old
+            with (eval_dir / "eval-목록.csv").open(encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            postings = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(eval_dir.glob("eval-*.json"))]
+            return rows, postings, out.getvalue()
+
+        with patch.multiple(rp, RAW_DIR=raw_dir, EVAL_DIR=eval_dir, TUNING_FILE=tuning_file):
+            rows, postings, output = run(10, 2)
+            assert [p["id"] for p in postings] == ["rp-4", "rp-2", "rp-5", "rp-3"], postings
+            assert [p["role"] for p in postings] == [roles["ai"], roles["cloud"], roles["cloud"], roles["ai"]]
+            assert [row["AWS 언급"] for row in rows] == ["있음", "있음", "없음", "없음"]
+            assert "목표" in output and "부족" in output
+            rows, postings, output = run(1, 99, terms=["인프라"])
+            assert [p["id"] for p in postings] == ["rp-2"] and "참고" in output
+            rows, postings, _ = run(5, 1, role=roles["cloud"])
+            assert {p["id"] for p in postings} == {"rp-4", "rp-5", "rp-2"}
+            assert all(p["role"] == roles["cloud"] for p in postings)
 
 
 def collect_and_process():

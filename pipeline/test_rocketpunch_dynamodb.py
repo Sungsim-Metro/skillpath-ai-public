@@ -37,13 +37,20 @@ class RocketpunchDynamoDBTest(unittest.TestCase):
         )
         self.detail = {"jobId": 1, "title": "Cloud Engineer", "description": "AWS operations"}
 
-    def test_fetch_runs_batch_after_saving_api_response_and_includes_existing_postings(self) -> None:
+    def reviewed_posting(self) -> Path:
+        path = self.root / "rocketpunch-2026-11-17/postings-reviewed/cloud/rp-3.posting.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        posting = rocketpunch.to_posting({**self.detail, "jobId": 3, "title": "Platform Engineer"})
+        rocketpunch.write_json(path, posting)
+        return path
+
+    def test_fetch_publishes_only_previously_reviewed_postings(self) -> None:
         existing = self.root / "rp-2.posting.json"
         rocketpunch.write_json(existing, {"id": "rp-2"})
+        reviewed = self.reviewed_posting()
 
         def check_saved(paths, **options):
-            current = rocketpunch.posting_path(rocketpunch.to_posting(self.detail))
-            self.assertEqual(paths, [current, existing])
+            self.assertEqual(paths, [reviewed])
             self.assertEqual(
                 json.loads((self.root / "rp-1.raw.json").read_bytes()), self.detail
             )
@@ -60,6 +67,7 @@ class RocketpunchDynamoDBTest(unittest.TestCase):
         run.assert_called_once()
 
     def test_collect_finishes_before_running_one_batch(self) -> None:
+        self.reviewed_posting()
         self.args.keyword = "infra"
         self.args.codes = ["dev"]
         self.args.sort = "DATE_DESC"
@@ -80,6 +88,7 @@ class RocketpunchDynamoDBTest(unittest.TestCase):
         from pipeline.test_extraction_batch import MemoryS3, MemoryStore
 
         store, s3 = MemoryStore(), MemoryS3()
+        self.reviewed_posting()
         response = json.dumps({"skills": [{
             "raw": "AWS", "normalized": "AWS", "type": "required",
             "evidence": "AWS operations",
@@ -99,7 +108,8 @@ class RocketpunchDynamoDBTest(unittest.TestCase):
 
         api.assert_called_once_with("/jobs/1")
         model.assert_called_once()
-        extraction = store.extractions["rp-1"]["extraction"]
+        self.assertEqual(set(store.extractions), {"rp-3"})
+        extraction = store.extractions["rp-3"]["extraction"]
         self.assertEqual(extraction["skills"][0]["confidence"], "high")
         demand = store.snapshot["demand"]
         self.assertEqual(demand["total_postings"], 1)
@@ -146,10 +156,11 @@ class RocketpunchDynamoDBTest(unittest.TestCase):
 
     def test_unpublished_batch_sets_failure_exit_and_prints_summary_once(self) -> None:
         output = io.StringIO()
+        self.reviewed_posting()
         with patch("pipeline.extraction_batch.run_batch", return_value={"published": False}):
             with redirect_stdout(output):
                 with self.assertRaises(SystemExit) as error:
-                    rocketpunch.persist_extractions({"collected": "2026-11-15"})
+                    rocketpunch.persist_extractions({"collected": "2026-11-15", "job_category": "cloud_engineer"})
         self.assertEqual(error.exception.code, 1)
         self.assertEqual(output.getvalue().strip(), '{"published": false}')
 

@@ -13,14 +13,13 @@
 section 은 근거 문장이 들어 있는 칸을 코드(ai.sections.find_section)로 채우고, confidence 는 high, ncs_unit 은 null 로 둔다.
 
 새는 것을 막는 확인
-- 개선용 데이터(data/sample/postings.json, data/raw/ 의 로켓펀치 dev 12건, data/raw/dev12_sections/)와 같은 id 나
+- 개선용 데이터(샘플 공고, 보관된 로켓펀치 튜닝 공고 12건, dev12_sections/)와 같은 id 나
   같은 본문이 있으면 init 이 멈춘다. 고칠 때 본 공고로 채점하면 과대평가가 된다.
 - check 는 공고 본문이 init 때와 같은지(sha256) 먼저 본다. 바뀌었으면 멈춘다.
 """
 from __future__ import annotations
 
 import argparse
-import glob
 import hashlib
 import json
 import sys
@@ -30,6 +29,7 @@ from pathlib import Path
 from ai.evidence import evidence_in_text
 from ai.sections import EXCLUDED, find_section
 from pipeline.aliases import normalize_skill
+from pipeline.reviewed_postings import RAW_DIR, SNAPSHOT
 
 ROOT = Path(__file__).resolve().parents[2]
 POSTINGS_DIR = ROOT / "data" / "raw" / "eval_test" / "postings"
@@ -37,8 +37,9 @@ GOLD = ROOT / "data" / "raw" / "eval_test" / "gold_test.json"
 MANIFEST = ROOT / "ai" / "eval" / "test_manifest.json"
 DEV_SOURCES = [
     ROOT / "data" / "sample" / "postings.json",
-    *map(Path, glob.glob(str(ROOT / "data" / "raw" / "*.posting.json"))),
-    *map(Path, glob.glob(str(ROOT / "data" / "raw" / "dev12_sections" / "*.posting.json"))),
+    *RAW_DIR.glob("*.posting.json"),
+    *(RAW_DIR / SNAPSHOT / "legacy-postings").glob("*.posting.json"),
+    *(RAW_DIR / "dev12_sections").glob("*.posting.json"),
 ]
 TYPES = ("required", "preferred")
 GOLD_KEYS = ("raw", "normalized", "type", "section", "evidence", "confidence", "ncs_unit")

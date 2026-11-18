@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -287,7 +288,7 @@ class ExtractionBatchTest(unittest.TestCase):
                 ):
                     result = batch.run_batch(
                         paths, job_category="cloud_engineer", collected="2026-11-15",
-                        exclusions=exclusions,
+                        exclusions=exclusions, terms=["cloud"],
                     )
                 self.assertFalse(result["published"])
                 self.assertEqual(
@@ -347,33 +348,58 @@ class ExtractionBatchTest(unittest.TestCase):
         self.assertEqual(self.store.extractions, {})
         self.extractor.assert_not_called()
 
-    def test_current_filter_removes_prior_other_terms_from_demand(self):
+    def test_explicit_title_filter_narrows_full_reviewed_demand(self):
         second = self.write_posting(
             "rp-2", title="Platform Engineer", text="Kubernetes operations",
         )
-        first = self.run_batch([self.path, second], terms=["cloud", "platform"])
+        first = self.run_batch([self.path, second])
         self.assertTrue(first["published"])
         self.assertEqual(self.store.snapshot["demand"]["total_postings"], 2)
+        self.assertEqual(self.store.snapshot["policy"]["selection_version"], "rocketpunch-reviewed-v1")
         self.extractor.reset_mock()
-        result = self.run_batch([self.path, second])
+        result = self.run_batch([self.path, second], terms=["cloud"])
         self.assertTrue(result["published"])
         self.assertEqual(result["target"], 1)
         self.assertEqual(self.store.snapshot["demand"]["total_postings"], 1)
         self.assertEqual(
             self.store.snapshot["policy"]["selection_version"],
-            "cloud-role-title-v1",
+            batch.selection_version_for_terms(["cloud"]),
         )
         self.assertIn("rp-2", self.store.extractions)
         self.assertTrue(second.exists())
         self.extractor.assert_not_called()
         with self.assertRaises(ValueError):
-            self.run_batch([self.path, second], exclusions={"rp-2": "outside current policy"})
+            self.run_batch([self.path, second], terms=["cloud"], exclusions={"rp-2": "outside current policy"})
+
+    def test_cli_analyzes_only_the_selected_reviewed_directory(self):
+        reviewed = self.root / "rocketpunch-2026-11-17" / "postings-reviewed"
+        cases = [
+            ("cloud", "cloud_engineer", "클라우드 엔지니어", "rp-2"),
+            ("ai", "ai_engineer", "AI 엔지니어", "rp-3"),
+        ]
+        for domain, _, role, posting_id in cases:
+            (reviewed / domain).mkdir(parents=True)
+            path = self.write_posting(posting_id, role=role, title="Research Platform")
+            path.rename(reviewed / domain / path.name)
+        for _, job_category, role, posting_id in cases:
+            with (
+                self.subTest(job_category=job_category),
+                patch.object(batch, "RAW_DIR", self.root),
+                patch("pipeline.rocketpunch.load_env_file"),
+                patch("sys.argv", ["batch", "--job-category", job_category, "--collected", "2026-11-17"]),
+                patch.object(batch.DynamoDBStore, "from_env", return_value=self.store),
+                patch.object(batch.storage, "_client", return_value=self.s3),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(batch.main(), 0)
+                snapshot = self.store.snapshot
+                self.assertEqual(snapshot["demand"]["job_title"], role)
+                self.assertEqual([row["posting_id"] for row in snapshot["counted_postings"]], [posting_id])
 
     def test_selection_version_tracks_effective_filter(self):
-        defaults = [term.upper() for term in reversed(batch.DEFAULT_TERMS)] + [" cloud "]
-        self.assertEqual(batch.selection_version_for_terms(defaults), "cloud-role-title-v1")
+        self.assertEqual(batch.selection_version_for_terms(None), "rocketpunch-reviewed-v1")
         custom = batch.selection_version_for_terms(["Docker", "Kubernetes"])
-        self.assertTrue(custom.startswith("cloud-title-terms-"))
+        self.assertTrue(custom.startswith("rocketpunch-reviewed-v1-title-"))
         self.assertEqual(custom, batch.selection_version_for_terms(["kubernetes", "docker", "docker"]))
         self.assertNotEqual(custom, batch.selection_version_for_terms(["Docker"]))
         self.assertEqual(batch.selection_version_for_terms(["aws"], "custom-v2"), "custom-v2")

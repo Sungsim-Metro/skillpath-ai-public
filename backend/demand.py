@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 
-from backend.jobs import JOBS
+from backend.jobs import ANALYSIS_JOBS
 
 AGGREGATION_VERSION = "demand-v1"
 
@@ -51,8 +51,8 @@ def build_snapshot(
     run_id: str,
 ) -> dict:
     """이번에 선택한 입력의 성공 결과가 모두 있을 때 완성 스냅샷을 만든다."""
-    if job_category not in JOBS:
-        raise ValueError(f"지원하지 않는 서비스 직무 코드: {job_category}")
+    if job_category not in ANALYSIS_JOBS:
+        raise ValueError(f"지원하지 않는 분석 직무 코드: {job_category}")
     if not collected or not selection_version or not run_id:
         raise ValueError("수집일, 선정 규칙 버전, 실행 ID가 필요합니다.")
     if set(selected) & set(exclusions):
@@ -110,7 +110,7 @@ def build_snapshot(
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "demand": {
             "job_category": job_category,
-            "job_title": JOBS[job_category],
+            "job_title": ANALYSIS_JOBS[job_category],
             "total_postings": len(records),
             "sources": sorted(sources),
             "collected": collected,
