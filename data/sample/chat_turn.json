@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "action": "gap",
+  "job": "cloud_engineer",
+  "add_skills": ["Docker"],
+  "remove_skills": [],
+  "add_experiences": ["제가 Docker로 API를 배포했어요"],
+  "experience_skills": ["Docker"],
+  "remove_experiences": [],
+  "save": true,
+  "save_job": false,
+  "save_skills": [],
+  "save_experiences": ["제가 Docker로 API를 배포했어요"]
+}

@@ -55,10 +55,14 @@ def _courses() -> dict[str, dict]:
 MATCHES = ("certain", "uncertain")
 
 
-def candidate_courses(skill: str) -> list[dict]:
+def candidate_courses(skill: str, *, rules_only: bool = False) -> list[dict]:
     """search_courses 결과에서 과정 후보를 고른다. 결과가 과정 데이터와 맞지 않으면 오류를 낸다."""
+    if rules_only and is_mock() and not COURSES_CSV.exists():
+        demo = json.loads((SAMPLE_DIR / "chat_courses.json").read_text(encoding="utf-8"))
+        return demo["courses"].get(skill, [])
     out = []
-    for link in search_courses(skill):
+    links = search_courses(skill, mode="rules") if rules_only else search_courses(skill)
+    for link in links:
         cid, sid = link["course_id"], link["subskill_id"]
         course = _courses().get(cid)
         if course is None:
@@ -151,7 +155,9 @@ def _mock_fallback(llm_input: dict) -> ConverseResult:
     return ConverseResult(data, 1, {k: 0 for k in USAGE_KEYS}, ({"attempt": 1, **{k: 0 for k in USAGE_KEYS}},))
 
 
-def build_recommendation(skill: str, demand: dict) -> tuple[dict, Optional[ConverseResult]]:
+def build_recommendation(
+    skill: str, demand: dict, *, review: bool = False,
+) -> tuple[dict, Optional[ConverseResult]]:
     """③ 추천 1건과 LLM 호출 결과(시도 횟수·usage)를 돌려준다. 과정이 없으면 LLM 을 부르지 않는다.
 
     demand 는 ③ 의 demand 형식 {"postings", "of", "required_ratio"} 이다.
@@ -159,11 +165,17 @@ def build_recommendation(skill: str, demand: dict) -> tuple[dict, Optional[Conve
     (화면 연결과 시연을 가짜 모드로 할 때 어떤 기술이 와도 오류가 나지 않게).
     """
     rec = {"gap_skill": skill, "demand": dict(demand), "courses": []}
-    courses = candidate_courses(skill)
+    courses = candidate_courses(skill, rules_only=True) if review and is_mock() else candidate_courses(skill)
     if not courses:
         return rec, None
     llm_input = llm_input_of(skill, demand, courses)
-    if is_mock() and skill not in _mock_skills():
+    if review:
+        from ai.recommend_review import reviewed_reasons
+
+        for item, course in zip(llm_input["courses"], courses):
+            item["match"] = course["match"]
+        result = reviewed_reasons(llm_input)
+    elif is_mock() and skill not in _mock_skills():
         result = _mock_fallback(llm_input)
     else:
         result = converse_json(
@@ -184,6 +196,6 @@ def build_recommendation(skill: str, demand: dict) -> tuple[dict, Optional[Conve
             "reason": reasons[c["course_id"]],
             "match": c["match"],
         }
-        for c in courses
+        for c in courses if c["course_id"] in reasons
     ]
     return rec, result

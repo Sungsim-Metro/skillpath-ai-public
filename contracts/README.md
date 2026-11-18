@@ -1,6 +1,6 @@
 # 인터페이스 계약
 
-구간 사이를 오가는 데이터는 아래 세 형식만 씁니다. 예시 파일은 `data/sample/`에 있습니다.
+구간 사이를 오가는 데이터 형식과 예시를 정리합니다. 예시 파일은 `data/sample/`에 있습니다.
 형식을 바꾸려면 코드보다 먼저 팀 채팅방에 알리고, 이 문서와 예시를 같은 PR에서 고칩니다.
 
 | 형식 | 예시 파일 | 쓰임 |
@@ -11,6 +11,7 @@
 | ③ 추천 목록 | `data/sample/recommendations.json` | 가짜 모드에서 화면이 읽는 파일 |
 | ④ 수요 집계 | `data/sample/demand.json` | 가짜 모드에서 화면이 읽는 파일 |
 | ⑤ 교육 공급 | `data/sample/supply.json` | 가짜 모드에서 시장 Gap 계산이 읽는 파일 |
+| ⑥ 상담 발화 해석 | `data/sample/chat_turn.json` | 상담에서 갱신할 사실과 이번에 요청한 작업 |
 
 예시 파일의 숫자는 서로 맞춰 둡니다(공고 40건 기준).
 
@@ -112,3 +113,18 @@ AWS 운영 경험 우대
 | `note` | string | 화면에 함께 보여줄 안내(한계 등). 없으면 생략 |
 | `skills[].skill` | string | 표준 기술 이름 |
 | `skills[].courses` | number | 이 기술을 다루는 교과목 수 (코드로 계산) |
+
+## ⑥ 상담 발화 해석 (`Turn`) · ai → backend
+
+모델은 이번 발화에서 요청한 작업과 사용자 본인의 사실을 반환합니다. 백엔드가 지원 직무·저장 대상·호출 범위를 확인합니다. 아래 예시는 가상의 사용자가 직접 맡은 Docker 배포 경험을 저장하고 부족한 기술을 물은 경우입니다. [발화 해석 예시](../data/sample/chat_turn.json)
+
+| 필드 | 형식과 의미 |
+| --- | --- |
+| `status` | `ok`, `blocked`, `unsupported`, `clarify_role`, `incomplete`, `out_of_scope`. `ok`일 때만 사실과 작업을 적용합니다. |
+| `action` | `note`(입력), `summary`(정리), `gap`(공고와 비교), `courses`(과정 추천·검증). |
+| `job` | 이번에 명시하거나 확인한 지원 직무 코드 또는 `null`. |
+| `add_skills`, `remove_skills` | 세션에 추가하거나 정정할 기술 이름 목록. |
+| `add_experiences`, `remove_experiences` | 사용자가 직접 맡은 일과 정정 대상인 기존 경험 문구 목록. |
+| `experience_skills` | 보존된 프로젝트 경험에서 본인이 직접 사용했다고 밝힌 기술. 이번 응답의 비교·요약에 사용하며, 이 필드만으로 프로필의 보유 기술을 수정하지 않습니다. |
+| `save`, `save_job` | 명시적 프로필 쓰기 요청 여부와 직무가 저장 대상인지 나타내는 불리언. |
+| `save_skills`, `save_experiences` | 프로필 쓰기에서 명시적으로 지정한 항목 목록. 정정과 함께 지정하면 해당 항목을 삭제합니다. |

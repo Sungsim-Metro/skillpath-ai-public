@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 
 
 class BedrockJSONError(RuntimeError):
-    """두 번 모두 JSON 파싱이나 형식 검사(validate)를 통과하지 못했을 때.
+    """허용한 시도에서 JSON 파싱이나 형식 검사(validate)를 통과하지 못했을 때.
 
-    usage 에는 실패한 두 번의 호출에 쓴 토큰 합계가 들어 있다.
+    usage 에는 실패한 호출에 쓴 토큰 합계가 들어 있다.
     """
 
     def __init__(self, message: str, usage: Optional[dict] = None):
@@ -78,14 +78,17 @@ def converse_json(
     validate: Optional[Callable[[dict], None]] = None,
     max_tokens: int = 4096,
     temperature: float = 0.0,
+    max_attempts: int = 2,
 ) -> ConverseResult:
-    """한 번 묻고 JSON 으로 받는다. validate 는 형식이 틀리면 ValueError 를 내는 함수."""
+    """JSON 응답을 검사한다. 기본은 1회 재시도이며 1을 지정하면 재시도하지 않는다."""
+    if type(max_attempts) is not int or max_attempts not in (1, 2):
+        raise ValueError("max_attempts는 1 또는 2여야 합니다.")
     messages = [{"role": "user", "content": [{"text": user_text}]}]
     usage = {k: 0 for k in USAGE_KEYS}
     calls = []
     last_error = ""
     text = ""
-    for attempt in (1, 2):
+    for attempt in range(1, max_attempts + 1):
         text, stop_reason, call_usage = _call(
             system, messages, max_tokens, temperature, mock_file, mock_key, attempt
         )
@@ -107,7 +110,8 @@ def converse_json(
                 {"role": "user", "content": [{"text": RETRY_MESSAGE.format(error=e)}]},
             ]
     raise BedrockJSONError(
-        f"응답 검사 2회 실패 (JSON 파싱 또는 형식 검사): {last_error} / 마지막 응답 앞부분: {text[:300]!r}",
+        f"응답 검사 {max_attempts}회 실패 (JSON 파싱 또는 형식 검사): "
+        f"{last_error} / 마지막 응답 앞부분: {text[:300]!r}",
         usage,
     )
 

@@ -1,0 +1,29 @@
+{
+  "_note": "공개 데모용 가상 과정입니다. 링크는 이 예시의 학습 목표로 연결됩니다.",
+  "courses": {
+    "AWS": [{
+      "course_id": "demo-aws", "title": "가상 과정 · AWS 자원 분류",
+      "url": "https://github.com/Sungsim-Metro/skillpath-ai-public/blob/main/data/sample/chat_courses.json#L4",
+      "level": "기초", "prerequisites": "없음", "match": "uncertain",
+      "objectives": ["AWS 자원 목록을 컴퓨팅, 스토리지, 네트워크로 구분한다."]
+    }],
+    "Linux": [{
+      "course_id": "demo-linux", "title": "가상 과정 · Linux 운영 기록 읽기",
+      "url": "https://github.com/Sungsim-Metro/skillpath-ai-public/blob/main/data/sample/chat_courses.json#L10",
+      "level": "기초", "prerequisites": "없음", "match": "uncertain",
+      "objectives": ["Linux 서비스 로그에서 시작 시각과 종료 시각을 찾아 기록한다."]
+    }],
+    "Python": [{
+      "course_id": "demo-python", "title": "가상 과정 · Python 파일 처리",
+      "url": "https://github.com/Sungsim-Metro/skillpath-ai-public/blob/main/data/sample/chat_courses.json#L16",
+      "level": "기초", "prerequisites": "없음", "match": "uncertain",
+      "objectives": ["Python으로 텍스트 파일을 읽고 빈 줄을 제외한 행을 저장한다."]
+    }],
+    "Docker": [{
+      "course_id": "demo-docker", "title": "가상 과정 · Docker 컨테이너 상태",
+      "url": "https://github.com/Sungsim-Metro/skillpath-ai-public/blob/main/data/sample/chat_courses.json#L22",
+      "level": "기초", "prerequisites": "없음", "match": "uncertain",
+      "objectives": ["Docker 컨테이너 목록에서 실행 중인 항목과 종료된 항목을 구분한다."]
+    }]
+  }
+}

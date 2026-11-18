@@ -8,11 +8,25 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
 
 ALIAS_FILE = Path(__file__).resolve().parent.parent / "data" / "aliases.json"
+
+
+def skill_aliases() -> dict[str, list[str]]:
+    """공개 데모에 전체 사전이 없으면 배포된 표준 기술명과 기본 표기를 사용한다."""
+    try:
+        return json.loads(ALIAS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        if os.getenv("BEDROCK_MOCK", "1") != "1":
+            raise
+    areas = json.loads(ALIAS_FILE.with_name("skill_areas.json").read_text(encoding="utf-8"))
+    demo = {"Docker": ["도커"], "Python": ["파이썬"], "Linux": ["리눅스"],
+            "Kubernetes": ["쿠버네티스", "k8s"], "Git": ["깃"]}
+    return {name: demo.get(name, []) for name in areas["skills"]}
 
 
 def _key(s: str) -> str:
@@ -22,7 +36,7 @@ def _key(s: str) -> str:
 @lru_cache
 def _index() -> dict[str, str]:
     idx: dict[str, str] = {}
-    for canon, aliases in json.loads(ALIAS_FILE.read_text(encoding="utf-8")).items():
+    for canon, aliases in skill_aliases().items():
         for name in [canon, *aliases]:
             k = _key(name)
             if idx.setdefault(k, canon) != canon:  # 같은 표현이 두 대표명에 걸리면 사전 오류

@@ -204,20 +204,20 @@ def get_market_gap(job_category: str) -> dict:
     }
 
 
-def get_recommendations(job_category: str, gap_skills: list[str]) -> list[dict]:
+def get_recommendations(job_category: str, gap_skills: list[str], *, review: bool = False) -> list[dict]:
     """부족 기술마다 추천(③)을 돌려준다. 찾은 과정이 없으면 courses 가 빈 목록이다.
 
     가짜 모드는 data/sample 의 추천을 읽는다. 실제 모드는 수요 숫자를 코드로 만들고(get_demand),
     과정 찾기와 추천 이유는 ai.recommend 가 맡는다(Bedrock 은 reason 만 쓴다).
     실제 모드는 gap_skills 앞에서부터(화면은 수요 높은 순으로 준다) RECOMMEND_TOP_N 개만 추천하고,
     같은 직무·같은 기술·같은 수요 숫자면 Bedrock 을 다시 부르지 않고 캐시를 돌려준다.
+    채팅에서 review=True이면 과정 목표로 사유를 검증한다. 모의 모드에서도 로컬 과정 목록을 쓴다.
     """
     mock = is_mock()
     demand_all = get_demand(job_category)
     by_demand = {s["skill"]: s for s in demand_all["skills"]}
-    by_skill = {r["gap_skill"]: r for r in _load("recommendations.json")} if mock else {}
-    if not mock:
-        gap_skills = gap_skills[:RECOMMEND_TOP_N]  # 기술마다 Bedrock 을 한 번 부른다(비용·화면 길이)
+    if not mock or review:
+        gap_skills = gap_skills[:RECOMMEND_TOP_N]  # 기술별 모델 호출 비용과 화면 길이를 제한한다
     pairs = []
     for skill in gap_skills:
         d = by_demand.get(skill, {"postings": 0, "required": 0})  # 수요에 없는 기술은 0 으로 넘긴다
@@ -226,11 +226,13 @@ def get_recommendations(job_category: str, gap_skills: list[str]) -> list[dict]:
             "of": demand_all["total_postings"],
             "required_ratio": round(d["required"] / d["postings"], 2) if d["postings"] else 0,
         }))
-    if mock:
+    if mock and not review:
+        by_skill = {r["gap_skill"]: r for r in _load("recommendations.json")}
         return [by_skill[skill] if skill in by_skill else {"gap_skill": skill, "demand": demand, "courses": []}
                 for skill, demand in pairs]
 
-    key = (job_category, tuple((skill, d["postings"], d["of"], d["required_ratio"]) for skill, d in pairs))
+    key = (job_category, review, mock,
+           tuple((skill, d["postings"], d["of"], d["required_ratio"]) for skill, d in pairs))
     with _recommend_cache_lock:
         cached = _recommend_cache.get(key)
         if cached is not None:
@@ -238,14 +240,33 @@ def get_recommendations(job_category: str, gap_skills: list[str]) -> list[dict]:
     if cached is not None:
         return deepcopy(cached)
 
+    from ai.bedrock import BedrockJSONError
     from ai.recommend import build_recommendation
 
     out = []
+    failed_review = None
+    unavailable = None
     for skill, demand in pairs:
-        rec, result = build_recommendation(skill, demand)
+        if review:
+            try:
+                rec, result = build_recommendation(skill, demand, review=True)
+            except (BedrockJSONError, KeyError, TypeError, ValueError) as exc:
+                failed_review = exc
+                continue
+            except Exception as exc:
+                unavailable = exc
+                continue
+        else:
+            rec, result = build_recommendation(skill, demand)
         out.append(rec)
         if result is not None:
             logger.info("추천 %s: 시도 %d회, 토큰 %s", skill, result.attempts, result.usage.get("totalTokens", 0))
+    if unavailable is not None or failed_review is not None:
+        if any(rec["courses"] for rec in out):
+            return out
+        if unavailable is not None:
+            raise unavailable
+        raise failed_review
     with _recommend_cache_lock:  # 실패하면 여기까지 오지 않으므로 오류는 캐시하지 않는다
         _recommend_cache[key] = deepcopy(out)
         _recommend_cache.move_to_end(key)
