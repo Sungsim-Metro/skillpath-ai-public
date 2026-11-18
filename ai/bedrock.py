@@ -5,6 +5,7 @@
   그래도 실패하면 BedrockJSONError 를 그대로 낸다.
 - 인증은 boto3 기본 방식(AWS_PROFILE 등)을 따른다. 키 값은 코드와 로그에 남기지 않는다.
 - 호출마다 usage(토큰 수)를 로그로 남기고 결과에도 담는다. 실패한 호출의 토큰도 오류에 담아 잃지 않는다.
+- converse_tools: 상담 에이전트(#25)용 도구 호출 반복. JSON 검사는 부르는 쪽(ai/agent.py)이 한다.
 """
 from __future__ import annotations
 
@@ -138,6 +139,105 @@ def _model_id() -> str:
     if not model_id:
         raise RuntimeError("BEDROCK_MODEL_ID 가 비어 있습니다. .env 에 모델 ID 를 적어 주세요.")
     return model_id
+
+
+class ToolLoopResult(NamedTuple):
+    """converse_tools 결과. text 는 마지막 응답의 글(도구를 더 부르지 않은 응답). 반복 한도에 걸리면 빈 문자열."""
+    text: str
+    messages: list      # 대화 전체(도구 호출·결과 포함). 이어서 물을 때 그대로 넘긴다
+    tool_calls: tuple   # 도구 호출마다 {"name", "input", "ok"} (final_tool 은 넣지 않는다)
+    model_calls: int    # 모델을 부른 횟수
+    usage: dict         # 모델 호출 전체의 토큰 합 (가짜 모드는 0)
+    stop: str           # "end_turn"(글로 끝남), "final_tool"(마지막 답 도구로 끝남), "max_turns"(한도까지 도구만 부름)
+    final: Optional[dict] = None  # stop 이 final_tool 이면 {"id": toolUseId, "input": 도구 입력}. 이어서 물을 때 이 id 로 toolResult 를 준다
+
+
+FINAL_TOO_EARLY = "다른 도구 결과가 아직 없어 이 답은 받지 않았습니다. 도구 결과를 본 뒤 answer 만 다시 부르세요."
+FINAL_TWICE = "answer 가 한 차례에 두 번 이상 불려 어느 답도 받지 않았습니다. answer 를 한 번만 다시 부르세요."
+
+
+def converse_tools(
+    system: str,
+    messages: list,
+    tools: list[dict],
+    run_tool: Callable[[str, dict], dict],
+    *,
+    mock_file: str,
+    mock_key: str,
+    max_turns: int = 4,
+    mock_turn_start: int = 1,
+    max_tokens: int = 2048,
+    temperature: float = 0.0,
+    final_tool: Optional[str] = None,
+) -> ToolLoopResult:
+    """Converse 도구 호출 반복 (#25). 모델이 도구를 고르면 run_tool 로 실행해 결과를 돌려주고, 글로 답하면 멈춘다.
+
+    tools 는 [{"name", "description", "inputSchema": {"json": JSON Schema}}] (Converse toolSpec 형식).
+    run_tool(name, input) 은 JSON 으로 바꿀 수 있는 dict 를 돌려준다. 예외가 나면 status "error" 로 모델에 알린다.
+    final_tool: 마지막 답을 받는 도구 이름. 이 도구만 불리면 실행하지 않고 그 입력을 final 로 돌려주며 멈춘다.
+      같은 턴에 다른 도구와 같이 불리면 다른 도구를 먼저 실행하고, 마지막 답에는 FINAL_TOO_EARLY 오류를 돌려줘 다시 묻는다
+      (결과를 보기 전에 쓴 답은 그 결과를 근거로 할 수 없다). 한 차례에 두 번 이상 불리면 모두 FINAL_TWICE 오류로 돌려준다.
+    messages 는 바꾸지 않고 복사해서 쓴다. 가짜 모드는 mock_file[mock_key] 의 n번째 응답을 n번째 호출에 쓴다.
+    """
+    messages = list(messages)
+    usage = {k: 0 for k in USAGE_KEYS}
+    calls: list[dict] = []
+    for turn in range(max_turns):
+        content, stop_reason, call_usage = _call_tools(
+            system, messages, tools, max_tokens, temperature, mock_file, mock_key, mock_turn_start + turn
+        )
+        add_usage(usage, call_usage)
+        logger.info(
+            "Bedrock 도구 호출 key=%s 회차=%d 입력=%d 출력=%d 토큰 (stopReason=%s)",
+            mock_key, turn + 1, call_usage.get("inputTokens", 0), call_usage.get("outputTokens", 0), stop_reason,
+        )
+        messages.append({"role": "assistant", "content": content})
+        uses = [b["toolUse"] for b in content if "toolUse" in b]
+        text = "".join(b["text"] for b in content if "text" in b)
+        if not uses:
+            return ToolLoopResult(text, messages, tuple(calls), turn + 1, usage, "end_turn")
+        finals = [u for u in uses if u["name"] == final_tool]
+        if len(finals) == 1 and len(uses) == 1:  # 마지막 답은 한 차례에 그것 하나만 불렸을 때만 받는다
+            final = finals[0]
+            return ToolLoopResult(text, messages, tuple(calls), turn + 1, usage, "final_tool",
+                                  {"id": final["toolUseId"], "input": final.get("input") or {}})
+        early = FINAL_TWICE if len(finals) > 1 else FINAL_TOO_EARLY
+        results = []
+        for use in uses:  # Converse 규칙: 직전 응답의 toolUse 하나하나에 toolResult 를 돌려준다
+            if use["name"] == final_tool:  # 다른 도구와 같이, 또는 두 번 이상 불린 마지막 답: 받지 않고 다시 묻는다
+                results.append({"toolResult": {"toolUseId": use["toolUseId"], "content": [{"text": early}],
+                                               "status": "error"}})
+                continue
+            try:
+                out, status = [{"json": run_tool(use["name"], use.get("input") or {})}], "success"
+            except Exception as e:  # noqa: BLE001 - 도구 실패는 모델에게 알리고 대화는 이어 간다
+                logger.warning("도구 %s 실패: %s", use["name"], type(e).__name__)
+                out, status = [{"text": f"도구 실행 실패: {type(e).__name__}"}], "error"
+            calls.append({"name": use["name"], "input": use.get("input") or {}, "ok": status == "success"})
+            results.append({"toolResult": {"toolUseId": use["toolUseId"], "content": out, "status": status}})
+        messages.append({"role": "user", "content": results})
+    return ToolLoopResult("", messages, tuple(calls), max_turns, usage, "max_turns")
+
+
+def _call_tools(system, messages, tools, max_tokens, temperature, mock_file, mock_key, turn):
+    """(응답 content 블록 목록, stopReason, usage)."""
+    if is_mock():
+        return _mock_turn(mock_file, mock_key, turn), "mock", {}
+    resp = _client().converse(
+        modelId=_model_id(),
+        system=[{"text": system}],
+        messages=messages,
+        toolConfig={"tools": [{"toolSpec": t} for t in tools]},
+        inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
+    )
+    return resp["output"]["message"]["content"], resp.get("stopReason"), resp.get("usage", {})
+
+
+def _mock_turn(mock_file: str, key: str, turn: int) -> list:
+    """도구 호출 가짜 응답: mock_file[key] 의 turn 번째 content 블록 목록. 모자라면 마지막 것을 쓴다."""
+    table = json.loads((SAMPLE_DIR / mock_file).read_text(encoding="utf-8"))
+    turns = table.get(key, table["default"])
+    return json.loads(json.dumps(turns[min(turn, len(turns)) - 1]))  # 호출마다 새 객체
 
 
 def _mock_text(mock_file: str, key: str, attempt: int) -> str:

@@ -1,0 +1,82 @@
+{
+ "_note": "상담 에이전트(#25) 가짜 대본. BEDROCK_MOCK=1 일 때 ai.bedrock.converse_tools 가 n번째 모델 호출에 n번째 content 를 쓴다. _when 의 낱말이 메시지에 있으면 그 대본을 쓴다. 숫자는 data/sample/demand.json 으로 도구가 실제로 돌려주는 값이다. 최종 답은 answer 도구, text_answer·json_fail 은 글로 답하는 안전장치 확인용.",
+ "_when": {
+  "normal": ["뭐부터"],
+  "ambiguous": ["도카"],
+  "out_of_scope": ["점심"],
+  "number_fixed": ["몇 건"],
+  "number_twice": ["얼마나"],
+  "no_tool": ["무슨 일"],
+  "max_turns": ["계속 찾아"],
+  "mixed": ["같이 불러"],
+  "text_answer": ["글로만"],
+  "pair_fixed": ["짝 시험"],
+  "pair_twice": ["짝 두 번"],
+  "double_answer": ["답 두 개"],
+  "json_fail": ["형식 시험"]
+ },
+ "normal": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_gap", "input": {"user_skills": ["Python", "Docker"]}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "search_courses", "input": {"skill": "AWS"}}},
+   {"toolUse": {"toolUseId": "t3", "name": "search_courses", "input": {"skill": "Linux"}}}],
+  [{"toolUse": {"toolUseId": "t4", "name": "answer", "input": {"answer": "Python과 Docker는 이미 공고가 많이 찾는 기술이라 좋은 출발입니다. 다음 순서를 권합니다.\n- AWS: 공고 40건 중 31건이 요구하고, 그중 77%가 필수입니다. 'AWS Cloud Practitioner Essentials'(기초)로 시작해 보세요. 이 과정이 AWS 전체를 직접 다루는지는 확실하지 않습니다.\n- Linux: 공고 40건 중 26건이 요구하고, 그중 73%가 필수입니다. 찾은 과정은 Linux를 직접 다루는지 확실하지 않아, 기본 명령어부터 따로 익히는 것을 권합니다.", "scope": "in"}}}]
+ ],
+ "ambiguous": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_gap", "input": {"user_skills": ["파이선", "도카"]}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "answer", "input": {"answer": "보유 기술을 확인하지 못해 보유 기술 없음 기준으로 안내합니다.\n- AWS: 공고 40건 중 31건이 요구합니다.\n- Linux: 공고 40건 중 26건이 요구합니다.", "scope": "in"}}}]
+ ],
+ "out_of_scope": [
+  [{"toolUse": {"toolUseId": "t1", "name": "answer", "input": {"answer": "이 서비스는 클라우드 엔지니어 취업 준비를 돕습니다. 해 본 기술을 알려 주시면 무엇부터 공부할지 안내해 드릴게요.", "scope": "out"}}}]
+ ],
+ "number_fixed": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_skill_demand", "input": {"skill": "AWS"}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "answer", "input": {"answer": "AWS는 공고 40건 중 35건에 나오고, 그중 80%가 필수입니다.", "scope": "in"}}}],
+  [{"toolUse": {"toolUseId": "t3", "name": "answer", "input": {"answer": "AWS는 공고 40건 중 31건에 나오고, 그중 77%가 필수입니다.", "scope": "in"}}}]
+ ],
+ "number_twice": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_skill_demand", "input": {"skill": "Terraform"}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "answer", "input": {"answer": "Terraform은 공고 40건 중 14건에 나옵니다. 요즘 2배로 늘었습니다.", "scope": "in"}}}],
+  [{"toolUse": {"toolUseId": "t3", "name": "answer", "input": {"answer": "Terraform은 공고 40건 중 14건에 나옵니다. 작년보다 30% 늘었습니다.", "scope": "in"}}}]
+ ],
+ "no_tool": [
+  [{"toolUse": {"toolUseId": "t1", "name": "answer", "input": {"answer": "클라우드 엔지니어는 서비스가 돌아가는 서버와 네트워크를 클라우드에서 설계하고 운영합니다.", "scope": "in"}}}]
+ ],
+ "max_turns": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_skill_demand", "input": {"skill": "AWS"}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "get_skill_demand", "input": {"skill": "Linux"}}}],
+  [{"toolUse": {"toolUseId": "t3", "name": "search_courses", "input": {"skill": "AWS"}}}],
+  [{"toolUse": {"toolUseId": "t4", "name": "search_courses", "input": {"skill": "Linux"}}}]
+ ],
+ "mixed": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_skill_demand", "input": {"skill": "AWS"}}},
+   {"toolUse": {"toolUseId": "t2", "name": "answer", "input": {"answer": "AWS는 공고 40건 중 35건에 나옵니다.", "scope": "in"}}}],
+  [{"toolUse": {"toolUseId": "t3", "name": "answer", "input": {"answer": "AWS는 공고 40건 중 31건에 나옵니다.", "scope": "in"}}}]
+ ],
+ "text_answer": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_skill_demand", "input": {"skill": "AWS"}}}],
+  [{"text": "{\"answer\": \"AWS는 공고 40건 중 31건에 나오고, 그중 77%가 필수입니다.\", \"scope\": \"in\"}"}]
+ ],
+ "pair_fixed": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_gap", "input": {"user_skills": ["Python", "Docker"]}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "answer", "input": {"answer": "- AWS: 공고 40건 중 31건, 필수 77%\n- Kubernetes: 17건 중 17건, 필수 47%", "scope": "in"}}}],
+  [{"toolUse": {"toolUseId": "t3", "name": "answer", "input": {"answer": "- AWS: 공고 40건 중 31건, 필수 77%\n- Kubernetes: 공고 40건 중 17건, 필수 47%", "scope": "in"}}}]
+ ],
+ "pair_twice": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_gap", "input": {"user_skills": ["Python", "Docker"]}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "answer", "input": {"answer": "- AWS: 공고 40건 중 31건, 필수 77%\n- Kubernetes: 17건 중 17건입니다.", "scope": "in"}}}],
+  [{"toolUse": {"toolUseId": "t3", "name": "answer", "input": {"answer": "- AWS: 공고 40건 중 31건, 필수 77%\n- Kubernetes: 40건 중 17건(필수 31%)입니다.", "scope": "in"}}}]
+ ],
+ "double_answer": [
+  [{"toolUse": {"toolUseId": "t1", "name": "get_gap", "input": {"user_skills": ["Python", "Docker"]}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "answer", "input": {"answer": "첫 번째 답입니다.", "scope": "in"}}},
+   {"toolUse": {"toolUseId": "t3", "name": "answer", "input": {"answer": "두 번째 답입니다.", "scope": "in"}}}],
+  [{"toolUse": {"toolUseId": "t4", "name": "answer", "input": {"answer": "- AWS: 공고 40건 중 31건, 필수 77%", "scope": "in"}}}]
+ ],
+ "json_fail": [
+  [{"text": "그냥 글로 답합니다."}],
+  [{"text": "또 글로 답합니다."}]
+ ],
+ "default": [
+  [{"toolUse": {"toolUseId": "t1", "name": "answer", "input": {"answer": "해 본 기술을 알려 주시면 클라우드 엔지니어 공고 기준으로 무엇부터 공부할지 안내해 드릴게요.", "scope": "in"}}}]
+ ]
+}

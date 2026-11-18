@@ -38,8 +38,12 @@ _NUMBER = re.compile(r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?(?![A-Za-z0-9])")
 _LATIN = re.compile(r"[A-Za-z][A-Za-z0-9+#]*(?:[./-][A-Za-z0-9+#]+)*")
 
 
-def _numbers(text: str) -> set[float]:
+def extract_numbers(text: str) -> set[float]:
+    """글 속의 따로 선 숫자 집합(EC2·S3 처럼 글자에 붙은 숫자는 뺀다). LLM 출력의 숫자 검사에 쓴다(#15, #25)."""
     return {float(n) for n in _NUMBER.findall(text)}
+
+
+_numbers = extract_numbers  # 예전 이름. 다른 브랜치(ai/debate.py 등)가 쓰고 있어 남겨 둔다
 
 
 @lru_cache(maxsize=1)
