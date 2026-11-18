@@ -9,7 +9,8 @@ def _render_recommendations(ctx: Ctx):
     if not missing:
         st.info("부족한 기술이 없어 추천할 과정이 없습니다.")
         return
-    recs, err = load(api.get_recommendations, ctx.job, [r["skill"] for r in missing])
+    level_of = {r["skill"]: r["user_level"] for r in missing}
+    recs, err = load(api.get_recommendations, ctx.job, [r["skill"] for r in missing], levels=level_of)
     if err:
         notice("학습 추천", err, "부족한 기술마다 AWS 교육과정과 추천 이유가 여기에 나옵니다.")
         return
@@ -18,7 +19,8 @@ def _render_recommendations(ctx: Ctx):
         d = rec["demand"]
         with st.container(border=True):
             st.subheader(rec["gap_skill"])
-            st.caption(f"공고 {d['of']}건 중 {d['postings']}건이 요구 · 그중 필수 {d['required_ratio']:.0%}")
+            level = f" · 내 단계 {rec['user_level']}" if "user_level" in rec else ""
+            st.caption(f"공고 {d['of']}건 중 {d['postings']}건이 요구 · 그중 필수 {d['required_ratio']:.0%}{level}")
             if not rec["courses"] and area_of.get(rec["gap_skill"]) == COMMON_AREA:
                 st.markdown(f"여러 영역에 걸친 기술이라 한 영역의 과정으로 잇지 않았습니다. "
                             f"AWS 기초·자격증 과정 연결을 준비하고 있습니다. {PENDING}")

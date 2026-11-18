@@ -20,7 +20,7 @@ from backend import api
 
 def render_area_gap(ctx: Ctx):
     """능력 범주별 Gap: 영역마다 공고 수요(옅은 막대) 위에 내가 가진 몫(진한 막대)을 겹친다."""
-    rows, err = load(api.get_area_gap, ctx.job, ctx.owned)
+    rows, err = load(api.get_area_gap, ctx.job, ctx.levels)
     if err:
         notice("능력 범주별 Gap", err)
         return
@@ -49,7 +49,8 @@ def render_area_gap(ctx: Ctx):
     ).properties(height=44 * len(df) + 50)
     st.altair_chart(chart, width="stretch")
     st.caption(
-        "옅은 막대는 공고가 그 영역의 기술을 요구한 건수, 진한 막대는 그중 내가 가진 기술의 몫입니다. "
+        "옅은 막대는 공고가 그 영역의 기술을 요구한 건수, 진한 막대는 그중 내가 채운 몫입니다. "
+        "기술마다 필수로 요구한 공고는 기준 단계를 넘으면, 우대로 요구한 공고는 내 단계/5만큼 채운 것으로 셉니다. "
         "비어 있는 만큼이 Gap입니다. 여러 영역에 걸치는 기술(AWS 등)은 공통, 사전에 없는 기술은 미분류로 셉니다."
         + (f" 이 데이터에서 수요가 없는 영역: {', '.join(empty)}." if empty else "")
     )
@@ -122,8 +123,16 @@ def _render_gap(ctx: Ctx):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("분석한 공고", f"{demand['total_postings']}건", border=True)
     c2.metric("주요 요구 기술", f"{len(gap_rows)}개", help="공고의 20% 이상이 요구한 기술", border=True)
-    c3.metric("그중 보유", f"{len(have)}개", border=True)
+    c3.metric("그중 보유", f"{len(have)}개", help="내 단계가 기준 단계 이상인 기술", border=True)
     c4.metric("부족", f"{len(missing)}개", border=True)
+    guessed = [r for r in gap_rows if r["required_level_confidence"] == "uncertain"]
+    if guessed:
+        st.warning(
+            f"주요 요구 기술 {len(gap_rows)}개 중 {len(guessed)}개는 아직 공고로 기준 단계를 정하지 못해 "
+            f"팀이 정한 추정값(3단계)으로 보유·부족을 나눴습니다. 이 기술들의 판정은 참고용이며, "
+            "표에 '불확실'로 표시합니다.",
+            icon=":material/info:",
+        )
 
     with st.container(border=True):
         st.subheader("능력 범주별 Gap")
@@ -146,6 +155,9 @@ def _render_gap(ctx: Ctx):
                         "요구 공고": f"{r['postings']} / {r['of']}",
                         "요구 비율": r["ratio"],
                         "그중 필수": r["required_ratio"],
+                        "내 단계": r["user_level"],
+                        "기준 단계": f"{r['required_level']}" + (" (불확실)" if r["required_level_confidence"] == "uncertain" else ""),
+                        "충족도": r["satisfaction"],
                     }
                     for r in missing
                 ]),
@@ -154,10 +166,17 @@ def _render_gap(ctx: Ctx):
                 column_config={
                     "요구 비율": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
                     "그중 필수": st.column_config.NumberColumn(format="percent"),
+                    "충족도": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
                 },
             )
+            st.caption(
+                "내 단계는 사이드바 '수준 진단하기'에서 고른 세부 능력 단계로 계산합니다. 기준 단계는 공고 문장을 단계 예시와 "
+                "비교해 정한 값이고, 공고가 부족하면 3단계(팀 결정값)와 '불확실'로 둡니다. "
+                "충족도 = 필수 비중 × (기준 이상이면 1) + 우대 비중 × 내 단계/5."
+            )
         if have:
-            st.caption("이미 보유: " + ", ".join(r["skill"] for r in have))
+            st.caption("이미 보유: " + ", ".join(
+                r["skill"] + (" (불확실)" if r["required_level_confidence"] == "uncertain" else "") for r in have))
 
 
 

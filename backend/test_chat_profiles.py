@@ -14,7 +14,7 @@ from boto3.dynamodb.conditions import Attr
 from backend import chat_profiles
 
 
-EMPTY = {"job": None, "skills": [], "experiences": []}
+EMPTY = {"job": None, "skills": [], "experiences": [], "levels": {}}
 
 
 class LocalProfileTest(unittest.TestCase):
@@ -43,7 +43,7 @@ class LocalProfileTest(unittest.TestCase):
         self.assertEqual(chat_profiles.load_profile("one"), first)
         self.assertEqual(chat_profiles.load_profile("two"), EMPTY)
         expected = {
-            "job": "cloud_engineer", "skills": ["Linux", "Git"], "experiences": ["Linux 운영"],
+            "job": "cloud_engineer", "skills": ["Linux", "Git"], "experiences": ["Linux 운영"], "levels": {},
         }
         for _ in range(2):
             result = chat_profiles.update_profile(
@@ -53,6 +53,15 @@ class LocalProfileTest(unittest.TestCase):
             self.assertEqual(result, expected)
         self.assertEqual(chat_profiles.load_profile("one"), expected)
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+
+    def test_levels_merge_and_reject_unknown_values(self) -> None:
+        chat_profiles.update_profile("one", levels={"C5-2": 3, "C1-2": 1})
+        merged = chat_profiles.update_profile("one", levels={"C1-2": 4})
+        self.assertEqual(merged["levels"], {"C5-2": 3, "C1-2": 4})
+        self.assertEqual(chat_profiles.load_profile("one")["levels"], {"C5-2": 3, "C1-2": 4})
+        for bad in ({"C5-2": 6}, {"X9-9": 1}, {"C5-2": "3"}):
+            with self.assertRaises(ValueError):
+                chat_profiles.update_profile("one", levels=bad)
 
     def test_parallel_updates_to_one_nickname_do_not_lose_changes(self) -> None:
         skills = ["Git", "Docker", "Linux", "AWS", "Python", "Terraform"]
@@ -120,7 +129,7 @@ class DynamoProfileTest(unittest.TestCase):
                 chat_profiles.update_profile("one", add_skills=["Docker"])
 
     def test_conflict_reapplies_only_requested_fields_to_the_latest_profile(self) -> None:
-        concurrent = {"job": None, "skills": ["Git"], "experiences": ["API 배포"]}
+        concurrent = {"job": None, "skills": ["Git"], "experiences": ["API 배포"], "levels": {}}
         self.table.get_item.side_effect = [{}, {"Item": {"profile": concurrent}}]
         self.table.update_item.side_effect = [self.conflict(), {}]
         updated = chat_profiles.update_profile("one", add_skills=iter(["Docker"]))
@@ -131,7 +140,7 @@ class DynamoProfileTest(unittest.TestCase):
         self.assertIn(updated, second.kwargs["ExpressionAttributeValues"].values())
 
     def test_duplicate_save_and_failed_write_are_distinguishable(self) -> None:
-        current = {"job": None, "skills": ["Git"], "experiences": []}
+        current = {"job": None, "skills": ["Git"], "experiences": [], "levels": {}}
         self.table.get_item.return_value = {"Item": {"profile": current}}
         self.assertEqual(chat_profiles.update_profile("one", add_skills=["Git"]), current)
         self.table.update_item.assert_not_called()

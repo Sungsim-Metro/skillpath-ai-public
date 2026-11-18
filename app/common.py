@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 import streamlit as st
 
 UNCERTAIN = ":orange-badge[불확실]"
-DEFAULT_OWNED = ["Python", "Linux", "Git"]
 PENDING = ":orange-badge[개발 중]"
 EMPTY = "-"  # 값을 아직 못 받은 칸에 넣는 표시
 TYPE_LABEL = {"required": "필수", "preferred": "우대"}
@@ -35,7 +34,8 @@ class Ctx:
     job: str
     demand: dict | None  # backend.api.get_demand 결과. 못 받으면 None
     demand_err: str | None
-    owned: list[str]  # 사이드바에서 고른 보유 기술
+    owned: list[str]  # 내 단계가 기준 단계 이상인 기술 이름(backend.api.owned_skill_names)
+    levels: dict[str, int]  # 보유 수준 진단 {세부 능력 id: 0~5} (app/levels.py)
     skill_options: list[str]  # 고를 수 있는 기술 이름
     gap_rows: list[dict] | None  # backend.api.get_gap 결과. 못 받으면 None
     gap_err: str | None
@@ -50,7 +50,7 @@ class Pending(str):
     """아직 구현 전이라 값을 못 받은 구역의 안내 문구. 오류와 구분해 '개발 중'으로 보여준다."""
 
 
-def load(fn, *args):
+def load(fn, *args, **kwargs):
     """backend 함수를 부르고 (결과, 안내 문구)를 돌려준다.
 
     함수가 하나씩 실제 구현으로 바뀌므로, 한 함수가 아직 없거나 실패해도
@@ -58,7 +58,7 @@ def load(fn, *args):
     오류 내용에는 계정 ID 같은 값이 들어 있을 수 있어 화면에는 오류 종류만 보이고 전체는 터미널 로그에 남긴다.
     """
     try:
-        return fn(*args), None
+        return fn(*args, **kwargs), None
     except NotImplementedError as e:
         return None, Pending(str(e))
     except Exception as e:  # noqa: BLE001 - 시연 중 한 구역 오류로 화면 전체가 멈추지 않게

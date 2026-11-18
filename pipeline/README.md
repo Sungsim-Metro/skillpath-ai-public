@@ -149,3 +149,8 @@ uv run --python 3.11 --with boto3 python -m unittest ai.test_extract backend.tes
 - 과정 벡터 만들기(과정 본문을 바꾼 뒤에만): `BEDROCK_MOCK=0 python -X utf8 -m pipeline.build_course_vectors` (`--dry-run`은 호출 없이 건수만). 청크는 제목·학습 목표·설명 필드별이고 추천할 수 있는 과정 122개에서 366개다.
 - 방식 비교표: `BEDROCK_MOCK=0 python -X utf8 -m pipeline.eval_search --detail final`. 정답은 `ai/eval/search_gold.json`(34개 기술, 초안이며 검토 전)이다.
 - 키워드 기준(`KEYWORD_MIN`)과 의미 기준(`SEM_MIN`)은 그 34개 기술로 정한 값이라 기술이 늘면 다시 본다.
+
+## 기준 단계 (#90)
+
+`python -m pipeline.required_levels`는 공고 근거 문장과 보유 수준 단계 예시(`data/skill_levels.json`)를 임베딩으로 비교해 기술별 기준 단계를 `data/required_levels.json`에 씁니다. `BEDROCK_MOCK=1`은 `data/sample` 추출 결과와 가짜 벡터(점수에 의미 없음), `BEDROCK_MOCK=0`은 DynamoDB 추출 결과와 `EMBED_MODEL_ID`를 씁니다. 결과 파일에는 집계 숫자만 들어갑니다. 유사도 기준(0.3)과 최소 공고 수(3)는 팀 결정값입니다.
+

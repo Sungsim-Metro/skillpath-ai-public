@@ -12,6 +12,7 @@
 | ④ 수요 집계 | `data/sample/demand.json` | 가짜 모드에서 화면이 읽는 파일 |
 | ⑤ 교육 공급 | `data/sample/supply.json` | 가짜 모드에서 시장 Gap 계산이 읽는 파일 |
 | ⑥ 상담 발화 해석 | `data/sample/chat_turn.json` | 상담에서 갱신할 사실과 이번에 요청한 작업 |
+| ⑦ 보유 수준 | `data/skill_levels.json`, `data/required_levels.json` | 세부 능력별 단계 예시, 기술별 기준 단계 |
 
 예시 파일의 숫자는 서로 맞춰 둡니다(공고 40건 기준).
 
@@ -81,6 +82,7 @@ AWS 운영 경험 우대
 | `courses[].prerequisites` | string | 선수지식 |
 | `courses[].reason` | string | 추천 이유 |
 | `courses[].match` | string | `certain` 또는 `uncertain` |
+| `user_level` | number | (선택, 2026-11-19 추가) 이 기술의 내 단계 0~5. 화면이 단계를 넘겼을 때만 있다. 0~2단계는 기초, 3단계 이상은 중급 과정을 앞에 놓는다 |
 
 ## ④ 수요 집계 (`demand`) — backend → app  · 11/10 회의 승인 대기
 
@@ -113,6 +115,36 @@ AWS 운영 경험 우대
 | `note` | string | 화면에 함께 보여줄 안내(한계 등). 없으면 생략 |
 | `skills[].skill` | string | 표준 기술 이름 |
 | `skills[].courses` | number | 이 기술을 다루는 교과목 수 (코드로 계산) |
+
+## ⑦ 보유 수준 — app → backend · 2026-11-19 추가(#90)
+
+사용자는 세부 능력(`pipeline/courses/queries.csv`의 `C1-1` 등 31개)마다 0~5단계를 고른다. 0은 해 본 적 없음이다.
+단계마다 "이 정도면 할 수 있는 일" 예시는 `data/skill_levels.json`에 있다(AI 초안, 사람이 확인한 세부 능력만 `reviewed: true`).
+
+보유 입력(`get_gap`, `get_area_gap`, `owned_skill_names`의 두 번째 인자)은 둘 중 하나다.
+
+| 형식 | 예 | 뜻 |
+| --- | --- | --- |
+| `{세부 능력 id: 0~5}` | `{"C5-2": 3, "C1-4": 2}` | 수준 진단. 없는 id 는 0. 모르는 id 나 범위 밖 값은 오류 |
+| 기술 이름 목록(예전 형식) | `["Python", "Linux"]` | 목록의 기술은 5단계, 나머지는 0. 상담 채팅이 쓴다 |
+
+기술의 내 단계는 그 기술이 걸린 세부 능력 단계 중 가장 높은 값이다. 별칭으로 연결되지 않는 기술은 `skill_subskills` 표를 쓰고,
+`ALL`(AWS 같은 공통 기술)은 1단계 이상으로 고른 세부 능력 단계의 평균이다.
+
+Gap 행(`get_gap`)에 더한 필드:
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| `user_level` | number | 내 단계 0~5(공통 기술은 소수일 수 있음) |
+| `required_level` | number | 기준 단계 1~5. `data/required_levels.json`에 없으면 3 |
+| `required_level_confidence` | string | `certain`(공고 3건 이상으로 정함) 또는 `uncertain`(기본값) |
+| `satisfaction` | number | 충족도 0~1 = 필수 비중 × (내 단계 ≥ 기준 단계 ? 1 : 0) + 우대 비중 × 내 단계/5 |
+| `owned` | boolean | 내 단계 ≥ 기준 단계 |
+
+`get_area_gap`의 `owned`는 기술마다 요구 공고 수 × 충족도를 더한 값이라 소수일 수 있다.
+
+기준 단계(`data/required_levels.json`)는 `pipeline/required_levels.py`가 만든다. 공고 근거 문장(②의 `evidence`, 수요 집계와 같이 `confidence`가 `high`인 것)을
+단계 예시와 임베딩으로 비교해 공고별 요구 단계를 정하고, 기술별 중앙값을 코드로 계산한다. 파일에는 집계 숫자만 쓰고 공고 문장은 넣지 않는다.
 
 ## ⑥ 상담 발화 해석 (`Turn`) · ai → backend
 

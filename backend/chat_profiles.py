@@ -11,12 +11,14 @@ from typing import TypedDict
 
 from backend.api import is_mock
 from backend.dynamodb import _resource
+from backend.levels import validate_levels
 
 
 class Profile(TypedDict):
     job: str | None
     skills: list[str]
     experiences: list[str]
+    levels: dict[str, int]  # 보유 수준 진단 {세부 능력 id: 0~5} (backend/levels.py). 예전 항목은 빈 표
 
 
 def _profile(item: dict) -> Profile:
@@ -28,7 +30,14 @@ def _profile(item: dict) -> Profile:
     for values in (skills, experiences):
         if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
             raise ValueError("저장된 프로필의 목록 형식이 잘못되었습니다.")
-    return {"job": job, "skills": skills, "experiences": experiences}
+    levels = item.get("levels", {})
+    if not isinstance(levels, dict):
+        raise ValueError("저장된 프로필의 수준 형식이 잘못되었습니다.")
+    try:  # DynamoDB 는 숫자를 Decimal 로 돌려준다
+        levels = validate_levels({k: int(v) for k, v in levels.items()})
+    except (TypeError, ValueError) as exc:
+        raise ValueError("저장된 프로필의 수준 형식이 잘못되었습니다.") from exc
+    return {"job": job, "skills": skills, "experiences": experiences, "levels": levels}
 
 
 def _local_profile(nickname: str, edit: Callable[[Profile], Profile] | None) -> Profile:
@@ -149,13 +158,17 @@ def load_profile(nickname: str) -> Profile:
 def update_profile(
     nickname: str, *, job: str | None = None, add_skills: Iterable[str] = (),
     remove_skills: Iterable[str] = (), add_experiences: Iterable[str] = (),
-    remove_experiences: Iterable[str] = (),
+    remove_experiences: Iterable[str] = (), levels: dict[str, int] | None = None,
 ) -> Profile:
-    """명시된 항목을 한 번에 변경한다. 같은 항목을 추가하고 제거하면 제거를 우선한다."""
+    """명시된 항목을 한 번에 변경한다. 같은 항목을 추가하고 제거하면 제거를 우선한다.
+
+    levels 는 보유 수준 진단 결과 {세부 능력 id: 0~5} 이다. 준 세부 능력만 덮어쓰고 나머지는 그대로 둔다.
+    """
+    new_levels = validate_levels(levels) if levels else {}
     job = _text(job) if job is not None else None
     new_skills, old_skills = _values(add_skills), _values(remove_skills)
     new_experiences, old_experiences = _values(add_experiences), _values(remove_experiences)
-    if not any((job, new_skills, old_skills, new_experiences, old_experiences)):
+    if not any((job, new_skills, old_skills, new_experiences, old_experiences, new_levels)):
         return load_profile(nickname)
 
     def edit(current: Profile) -> Profile:
@@ -163,6 +176,7 @@ def update_profile(
             "job": job if job is not None else current["job"],
             "skills": _changed_list(current["skills"], new_skills, old_skills),
             "experiences": _changed_list(current["experiences"], new_experiences, old_experiences),
+            "levels": {**current["levels"], **new_levels},
         }
 
     store = _local_profile if is_mock() else _dynamo_profile
