@@ -8,7 +8,8 @@
 | get_demand           | ④ 수요 집계          | 일현 (#12)              |
 | get_gap              | Gap 목록            | 일현 (#12)              |
 | get_area_gap         | 영역별 Gap 목록      | 일현 (#12, #17)         |
-| get_market_gap       | 시장 Gap 표          | 담당 미정 (⑤ 공급 데이터) |
+| get_supply           | ⑤ 교육 공급 집계     | 학습 프로그램 목록 집계   |
+| get_market_gap       | ⑧ 직군별 시장 Gap 표 | 공고 수요와 ⑤ 공급 비교   |
 | get_recommendations  | ③ 추천 목록          | 종훈·성진 (#14, #15) 연결됨 |
 | extract_posting      | ② 추출 결과          | 성진·일현 (#9, #11)      |
 
@@ -211,53 +212,22 @@ def get_area_gap_after(job_category: str, owned_skills, recommendations: list[di
     return rows
 
 
-def _get_supply() -> dict:
-    """교육 공급 집계(⑤): 기술별로 그 기술을 다루는 교과목 수."""
-    if is_mock():
-        return _load("supply.json")
-    raise NotImplementedError("실제 교과목 공급 집계는 데이터와 담당이 정해지면 구현합니다.")
+def get_supply() -> dict:
+    """교육 공급(⑤)의 출처, 전체 프로그램 수, 기술별로 해당 기술을 다루는 프로그램 수를 반환한다."""
+    from pipeline.market_gap import dashboard_supply
+
+    return dashboard_supply(DATA_DIR.parent, allow_example=is_mock())
 
 
-def _shares(rates: dict[str, float]) -> dict[str, float]:
-    """{기술: 값} → {기술: 전체 합에서 차지하는 비중(0~1)}"""
-    total = sum(rates.values()) or 1.0
-    return {k: v / total for k, v in rates.items()}
+def get_market_gap(job_category: str = DEFAULT_JOB) -> dict:
+    """선택한 직군의 수요 비중, 학습 프로그램 공급 비중, Gap(%p)과 출처를 돌려준다.
 
-
-def get_market_gap(job_category: str) -> dict:
-    """시장 Gap: 공고는 원하는데 교육이 덜 다루는 기술. 5주차 실습 정의를 그대로 따른다.
-
-    - 수요율 = 가중치 합 / 공고 수. 가중치 표는 ai/sections.py 한 곳에만 둔다(팀 기준: 칸이 있으면 칸, 없으면 type).
-      ④에는 칸별 건수가 없어 지금은 type 기준(필수·우대 건수)으로만 계산한다.
-      ④에 가중 합이 들어오면(docs/development.md 의 미정 항목) 그 값을 쓰도록 바꾼다.
-    - 공급율 = 그 기술을 다루는 교과목 수 / 전체 교과목 수
-    - 비중 = 각 값 / 전체 합. Gap(%p) = (수요 비중 - 공급 비중) × 100
-    + 이면 시장은 원하는데 교육이 덜 다루는 기술, - 이면 교육이 상대적으로 많이 다루는 기술이다.
-    rows 는 Gap 이 큰 순서. 계산은 전부 코드로 한다.
+    수요는 공고 한 건에서 기술별 최대 구역 가중치를, 공급은 해당 기술이 등장한 프로그램 수를 센다.
+    각각 전체 기술 합으로 나눠 비중을 구한다. Gap은 반올림 전 수요 비중(%)에서 공급 비중(%)을 뺀 값이다.
     """
-    from ai.sections import SECTION_WEIGHT, TYPE_WEIGHT
+    from pipeline.market_gap import dashboard_gap
 
-    demand = get_demand(job_category)
-    supply = _get_supply()
-    total = demand["total_postings"]
-    demand_rate = {
-        s["skill"]: sum(w * s.get(kind, 0) for kind, w in TYPE_WEIGHT.items()) / total if total else 0
-        for s in demand["skills"]
-    }
-    courses = supply["total_courses"]
-    supply_rate = {s["skill"]: s["courses"] / courses if courses else 0 for s in supply["skills"]}
-    d_share, s_share = _shares(demand_rate), _shares(supply_rate)
-    rows = []
-    for skill in sorted(set(d_share) | set(s_share)):
-        d, p = d_share.get(skill, 0) * 100, s_share.get(skill, 0) * 100
-        rows.append({"skill": skill, "demand_pct": round(d, 1), "supply_pct": round(p, 1), "gap_pp": round(d - p, 1)})
-    rows.sort(key=lambda r: r["gap_pp"], reverse=True)
-    return {
-        "weights": {"section": dict(SECTION_WEIGHT), "type": dict(TYPE_WEIGHT), "applied": "type"},
-        "total_postings": total,
-        "supply": {k: supply.get(k) for k in ("source", "total_courses", "note")},
-        "rows": rows,
-    }
+    return dashboard_gap(DATA_DIR.parent, job_category, allow_example=is_mock())
 
 
 def get_recommendations(job_category: str, gap_skills: list[str], *, review: bool = False,
@@ -269,7 +239,7 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
     과정을 새로 찾거나 빼지 않고 순서만 바꾼다. 주지 않으면 전과 같다.
 
     가짜 모드는 data/sample 의 추천을 읽는다. 실제 모드는 수요 숫자를 코드로 만들고(get_demand),
-    과정 찾기와 추천 이유는 ai.recommend 가 맡는다(Bedrock 은 reason 만 쓴다).
+    ai.recommend 는 교육과정 KB 검색 결과로 후보를 고르고 Bedrock 모델로 추천 이유를 작성한다.
     실제 모드는 gap_skills 앞에서부터(화면은 수요 높은 순으로 준다) RECOMMEND_TOP_N 개만 추천하고,
     같은 직무·같은 기술·같은 수요 숫자면 Bedrock 을 다시 부르지 않고 캐시를 돌려준다.
     채팅에서 review=True이면 과정 목표로 사유를 검증한다. 모의 모드에서도 로컬 과정 목록을 쓴다.
@@ -293,7 +263,8 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
                             levels)
                 for skill, demand in pairs]
 
-    key = (job_category, review, mock,
+    kb_scope = None if mock else (os.getenv("AWS_REGION", "ap-northeast-2"), os.getenv("BEDROCK_KB_ID", ""))
+    key = (job_category, review, mock, kb_scope,
            tuple((skill, d["postings"], d["of"], d["required_ratio"]) for skill, d in pairs))
     with _recommend_cache_lock:
         cached = _recommend_cache.get(key)

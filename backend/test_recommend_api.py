@@ -75,6 +75,12 @@ class RealRecommendationsTest(unittest.TestCase):
         api.get_recommendations("cloud_engineer", GAP)
         self.assertEqual(self.build.call_count, 6)
 
+    def test_changed_knowledge_base_does_not_reuse_recommendations(self) -> None:
+        for kb in ("first", "second"):
+            with patch.dict(os.environ, {"BEDROCK_KB_ID": kb}):
+                api.get_recommendations("cloud_engineer", GAP)
+        self.assertEqual(self.build.call_count, 6)
+
     def test_cache_keeps_only_recent_entries(self) -> None:
         with patch.object(api, "RECOMMEND_CACHE_MAX", 2):
             for total in (12, 13, 14):  # 수요 숫자가 달라 서로 다른 키 3개

@@ -12,7 +12,7 @@ def _render_recommendations(ctx: Ctx):
     level_of = {r["skill"]: r["user_level"] for r in missing}
     recs, err = load(api.get_recommendations, ctx.job, [r["skill"] for r in missing], levels=level_of)
     if err:
-        notice("학습 추천", err, "부족한 기술마다 AWS 교육과정과 추천 이유가 여기에 나옵니다.")
+        notice("학습 추천", err, "부족한 기술마다 학습 프로그램과 추천 이유가 여기에 나옵니다.")
         return
     area_of = {r["skill"]: r["area"] for r in missing}
     for rec in recs:
@@ -36,7 +36,7 @@ def _render_recommendations(ctx: Ctx):
                     st.caption(f"난이도 {c['level']} · 선수지식 {c['prerequisites']}")
                     st.write(c["reason"])
                 with action:
-                    st.link_button("Skill Builder 열기", c["url"], icon=":material/open_in_new:",
+                    st.link_button("AWS Skill Builder 열기", c["url"], icon=":material/open_in_new:",
                                    type="primary", width="stretch")
 
 
@@ -44,6 +44,6 @@ def _render_recommendations(ctx: Ctx):
 
 def render(ctx: Ctx):
     if ctx.gap_err:
-        notice("학습 추천", ctx.gap_err, "부족한 기술마다 AWS 교육과정과 추천 이유가 여기에 나옵니다.")
+        notice("학습 추천", ctx.gap_err, "부족한 기술마다 학습 프로그램과 추천 이유가 여기에 나옵니다.")
     else:
         _render_recommendations(ctx)

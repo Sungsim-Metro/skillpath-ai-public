@@ -5,7 +5,7 @@
 데이터에서 온 글자는 마크다운·HTML 로 해석되지 않게 바꿔 넣고(_t), 링크는 http(s) 주소만 건다(_link).
 내려받는 파일과 화면 미리 보기(st.markdown)가 같은 글이다.
 
-절 구성: 한눈에 보기 → 다음에 할 일 → 1. 역량 진단 → 2. AWS 교육과정 추천 → 3. 수강 순서
+절 구성: 한눈에 보기 → 다음에 할 일 → 1. 역량 진단 → 2. 학습 프로그램 추천 → 3. 수강 순서
 → 4. 과정으로 채우기 어려운 기술 → 읽을 때 주의할 점
 """
 from __future__ import annotations
@@ -63,12 +63,13 @@ def _level(value, names: dict) -> str:
 
 def build_report(*, job_title: str, demand: dict, gap_rows: list[dict], area_rows: list[dict], recommendations: list[dict],
                  plan: list[dict], uncovered: list[dict], market_rows: list[dict] | None = None,
-                 level_names: dict | None = None, mock: bool = False, today: date | None = None,
+                 market_source: str | None = None, level_names: dict | None = None,
+                 mock: bool = False, today: date | None = None,
                  recommend_failed: bool = False, min_ratio: float = 0.2) -> str:
     """진단 보고서 마크다운 문자열. 인자는 모두 화면과 backend 가 이미 계산한 값이다.
 
     plan, uncovered: backend.plan.study_order / uncovered_skills 결과.
-    market_rows: backend.api.get_market_gap 의 rows. 못 받았으면 None(절을 건너뛴다).
+    market_rows: 목표 직군의 시장 Gap 행. 못 받았으면 None(절을 건너뛴다).
     recommend_failed: 추천을 불러오지 못했을 때 참. "추천할 과정이 없다"와 구분해 적는다.
     """
     today = today or _today()
@@ -85,7 +86,7 @@ def build_report(*, job_title: str, demand: dict, gap_rows: list[dict], area_row
     add(f"# {_t(job_title)} 역량 진단 보고서\n")
     add(f"만든 날 {today.isoformat()} · skillpath-ai · 채용공고 {total}건 기준\n")
     if mock:
-        add("> **가짜 데이터 모드에서 만든 보고서입니다.** 숫자와 과정은 예시입니다.\n")
+        add("> **가짜 데이터 모드에서 만든 보고서입니다.** 개인 진단과 학습 프로그램 추천은 예시입니다.\n")
 
     # 한눈에 보기
     add("## 한눈에 보기\n")
@@ -97,7 +98,7 @@ def build_report(*, job_title: str, demand: dict, gap_rows: list[dict], area_row
     if plan:
         add(f"- 추천 과정 중 확실한 과정 {len(plan)}개로 수강 순서를 정했습니다. 첫 과정은 **{_t(plan[0]['title'])}**입니다.")
     if uncovered:
-        add(f"- AWS 교육과정으로 확실히 채우기 어려운 기술: {', '.join(_t(u['skill']) for u in uncovered)} (4절)")
+        add(f"- 학습 프로그램으로 확실히 채우기 어려운 기술: {', '.join(_t(u['skill']) for u in uncovered)} (4절)")
     add("")
 
     # 다음에 할 일
@@ -144,8 +145,8 @@ def build_report(*, job_title: str, demand: dict, gap_rows: list[dict], area_row
     else:
         add(f"공고의 {_pct(min_ratio)} 이상이 요구한 기술이 없습니다.\n")
 
-    # 2. AWS 교육과정 추천
-    add("## 2. AWS 교육과정 추천\n")
+    # 2. 학습 프로그램 추천
+    add("## 2. 학습 프로그램 추천\n")
     if recommend_failed or (missing and not recommendations):
         add("추천을 불러오지 못해 이 절은 비어 있습니다. 화면의 학습 추천 탭을 다시 확인해 주세요.\n")
     elif not recommendations:
@@ -186,15 +187,18 @@ def build_report(*, job_title: str, demand: dict, gap_rows: list[dict], area_row
         add(_table(["기술", "상태"], [[_t(u["skill"]), label[u["status"]]] for u in uncovered]))
         add("\n그럴듯한 과정으로 채우지 않고 비워 두었습니다. 공식 문서, 실습, 프로젝트로 따로 준비하세요.\n")
     else:
-        add("추천한 기술은 모두 확실한 AWS 교육과정이 있습니다.\n")
+        add("추천한 기술은 모두 해당 기술을 직접 다루는 학습 프로그램이 있습니다.\n")
     missing_names = {r["skill"] for r in missing}
     market = [r for r in (market_rows or []) if r["skill"] in missing_names]
     if market:
-        add("### 시장 Gap (내 부족 기술)\n")
-        add(_table(["기술", "공고 수요 비중", "교육 공급 비중", "Gap"],
+        add(f"### {_t(job_title)} 시장 Gap (내 부족 기술)\n")
+        if market_source:
+            add(f"집계 출처 {_t(market_source)}\n")
+        add(_table(["기술", "공고 수요 비중", "학습 프로그램 공급 비중", "Gap"],
                    [[_t(r["skill"]), f"{r['demand_pct']:.1f}%", f"{r['supply_pct']:.1f}%", f"{r['gap_pp']:+.1f}%p"]
                     for r in market]))
-        add("\nGap = 수요 비중 − 공급 비중. +이면 시장은 원하는데 교육이 덜 다루는 기술이라 과정만으로 채우기 어렵습니다.\n")
+        add("\nGap = 수요 비중 − 공급 비중. 양수이면 이 직군의 채용 수요에서 해당 기술이 차지하는 비중이 "
+            "학습 프로그램에서의 공급 비중보다 큽니다.\n")
 
     add("## 읽을 때 주의할 점\n")
     add("- 무엇을 공부할지 안내하는 자료이며 실력을 검증하거나 합격을 보장하지 않습니다.")

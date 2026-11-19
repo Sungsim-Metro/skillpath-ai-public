@@ -1,4 +1,4 @@
-"""기술 → 교육과정 후보 (#14). 규칙(연결표와 과정 본문)이 먼저이고, 자리가 남으면 키워드+임베딩 검색으로 채운다.
+"""기술 → 교육과정 후보 (#14). 규칙으로 확인한 과정부터 추천하고, 실제 모드에서는 KB와 키워드 순위도 반영한다.
 
 순서
 1. 기술 → 세부 능력: pipeline/courses/queries.csv(클라우드 C*)와 queries_ai_engineer.csv(AI A*, 2026-11-19)의
@@ -18,18 +18,16 @@
   "그 과정이 이 기술을 다룬다"는 증거가 아니므로 그대로 쓰지 않는다.
   subskill_id 가 None 인 항목이 있다(AWS 같은 지정 입문 과정, 임베딩으로 채운 과정 중 세부 능력 연결이 없는 것).
   ai/recommend.py 의 candidate_courses 는 sid 가 None 이면 행 조회를 건너뛰고 match 를 uncertain 으로 둔다.
-- 방식(mode): rules(위 규칙만), keyword(본문 키워드 점수만), embedding(과정 벡터와 코사인만), hybrid(키워드+의미를 RRF 로 합침),
-  final(기본: 규칙 결과를 먼저 주고 자리가 남으면 hybrid 로 채움, 채운 것은 match=uncertain). 비교표는 pipeline/eval_search.py.
-  final 은 벡터를 쓸 수 없으면(가짜 모드, data/courses/course_vectors.json 없음, EMBED_MODEL_ID 불일치) 규칙 결과 그대로다.
-  AWS 처럼 사람이 입문 과정을 지정한 기술은 채우지 않는다. Reranking 은 하지 않는다(2026-11-16 결정).
-  채우는 단계는 보조다. 그 단계에서 Titan 호출 등이 실패하면 오류로 멈추지 않고 경고를 남긴 뒤 규칙 결과를 돌려준다(예전 동작과 같다).
-  mode 를 직접 고른 호출(keyword 외)은 실패를 그대로 낸다.
+- 방식(mode): rules(위 규칙만), keyword(본문 키워드), embedding(Bedrock KB 의미 검색), hybrid(키워드와 KB 순위를 RRF로 합침),
+  final(기본: certain 과정부터 추천하고 각 그룹 내에서는 키워드와 KB 순위를 반영). 비교표는 pipeline/eval_search.py.
+  가짜 모드의 final은 규칙만 사용한다.
+  AWS처럼 사람이 지정한 입문 과정은 KB에 있는 지정 과정만 원래 순서로 준다. Reranking은 하지 않는다(2026-11-16 결정).
+  실제 모드에서 KB 검색이 실패하면 호출자에게 오류를 전달한다.
 """
 from __future__ import annotations
 
 import csv
 import json
-import logging
 import os
 import re
 from functools import lru_cache
@@ -181,38 +179,26 @@ def _rules(skill: str, k: int) -> list[dict]:
 
 
 # ── 키워드 + 의미(임베딩) 검색 ─────────────────────────────────────────
-VECTORS = ROOT / "data" / "courses" / "course_vectors.json"
 MODES = ("rules", "keyword", "embedding", "hybrid", "final")
 KEYWORD_WEIGHTS = (("title", 3.0), ("aws_services", 2.0), ("objectives", 1.5), ("description", 1.0))
 KEYWORD_MIN = 3.0  # 제목에 나오거나(3.0) AWS 서비스와 학습 목표에 함께 나올 때(3.5)만 후보다. 학습 목표·설명에 스친 것은 주제가 아니다
 #                    (예: Azure 가 멀티 클라우드 비용 과정의 데이터 출처로, react 가 일반 영어 단어로 걸렸다). 평가 세트로 1.5~3.0 을 비교해 정했다
-SEM_MIN = 0.60  # 의미 점수(코사인)가 이 값 미만이면 후보가 아니다. 평가 세트에서 비어야 하는 기술의 최고 점수는 0.578(Git)이었다.
-#                 정답 34기술로 정한 값이라 기술이 늘면 다시 본다(과적합 위험)
+KB_MIN_SCORE = 0.78  # 34개 기술 초안에서 KB가 추가 오추천을 만들지 않은 관련도 하한. 카탈로그 변경 시 재평가한다.
 SEM_TOP = 10  # 의미 순위에 올리는 최대 개수
 RRF_K = 60  # Reciprocal Rank Fusion 상수(순위 기반이라 점수 단위가 달라도 합칠 수 있다)
 
 
 @lru_cache(maxsize=1)
-def _vectors() -> dict[str, list[list[float]]] | None:
-    """과정 id → 청크 벡터 목록. 파일이 없거나 만든 모델이 지금 EMBED_MODEL_ID 와 다르면 None."""
-    from pipeline import embed
+def _kb_client(region: str):
+    import boto3
 
-    embed.is_mock()  # .env 를 읽어 EMBED_MODEL_ID 를 환경 변수로 올린다
-    if not VECTORS.exists():
-        return None
-    data = json.loads(VECTORS.read_text(encoding="utf-8"))
-    if data["model"] != os.getenv("EMBED_MODEL_ID"):
-        return None
-    out: dict[str, list[list[float]]] = {}
-    for item in data["items"]:
-        out.setdefault(item["course_id"], []).append(item["vector"])
-    return out
+    return boto3.client("bedrock-agent-runtime", region_name=region)
 
 
 def _semantic_ready() -> bool:
     from pipeline import embed
 
-    return not embed.is_mock() and _vectors() is not None
+    return not embed.is_mock()
 
 
 def _query_text(skill: str) -> str:
@@ -237,14 +223,41 @@ def _keyword_ranking(skill: str) -> list[str]:
     return sorted(scores, key=lambda cid: (-scores[cid], *_tie_key(cid)))
 
 
-def _semantic_ranking(skill: str) -> list[str]:
-    """질의 벡터와 과정 청크 벡터의 코사인(과정별 가장 높은 청크)으로 매긴 순위. SEM_MIN 미만은 뺀다."""
-    from pipeline import embed
+def _kb_scores(skill: str, course_ids: list[str] | None = None) -> dict[str, float]:
+    """추천 가능한 KB 문서를 조회하고 과정마다 가장 높은 청크 점수를 반환한다."""
+    kb_id = os.getenv("BEDROCK_KB_ID", "").strip()
+    if not kb_id:
+        raise RuntimeError("교육과정 검색에 필요한 BEDROCK_KB_ID가 설정되지 않았습니다.")
+    filters = [
+        {"equals": {"key": "type", "value": "program"}},
+        {"equals": {"key": "recommendable", "value": True}},
+    ]
+    if course_ids:
+        filters.append({"in": {"key": "course_id", "value": course_ids}})
+    client = _kb_client(os.getenv("AWS_REGION", "ap-northeast-2"))
+    response = client.retrieve(
+        knowledgeBaseId=kb_id,
+        retrievalQuery={"text": _query_text(skill)},
+        retrievalConfiguration={"vectorSearchConfiguration": {
+            "numberOfResults": 30,  # 한 과정에서 여러 청크가 검색될 수 있다
+            "overrideSearchType": "SEMANTIC",
+            "filter": {"andAll": filters},
+        }},
+    )
+    scores: dict[str, float] = {}
+    catalog = _courses()
+    for hit in response["retrievalResults"]:
+        cid = hit.get("metadata", {}).get("course_id")
+        score = hit.get("score", 0.0)
+        if isinstance(cid, str) and cid in catalog and _usable(catalog[cid]):
+            scores[cid] = max(scores.get(cid, 0.0), score)
+    return scores
 
-    query = embed.embed(_query_text(skill))
-    scores = {cid: max(embed.cosine(query, v) for v in vs) for cid, vs in _vectors().items()
-              if _usable(_courses()[cid])}
-    kept = [cid for cid in scores if scores[cid] >= SEM_MIN]
+
+def _semantic_ranking(skill: str) -> list[str]:
+    """KB 관련도 하한을 넘는 과정만 점수 순서로 반환한다."""
+    scores = _kb_scores(skill)
+    kept = [cid for cid, score in scores.items() if score >= KB_MIN_SCORE]
     return sorted(kept, key=lambda cid: (-scores[cid], *_tie_key(cid)))[:SEM_TOP]
 
 
@@ -261,7 +274,7 @@ def _candidates(skill: str, mode: str) -> list[str]:
     if mode == "keyword":
         return _keyword_ranking(skill)
     if not _semantic_ready():
-        raise RuntimeError(f"mode={mode!r} 는 실제 모드와 과정 벡터(course_vectors.json, EMBED_MODEL_ID 일치)가 필요합니다")
+        raise RuntimeError(f"mode={mode!r}는 실제 모드(BEDROCK_MOCK=0)에서 교육과정 KB를 사용합니다.")
     if mode == "embedding":
         return _semantic_ranking(skill)
     return _fuse(_keyword_ranking(skill), _semantic_ranking(skill))
@@ -277,27 +290,34 @@ def search_courses(skill: str, k: int = 3, mode: str = "final") -> list[dict]:
     """기술 이름(대표명이나 별칭)으로 과정 후보 최대 k개. 없으면 빈 목록. mode 는 모듈 설명 참고."""
     if mode not in MODES:
         raise ValueError(f"지원하지 않는 mode: {mode!r} (가능: {', '.join(MODES)})")
-    if not skill.strip():
+    if not skill.strip() or k <= 0:
         return []
     if mode == "rules":
         return _rules(skill, k)
     subskills = subskills_of(skill)
     if mode == "final":
-        out = _rules(skill, k)
-        if len(out) >= k or (normalize_skill(skill) or skill) in _foundation() or not _semantic_ready():
-            return out  # 사람이 지정한 입문 과정(AWS)은 채우지 않는다
-        seen = {f["course_id"] for f in out}
-        try:
-            filler = _candidates(skill, "hybrid")
-        except Exception as e:  # ponytail: 어떤 실패든 규칙 결과로 돌아간다. 오류 종류를 가려야 하면 botocore 예외로 좁힌다
-            logging.getLogger(__name__).warning("채움 단계(임베딩 검색) 실패, 규칙 결과만 돌려줍니다: %s: %s", type(e).__name__, e)
+        if not _semantic_ready():
+            return _rules(skill, k)
+        curated = _foundation().get(normalize_skill(skill) or skill)
+        if curated:
+            indexed = _kb_scores(skill, curated)
+            return [{"course_id": cid, "subskill_id": None, "match": "uncertain"}
+                    for cid in curated if cid in indexed][:k]
+        hybrid = _candidates(skill, "hybrid")
+        rules = _rules(skill, len(_courses()))
+        certain = [r for r in rules if r["match"] == "certain"]
+        position = {cid: index for index, cid in enumerate(hybrid)}
+        certain.sort(key=lambda r: position.get(r["course_id"], len(position)))
+        out = certain[:k]
+        if len(out) == k:
             return out
-        for cid in filler:
-            if len(out) == k:
-                break
-            if cid not in seen:
-                seen.add(cid)
-                out.append({"course_id": cid, "subskill_id": _linked_subskill(cid, subskills), "match": "uncertain"})
+        certain_ids = {r["course_id"] for r in certain}
+        related = {r["course_id"]: r for r in rules if r["match"] == "uncertain"}
+        ranked = _fuse(list(related), [cid for cid in hybrid if cid not in certain_ids])
+        for cid in ranked[:k - len(out)]:
+            out.append(related.get(cid) or {
+                "course_id": cid, "subskill_id": _linked_subskill(cid, subskills), "match": "uncertain",
+            })
         return out
     return [{"course_id": cid, "subskill_id": _linked_subskill(cid, subskills), "match": "uncertain"}
             for cid in _candidates(skill, mode)[:k]]

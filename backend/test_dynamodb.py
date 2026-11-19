@@ -160,7 +160,7 @@ class DemandReadTest(unittest.TestCase):
         api._demand_cache.clear()
         self.addCleanup(api._demand_cache.clear)
 
-    def test_decimal_counts_work_in_gap_area_market_and_json(self) -> None:
+    def test_decimal_counts_work_in_gap_area_and_json(self) -> None:
         demand = {
             "job_category": "cloud_engineer", "job_title": "클라우드 엔지니어",
             "total_postings": Decimal(1), "sources": ["rocketpunch"], "collected": "2026-11-15",
@@ -176,18 +176,16 @@ class DemandReadTest(unittest.TestCase):
             "BEDROCK_MOCK": "0", "DYNAMODB_DEMAND_TABLE": "test-demand",
         }, clear=True):
             with patch.object(api.DynamoDBStore, "from_env", return_value=store):
-                with patch.object(api, "_get_supply", return_value={"total_courses": 1, "skills": []}):
-                    result = api.get_demand("cloud_engineer")
-                    self.assertIs(type(result["total_postings"]), int)
-                    self.assertEqual(len(api.get_gap("cloud_engineer", [])), 2)
-                    areas = {row["area_id"]: row for row in api.get_area_gap("cloud_engineer", [])}
-                    self.assertEqual(areas["C1"]["demand"], 2)
-                    api.get_market_gap("cloud_engineer")
-                    import json
+                result = api.get_demand("cloud_engineer")
+                self.assertIs(type(result["total_postings"]), int)
+                self.assertEqual(len(api.get_gap("cloud_engineer", [])), 2)
+                areas = {row["area_id"]: row for row in api.get_area_gap("cloud_engineer", [])}
+                self.assertEqual(areas["C1"]["demand"], 2)
+                import json
 
-                    json.dumps(result)
-                    result["skills"].clear()
-                    self.assertEqual(len(api.get_demand("cloud_engineer")["skills"]), 2)
+                json.dumps(result)
+                result["skills"].clear()
+                self.assertEqual(len(api.get_demand("cloud_engineer")["skills"]), 2)
         store.get_demand_snapshot.assert_called_once_with("cloud_engineer")
 
     def test_cache_expires_after_sixty_seconds(self) -> None:

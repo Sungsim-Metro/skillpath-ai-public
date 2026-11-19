@@ -1,0 +1,14 @@
+[
+  {
+    "job_category": "cloud_engineer",
+    "text": "[주요업무]\nDocker, k8s\n[자격요건]\nKubernetes, K8S\n[우대사항]\nDocker, AWS (필수 아님)"
+  },
+  {
+    "job_category": "cloud_engineer",
+    "text": "[자격요건]\nDocker\n[주요업무]\naws"
+  },
+  {
+    "job_category": "ai_engineer",
+    "text": "[자격요건]\nPython, PyTorch\n[주요업무]\nLLM, RAG"
+  }
+]

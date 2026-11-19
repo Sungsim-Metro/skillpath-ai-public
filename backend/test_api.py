@@ -23,20 +23,6 @@ def demo():
     assert api._area_of("Rust") == ("UNCLASSIFIED", "미분류")    # 사전에 없으면 미분류
     assert all("area" in r for r in api.get_gap(JOB, OWNED))
 
-    # 시장 Gap: 비중은 각각 합이 100, Gap 은 그 차이
-    market = api.get_market_gap(JOB)
-    from ai.sections import SECTION_WEIGHT, TYPE_WEIGHT
-    assert market["weights"] == {"section": SECTION_WEIGHT, "type": TYPE_WEIGHT, "applied": "type"}  # 가중치 표는 한 곳
-    rows = {r["skill"]: r for r in market["rows"]}
-    assert abs(sum(r["demand_pct"] for r in rows.values()) - 100) < 1
-    assert abs(sum(r["supply_pct"] for r in rows.values()) - 100) < 1
-    for r in rows.values():
-        assert abs(r["gap_pp"] - (r["demand_pct"] - r["supply_pct"])) <= 0.11, r
-    assert rows["AWS"]["gap_pp"] > 0        # 공고는 많이 원하는데 교과목은 적다
-    assert rows["Python"]["gap_pp"] < 0     # 수요가 많아도 교과목이 더 많이 다루면 -
-    assert rows["SQL"]["demand_pct"] == 0   # 공급에만 있는 기술도 표에 나온다
-    assert [r["gap_pp"] for r in market["rows"]] == sorted((r["gap_pp"] for r in market["rows"]), reverse=True)
-
     # 실제 모드 추천: 수요 숫자는 코드가 만들어 넘기고, 과정과 이유는 ai.recommend 가 만든다(여기서는 가짜로 바꿔 확인)
     import ai.recommend as recommend
     calls, old = [], (api.is_mock, api.get_demand, recommend.build_recommendation)

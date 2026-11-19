@@ -81,7 +81,7 @@ class ReportTest(unittest.TestCase):
         for rec in recs:
             for c in rec["courses"]:
                 self.assertIn(c["url"], md)
-        for heading in ("## 1. 역량 진단", "## 2. AWS 교육과정 추천", "## 3. 수강 순서", "## 4. 과정으로 채우기 어려운 기술"):
+        for heading in ("## 1. 역량 진단", "## 2. 학습 프로그램 추천", "## 3. 수강 순서", "## 4. 과정으로 채우기 어려운 기술"):
             self.assertIn(heading, md)
         self.assertIn("가짜 데이터 모드", md)
         self.assertEqual(file_name(date(2026, 11, 19)), "skillpath-report-20261119.md")
@@ -116,6 +116,31 @@ class ReportTest(unittest.TestCase):
         self.assertTrue([b for b in at.get("download_button") if b.key == "report_btn"])
         at.sidebar.radio(key="view").set_value("chat").run()
         self.assertTrue(at.button(key="open_report"))
+
+    def test_switching_target_role_changes_both_the_dashboard_and_report(self):
+        def market(job):
+            demand_pct = {"cloud_engineer": 60., "ai_engineer": 70.}[job]
+            row = {"job_category": job, "skill": "Python", "demand_pct": demand_pct,
+                   "supply_pct": 10., "gap_pp": demand_pct - 10.}
+            return {"rows": [row], "source": "검산 자료"}
+
+        with mock.patch("backend.api.get_market_gap", side_effect=market):
+            at = AppTest.from_file(MAIN, default_timeout=60).run()
+            self.assertFalse(at.exception)
+            table = next(frame.value for frame in at.dataframe if "Gap" in frame.value.columns)
+            self.assertEqual(table["Gap"].tolist(), [50.])
+            at.session_state["levels"] = {}
+            at.session_state["levels_example"] = False
+            at.sidebar.selectbox(key="job").set_value("ai_engineer").run()
+            table = next(frame.value for frame in at.dataframe if "Gap" in frame.value.columns)
+            self.assertEqual(table["직군"].tolist(), ["AI 엔지니어"])
+            self.assertEqual(table["Gap"].tolist(), [60.])
+            at.button(key="open_report").click().run()
+        self.assertFalse(at.exception)
+        md = next(item.value for item in at.markdown if "시장 Gap (내 부족 기술)" in item.value)
+        self.assertIn("AI 엔지니어", md)
+        self.assertIn("| Python | 70.0% | 10.0% | +60.0%p |", md)
+        self.assertNotIn("| Python | 60.0% | 10.0% | +50.0%p |", md)
 
 
 if __name__ == "__main__":

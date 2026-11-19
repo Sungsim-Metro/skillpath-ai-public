@@ -70,7 +70,7 @@ with st.sidebar:
     skill_options = [s["skill"] for s in demand["skills"]] if demand else []
     st.divider()
     if api.is_mock():
-        st.caption("가짜 데이터 모드입니다 (BEDROCK_MOCK=1). 숫자와 과정은 예시입니다.")
+        st.caption("가짜 데이터 모드입니다 (BEDROCK_MOCK=1). 개인 역량 진단과 추천 과정은 예시입니다.")
     else:
         st.caption("실제 모드입니다 (BEDROCK_MOCK=0).")
 
@@ -91,11 +91,11 @@ if demand:
     origin = [f"수집일 {demand['collected']}"] if demand.get("collected") else []
     origin += [f"출처 {', '.join(demand['sources'])}"] if demand.get("sources") else []
     st.caption(
-        f"채용공고 {demand['total_postings']}건을 분석해 부족한 역량과 AWS 교육과정을 근거와 함께 보여줍니다."
+        f"채용공고 {demand['total_postings']}건을 분석해 부족한 역량과 학습 프로그램을 근거와 함께 보여줍니다."
         + (f" {', '.join(origin)}." if origin else "")
     )
 else:
-    st.caption("채용공고를 분석해 부족한 역량과 AWS 교육과정을 근거와 함께 보여줍니다.")
+    st.caption("채용공고를 분석해 부족한 역량과 학습 프로그램을 근거와 함께 보여줍니다.")
 
 # 운영 현황 탭은 주소에 ?admin=<ADMIN_KEY 값> 을 붙였을 때만 맨 뒤에 더한다. ADMIN_KEY 가 비어 있으면 열리지 않는다.
 # 로그인이 아니라 가려 두는 것이다(토큰 수와 모델 ID 만 있고 내용은 없다)

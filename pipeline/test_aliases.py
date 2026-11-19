@@ -1,10 +1,33 @@
 """별칭 사전 확인. 실행: python -m pipeline.test_aliases"""
 import json
+import unittest
 from pathlib import Path
 
-from pipeline.aliases import _index, normalize_skill, normalize_skills
+from pipeline.aliases import _index, find_skills, normalize_skill, normalize_skills
 
 GOLD = Path(__file__).resolve().parent.parent / "ai" / "eval" / "gold_extraction.json"
+
+
+class FindSkillsTest(unittest.TestCase):
+    def test_aliases_in_prose_have_word_boundaries_and_allow_korean_particles(self):
+        text = "자바스크립트와 Dockerfile, NoSQL, nextXjs. 도커에서는 docker를, 자바와 K8S를 사용합니다."
+        self.assertEqual(find_skills(text), ["Docker", "Java", "Kubernetes"])
+        self.assertEqual(find_skills("자바스크립트 도구Docker AWS2"), [])
+
+    def test_longest_mention_wins_and_distinct_mentions_still_count(self):
+        text = "Elastic Kubernetes Service와 SQL Server, AWS Lambda 사용"
+        self.assertEqual(find_skills(text), ["EKS", "Lambda", "MSSQL"])
+        self.assertEqual(
+            find_skills(text + ". 일반 SQL과 Kubernetes도 사용"), ["EKS", "Kubernetes", "Lambda", "MSSQL", "SQL"]
+        )
+
+    def test_case_and_punctuation_follow_the_dictionary(self):
+        self.assertEqual(find_skills("amazon-web-services, nextjs, CI_CD, 카프카"), ["AWS", "CI/CD", "Kafka", "Next.js"])
+
+    def test_go_in_course_instructions_is_not_a_language_requirement(self):
+        self.assertEqual(find_skills("learn how to go about it. Go directly to the assessment. Go to the next lab."), [])
+        self.assertEqual(find_skills("Go로 API를 개발합니다."), ["Go"])
+        self.assertEqual(find_skills("golang"), ["Go"])
 
 
 def demo():
@@ -53,4 +76,4 @@ def demo():
 
 if __name__ == "__main__":
     demo()
-    print("통과")
+    unittest.main()

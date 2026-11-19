@@ -10,11 +10,12 @@
 | ③ 추천 | `data/sample/recommendation.json` | 형식 예시 (1건) |
 | ③ 추천 목록 | `data/sample/recommendations.json` | 가짜 모드에서 화면이 읽는 파일 |
 | ④ 수요 집계 | `data/sample/demand.json` | 가짜 모드에서 화면이 읽는 파일 |
-| ⑤ 교육 공급 | `data/sample/supply.json` | 가짜 모드에서 시장 Gap 계산이 읽는 파일 |
+| ⑤ 교육 공급 | `data/sample/supply.json` | 기술별 학습 프로그램 수를 기록하는 형식 예시 |
 | ⑥ 상담 발화 해석 | `data/sample/chat_turn.json` | 상담에서 갱신할 사실과 이번에 요청한 작업 |
 | ⑦ 보유 수준 | `data/skill_levels.json`, `data/required_levels.json` | 세부 능력별 단계 예시, 기술별 기준 단계 |
+| ⑧ 직군별 시장 Gap | `data/sample/market_postings.json`, `data/courses/courses.csv` | AI·클라우드 엔지니어 각각의 기술 수요와 ⑤의 공급 비중 비교 |
 
-예시 파일의 숫자는 서로 맞춰 둡니다(공고 40건 기준).
+④의 모의 파일은 공고 40건을 가정한 가상 집계입니다. ⑤의 형식 예시는 과정 48개를 가정한 가상 집계입니다. ⑧의 계산 예시는 직군이 표시된 가상 공고를 실제 학습 프로그램 목록 전체와 비교합니다.
 
 ## ① 공고 (`posting`) — pipeline → ai
 
@@ -103,18 +104,21 @@ AWS 운영 경험 우대
 
 화면은 `url`이 있으면 근거 문장 옆에 "공고 원문 열기" 링크를 붙입니다(2026-11-15 추가).
 
-## ⑤ 교육 공급 (`supply`) — pipeline → backend  · 11/15 추가, 회의 확인 대기
+## ⑤ 교육 공급 (`supply`) — pipeline → backend
 
-시장 Gap(공고는 원하는데 교육이 덜 다루는 기술)을 계산할 때 쓰는 공급 쪽 집계입니다. 예시는 `data/sample/supply.json`.
-계산식은 `backend/api.py`의 `get_market_gap` 설명에 있습니다.
+채용공고 없이 학습 프로그램 목록만으로 전체 과정 수와 기술별 과정 수를 집계합니다. 프로그램의 제목(`title`), 설명(`description`), 학습 목표(`objectives`)에 같은 기술이 여러 번 등장해도 해당 과정은 그 기술에 한 번만 셉니다. 한 과정이 여러 기술을 다루면 각 기술에 한 번씩 셉니다.
+
+`backend.api.get_supply()`의 반환 형식과 `outputs/learning_program_supply.json`의 저장 형식은 같습니다.
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `source` | string | 교과목 데이터 출처 |
-| `total_courses` | number | 전체 교과목 수 |
-| `note` | string | 화면에 함께 보여줄 안내(한계 등). 없으면 생략 |
+| `source` | string | 집계한 프로그램 목록의 출처 |
+| `total_courses` | integer | 조사한 전체 학습 프로그램 수 |
 | `skills[].skill` | string | 표준 기술 이름 |
-| `skills[].courses` | number | 이 기술을 다루는 교과목 수 (코드로 계산) |
+| `skills[].courses` | integer | 해당 기술이 검출된 프로그램 수 |
+| `note` | string | 선택 사항. 조사 범위나 자료의 한계 |
+
+예를 들어 Docker의 교육 공급량은 `skills[]`에서 `skill`이 `Docker`인 행의 `courses`로 확인합니다. `total_courses`에는 기술이 하나도 검출되지 않은 과정도 포함합니다. [프로그램 목록](../data/courses/courses.csv)
 
 ## ⑦ 보유 수준 — app → backend · 2026-11-19 추가(#90)
 
@@ -168,3 +172,18 @@ Gap 행(`get_gap`)에 더한 필드:
 | `experience_skills` | 보존된 프로젝트 경험에서 본인이 직접 사용했다고 밝힌 기술. 이번 응답의 비교·요약에 사용하며, 이 필드만으로 프로필의 보유 기술을 수정하지 않습니다. |
 | `save`, `save_job` | 명시적 프로필 쓰기 요청 여부와 직무가 저장 대상인지 나타내는 불리언. |
 | `save_skills`, `save_experiences` | 프로필 쓰기에서 명시적으로 지정한 항목 목록. 정정과 함께 지정하면 해당 항목을 삭제합니다. |
+
+## ⑧ 직군별 시장 Gap
+
+각 직군에 속한 공고의 본문에서 기술별 최대 구역 가중치를 구하고, 같은 직군의 전체 기술 가중치 합을 기준으로 수요 비중을 계산합니다. 두 직군에 속한 공고는 각 직군에서 한 번씩 집계합니다. 두 직군 모두 ⑤에서 구한 전체 학습 프로그램의 기술별 공급 비중과 비교합니다.
+
+`backend.api.get_market_gap(job_category)`은 선택한 직군의 `rows`와 자료 출처를 표시하는 `source`를 반환합니다. 배치 CSV는 두 직군을 모두 담고, 대시보드에서 내려받는 CSV는 선택한 직군의 행을 담습니다.
+
+| 필드 | 의미 |
+| --- | --- |
+| `job_category`, `skill` | 직군 코드(`ai_engineer`, `cloud_engineer`)와 대표 기술명 |
+| `demand_pct` | 해당 직군 안에서 기술이 차지하는 가중 수요 비중 (%) |
+| `supply_pct` | ⑤의 해당 기술 과정 수 ÷ 모든 기술의 과정 수 합계 × 100 |
+| `gap_pp` | 반올림 전 수요 비중과 공급 비중의 차이 (%p). 세 수치는 각각 소수 첫째 자리로 반올림합니다. |
+
+현재 과정 목록과 예시 공고로 검산하려면 `python -m pipeline.market_gap --example`을 실행합니다. `outputs/example/learning_program_job_gap_table.csv`에서 `job_category`가 `cloud_engineer`이고 기술이 `Docker`인 행의 수요 비중, 공급 비중, Gap을 확인할 수 있습니다. [입력 경로와 갱신 방법](../pipeline/README.md#직군별-시장-gap)

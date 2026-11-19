@@ -1,12 +1,10 @@
 """search_courses 확인. 실행: python -m pipeline.test_search
 
-규칙 단계는 가짜 모드로, 키워드·의미(임베딩) 단계는 순위를 직접 넣어서(실제 Titan 호출 없이) 확인한다.
-실제 벡터와 정답 세트로 본 성능은 pipeline/eval_search.py 가 보여 준다.
+규칙과 KB 검색 응답을 AWS 호출 없이 확인한다. 실제 KB와 정답 세트 평가는 pipeline/eval_search.py를 사용한다.
 """
 import json
 import os
-import tempfile
-from pathlib import Path
+from unittest.mock import Mock, patch
 
 os.environ["BEDROCK_MOCK"] = "1"  # 이 테스트는 AWS 를 부르지 않는다(.env 의 값이 달라도 가짜 모드로 고정)
 
@@ -107,66 +105,32 @@ def hybrid():
         assert len(search_courses("Network", k=2)) == 2 and all(f["course_id"] in courses for f in net)
         # 규칙 결과가 먼저이고 certain 은 그대로다. 같은 과정은 두 번 나오지 않는다
         docker = search_courses("Docker")
-        assert docker == search_courses("Docker", mode="rules")  # 이미 3개라 채우지 않는다
+        assert docker[0] == search_courses("Docker", mode="rules")[0]
+        assert all(row["match"] == "uncertain" for row in docker[1:])
         k8s = search_courses("Kubernetes", k=5)
-        assert k8s[: len(search_courses("Kubernetes", mode="rules", k=5))] == search_courses("Kubernetes", mode="rules", k=5)
+        certain = [r for r in search_courses("Kubernetes", mode="rules", k=5) if r["match"] == "certain"]
+        assert all(r["match"] == "certain" for r in k8s[:len(certain)])
         assert len({f["course_id"] for f in k8s}) == len(k8s)
-        # 채우는 단계가 실패하면(Titan 호출 오류 등) 오류로 멈추지 않고 경고를 남긴 뒤 규칙 결과를 준다. 방식을 직접 고르면 오류를 그대로 낸다
+        # KB 운영 오류는 정상적인 빈 검색 결과와 구분되어야 재시도가 가능하다
         def boom(skill):
-            raise ConnectionError("Titan down")
+            raise ConnectionError("KB unavailable")
 
         S._semantic_ranking = boom
-        import logging
-
-        class Capture(logging.Handler):
-            def __init__(self):
-                super().__init__()
-                self.records = []
-
-            def emit(self, record):
-                self.records.append(record.getMessage())
-
-        cap = Capture()
-        logging.getLogger("pipeline.search").addHandler(cap)
-        try:
-            assert search_courses("Network") == search_courses("Network", mode="rules") == []
-            assert len(cap.records) == 1 and "ConnectionError" in cap.records[0], cap.records
+        for mode in ("final", "embedding"):
             try:
-                search_courses("Network", mode="embedding")
-                raise AssertionError("방식을 직접 고르면 오류를 그대로 낸다")
+                search_courses("Network", mode=mode)
+                raise AssertionError("KB 오류가 호출자에게 전달되어야 한다")
             except ConnectionError:
                 pass
-        finally:
-            logging.getLogger("pipeline.search").removeHandler(cap)
         S._semantic_ranking = lambda skill: [b, c]
         # 사람이 지정한 입문 과정(AWS)은 채우지 않는다
-        assert search_courses("AWS") == [{"course_id": "94T2BEN85A", "subskill_id": None, "match": "uncertain"}]
+        with patch.object(S, "_kb_scores", return_value={"94T2BEN85A": 0.1}):
+            assert search_courses("AWS") == [{"course_id": "94T2BEN85A", "subskill_id": None, "match": "uncertain"}]
         # 단독 방식
         assert [f["course_id"] for f in search_courses("Network", mode="keyword")] == [a, b]
         assert [f["course_id"] for f in search_courses("Network", mode="embedding")] == [b, c]
     finally:
         S._semantic_ready, S._keyword_ranking, S._semantic_ranking = old
-
-    # 벡터 파일: 모델이 다르면 쓰지 않는다
-    old_file, old_model = S.VECTORS, os.environ.get("EMBED_MODEL_ID")
-    with tempfile.TemporaryDirectory() as tmp:
-        f = Path(tmp) / "v.json"
-        f.write_text(json.dumps({"model": "m-1", "dim": 2, "items": [{"course_id": a, "field": "title", "vector": [1, 0]}]}))
-        try:
-            S.VECTORS = f
-            os.environ["EMBED_MODEL_ID"] = "m-2"
-            S._vectors.cache_clear()
-            assert S._vectors() is None
-            os.environ["EMBED_MODEL_ID"] = "m-1"
-            S._vectors.cache_clear()
-            assert S._vectors() == {a: [[1, 0]]}
-        finally:
-            S.VECTORS = old_file
-            if old_model is None:
-                os.environ.pop("EMBED_MODEL_ID", None)
-            else:
-                os.environ["EMBED_MODEL_ID"] = old_model
-            S._vectors.cache_clear()
 
     # 저장소에 올린 벡터 파일이 현재 과정 데이터와 맞는다(과정을 바꿨는데 벡터를 다시 안 만들었을 때 알아챈다)
     data = json.loads(VECTORS_FILE.read_text(encoding="utf-8"))
@@ -176,6 +140,49 @@ def hybrid():
     assert all(_usable(courses[i["course_id"]]) for i in data["items"])
 
 
+def test_kb_retrieval():
+    a, b = "6MCV5DBF5N", "TXYJ7YH7EU"
+    unusable = next(cid for cid, course in _courses().items() if not _usable(course))
+    hits = [(a, 0.83), (b, 0.91), (a, 0.97), ("unknown", 1.0), (unusable, 1.0)]
+    client = Mock()
+    client.retrieve.return_value = {
+        "retrievalResults": [{"score": score, "metadata": {"course_id": cid}} for cid, score in hits]
+        + [{"score": 1, "metadata": {}}, {"score": 0.77, "metadata": {"course_id": "TYAAKGU914"}}]
+    }
+    with patch.dict(os.environ, {"BEDROCK_MOCK": "0", "BEDROCK_KB_ID": "EXAMPLE1234"}), \
+         patch.object(S, "_kb_client", return_value=client):
+        assert [r["course_id"] for r in search_courses("Docker", mode="embedding")] == [a, b]
+        args = client.retrieve.call_args.kwargs
+        assert args["knowledgeBaseId"] == "EXAMPLE1234" and "Docker" in args["retrievalQuery"]["text"]
+        filters = args["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"]["andAll"]
+        assert {"equals": {"key": "type", "value": "program"}} in filters
+        assert {"equals": {"key": "recommendable", "value": True}} in filters
+        client.retrieve.reset_mock()
+        assert search_courses("Docker", k=1)[0]["match"] == "certain"
+        client.retrieve.assert_called_once()
+        client.retrieve.return_value = {"retrievalResults": [{"score": 0.99, "metadata": {"course_id": "TYAAKGU914"}}]}
+        assert search_courses("Kubernetes", k=1)[0]["course_id"] == "TYAAKGU914"
+        assert search_courses("Kubernetes", k=1, mode="rules")[0]["course_id"] == a
+        client.retrieve.return_value = {"retrievalResults": [
+            {"score": 0.1, "metadata": {"course_id": "94T2BEN85A"}},
+            {"score": 1, "metadata": {"course_id": a}},
+        ]}
+        assert search_courses("AWS") == [{"course_id": "94T2BEN85A", "subskill_id": None, "match": "uncertain"}]
+        config = client.retrieve.call_args.kwargs["retrievalConfiguration"]["vectorSearchConfiguration"]
+        assert {"in": {"key": "course_id", "value": ["94T2BEN85A"]}} in config["filter"]["andAll"]
+        client.retrieve.return_value = {"retrievalResults": []}
+        assert search_courses("AWS") == []
+        assert search_courses("Network", mode="embedding") == []
+        with patch.dict(os.environ, {"BEDROCK_KB_ID": ""}):
+            try:
+                search_courses("Docker", k=1)
+                raise AssertionError("실제 모드에서는 KB 설정이 필요하다")
+            except RuntimeError as error:
+                assert "BEDROCK_KB_ID" in str(error)
+        with patch.dict(os.environ, {"BEDROCK_MOCK": "1"}):
+            client.retrieve.reset_mock()
+            assert search_courses("Docker") == search_courses("Docker", mode="rules")
+            client.retrieve.assert_not_called()
 def jobs():
     """AI 세부 능력 검색어(2026-11-19): 클라우드와 별칭이 겹치지 않고, AI 기술은 A* 로, 클라우드 진단은 C* 만 본다."""
     from pipeline.aliases import _key
@@ -194,5 +201,6 @@ def jobs():
 if __name__ == "__main__":
     demo()
     hybrid()
+    test_kb_retrieval()
     jobs()
     print("통과")

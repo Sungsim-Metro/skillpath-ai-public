@@ -32,9 +32,10 @@ def _build(job: str, levels: dict[str, int]) -> tuple[str | None, str | None]:
     market, _ = load(api.get_market_gap, job)  # 못 받으면 보고서에서 그 표만 건너뛴다
     md = build_report(job_title=JOBS[job], demand=demand, gap_rows=gap_rows, area_rows=areas,
                       recommendations=recs, plan=study_order(recs), uncovered=uncovered_skills(recs),
-                      market_rows=market["rows"] if market else None, level_names=level_guide()["level_names"],
+                      market_rows=market["rows"] if market else None, market_source=market["source"] if market else None,
+                      level_names=level_guide()["level_names"],
                       mock=api.is_mock(), recommend_failed=bool(rec_err))
-    return md, ("추천을 불러오지 못해 보고서의 추천 교육과정 절은 비어 있습니다." if rec_err else None)
+    return md, ("추천을 불러오지 못해 보고서의 학습 프로그램 추천 절은 비어 있습니다." if rec_err else None)
 
 
 @st.dialog("진단 보고서", width="large")
@@ -44,7 +45,7 @@ def report_dialog(job: str, levels: dict[str, int]) -> None:
     if md is None:
         st.warning(f"보고서를 만들지 못했습니다. {note}")
         return
-    st.write("역량 진단, AWS 교육과정 추천, 수강 순서, 과정으로 채우기 어려운 기술을 마크다운(.md) 파일 하나로 받습니다.")
+    st.write("역량 진단, 학습 프로그램 추천, 수강 순서, 과정으로 채우기 어려운 기술을 마크다운(.md) 파일 하나로 받습니다.")
     if note:
         st.caption(note)
     # on_click="ignore": 내려받아도 화면을 다시 그리지 않아 창이 닫히지 않는다

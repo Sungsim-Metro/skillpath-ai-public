@@ -21,7 +21,7 @@ ACCENT_LIGHT = "#D6E2F6"
 ACCENT_LINE = "#9DB4DA"
 MARKET_DEMAND = "#C2570C"
 MARKET_SUPPLY = "#7C8796"
-MARKET_ROWS = 16  # 시장 Gap 차트에 보여줄 기술 수. 넘으면 Gap 이 큰 쪽과 작은 쪽만 남긴다
+MARKET_ROWS = 16  # 시장 Gap 차트에 보여줄 최대 기술 수. 차트별로 수요 비중과 Gap이 큰 순서로 고른다.
 
 
 logger = logging.getLogger("skillpath.app")

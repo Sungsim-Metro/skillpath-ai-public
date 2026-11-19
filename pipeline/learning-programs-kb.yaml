@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Learning program retrieval from S3 course documents using Bedrock and S3 Vectors.
+Parameters:
+  DocumentBucket:
+    Type: String
+  VectorBucket:
+    Type: String
+  DocumentPrefix:
+    Type: String
+    Default: skillpath/learning-programs/programs/
+    AllowedPattern: '[a-zA-Z0-9/_-]+/'
+  EmbeddingModelId:
+    Type: String
+Resources:
+  ProgramIndex:
+    Type: AWS::S3Vectors::Index
+    Properties:
+      VectorBucketName: !Ref VectorBucket
+      IndexName: !Sub '${AWS::StackName}-v1'
+      Dimension: 1024
+      DataType: float32
+      DistanceMetric: cosine
+      MetadataConfiguration:
+        NonFilterableMetadataKeys:
+          - AMAZON_BEDROCK_TEXT
+          - AMAZON_BEDROCK_METADATA
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*'
+      Policies:
+        - PolicyName: LearningProgramRetrieval
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}'
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${DocumentBucket}'
+                Condition:
+                  StringLike:
+                    s3:prefix: !Sub '${DocumentPrefix}*'
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${DocumentBucket}/${DocumentPrefix}*'
+              - Effect: Allow
+                Action:
+                  - s3vectors:GetIndex
+                  - s3vectors:PutVectors
+                  - s3vectors:GetVectors
+                  - s3vectors:QueryVectors
+                  - s3vectors:DeleteVectors
+                Resource: !GetAtt ProgramIndex.IndexArn
+  ProgramKB:
+    Type: AWS::Bedrock::KnowledgeBase
+    Properties:
+      Name: !Ref AWS::StackName
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}'
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              Dimensions: 1024
+              EmbeddingDataType: FLOAT32
+      StorageConfiguration:
+        Type: S3_VECTORS
+        S3VectorsConfiguration:
+          IndexArn: !GetAtt ProgramIndex.IndexArn
+  ProgramSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      Name: learning-program-documents
+      KnowledgeBaseId: !Ref ProgramKB
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !Sub 'arn:${AWS::Partition}:s3:::${DocumentBucket}'
+          InclusionPrefixes:
+            - !Ref DocumentPrefix
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: FIXED_SIZE
+          FixedSizeChunkingConfiguration:
+            MaxTokens: 300
+            OverlapPercentage: 20
+Outputs:
+  KnowledgeBaseId:
+    Value: !Ref ProgramKB
+  DataSourceId:
+    Value: !GetAtt ProgramSource.DataSourceId

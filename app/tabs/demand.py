@@ -4,6 +4,7 @@ import streamlit as st
 
 from app.common import ACCENT, EMPTY, Ctx, Pending, empty_metrics, md_escape, notice
 
+
 def _render_demand(ctx: Ctx):
     demand, skill_options = ctx.demand, ctx.skill_options
     total = demand["total_postings"]
@@ -13,6 +14,9 @@ def _render_demand(ctx: Ctx):
     c3.metric("수집일", demand.get("collected") or EMPTY, border=True)
     if demand.get("note"):
         st.caption(demand["note"])
+    if not skill_options:
+        st.info("이 직무의 공고에서 추출한 기술이 없습니다.")
+        return
 
     df = pd.DataFrame(
         [{"기술": s["skill"], "필수": s["required"], "우대": s["preferred"]} for s in demand["skills"]]
