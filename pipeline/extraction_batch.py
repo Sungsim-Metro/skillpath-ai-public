@@ -21,6 +21,7 @@ from pipeline import storage
 from pipeline.reviewed_postings import RAW_DIR, reviewed_paths
 
 DEFAULT_SELECTION_VERSION = "rocketpunch-reviewed-v1"
+DATASET_SELECTION_SUFFIX = "+wanted-dataset-v1"  # 입력에 오픈 데이터셋 공고가 있으면 선정 버전 뒤에 붙인다
 
 
 @dataclass(frozen=True)
@@ -48,13 +49,13 @@ def validate_configuration(job_category: str) -> None:
 
 
 def parse_exclusions(values: list[str]) -> dict[str, str]:
-    """반복된 --exclude rp-ID=사유 인자를 검사한다."""
+    """반복된 --exclude 공고ID=사유 인자를 검사한다(rp-번호 또는 hf-wanted-번호)."""
     exclusions: dict[str, str] = {}
     for value in values:
         posting_id, separator, reason = value.partition("=")
         posting_id, reason = posting_id.strip(), reason.strip()
-        if not separator or not re.fullmatch(r"rp-\d+", posting_id) or not reason:
-            raise ValueError("제외 공고는 --exclude rp-ID=사유 형식으로 지정하세요.")
+        if not separator or not re.fullmatch(storage.POSTING_ID, posting_id) or not reason:
+            raise ValueError("제외 공고는 --exclude 공고ID=사유 형식으로 지정하세요.")
         if posting_id in exclusions and exclusions[posting_id] != reason:
             raise ValueError(f"제외 사유가 중복 지정되었습니다: {posting_id}")
         exclusions[posting_id] = reason
@@ -161,7 +162,7 @@ def _extraction_item(
     return {
         "job_category": job_category,
         "posting_id": posting["id"],
-        "source": "rocketpunch",
+        "source": storage.source_of(posting["id"]),
         "posting_meta": {
             name: posting.get(name) for name in ("title", "company", "url", "posted_at")
         },
@@ -187,6 +188,7 @@ def run_batch(
     if not collected.strip():
         raise ValueError("수집일 또는 수집 기간을 지정하세요.")
     terms = _normalized_terms(terms)
+    explicit_version = selection_version is not None
     selection_version = selection_version_for_terms(terms, selection_version)
     exclusions = dict(exclusions or {})
     parse_exclusions([f"{posting_id}={reason}" for posting_id, reason in exclusions.items()])
@@ -195,6 +197,10 @@ def run_batch(
     inputs, failures, target_count = _freeze_inputs(
         paths, job_category, settings, target, exclusions, terms,
     )
+    if not explicit_version and any(
+        item.posting["id"].startswith(storage.DATASET_ID_PREFIX) for item in inputs
+    ):
+        selection_version += DATASET_SELECTION_SUFFIX
     summary = {
         "run_id": uuid4().hex,
         "job_category": job_category,
@@ -279,7 +285,7 @@ def main() -> int:
     args = parser.parse_args()
     load_env_file()
     summary = run_batch(
-        reviewed_paths(REVIEWED_DOMAINS[args.job_category], raw_dir=RAW_DIR),
+        reviewed_paths(REVIEWED_DOMAINS[args.job_category], raw_dir=RAW_DIR, include_dataset=True),
         job_category=args.job_category,
         collected=args.collected, force=args.force,
         exclusions=parse_exclusions(args.exclude), selection_version=args.selection_version,

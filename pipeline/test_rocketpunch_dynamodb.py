@@ -21,6 +21,7 @@ class RocketpunchDynamoDBTest(unittest.TestCase):
         self.root = Path(directory.name)
         self.addCleanup(patch.stopall)
         patch.object(rocketpunch, "RAW_DIR", self.root).start()
+        (self.root / "hf" / "postings-reviewed").mkdir(parents=True)  # 오픈 데이터셋 폴더(비어 있음)
         patch.object(rocketpunch, "maybe_upload", return_value=None).start()
         patch.dict(os.environ, {
             "BEDROCK_MOCK": "0",
@@ -127,7 +128,7 @@ class RocketpunchDynamoDBTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     rocketpunch.cmd_fetch(self.args)
                 api.assert_not_called()
-        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual([path.name for path in self.root.iterdir()], ["hf"])  # 준비 단계에서 만든 빈 데이터셋 폴더뿐
 
     def test_partial_configuration_fails_before_api_call(self) -> None:
         with patch.dict(os.environ, {"DYNAMODB_DEMAND_TABLE": ""}):

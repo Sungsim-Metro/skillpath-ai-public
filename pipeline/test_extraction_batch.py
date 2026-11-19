@@ -348,6 +348,32 @@ class ExtractionBatchTest(unittest.TestCase):
         self.assertEqual(self.store.extractions, {})
         self.extractor.assert_not_called()
 
+    def test_dataset_posting_is_counted_with_its_own_source_and_version(self):
+        dataset = self.write_posting("hf-wanted-7", text="Kubernetes operations")
+        result = self.run_batch([self.path, dataset])
+        self.assertTrue(result["published"])
+        self.assertEqual(self.store.snapshot["demand"]["total_postings"], 2)
+        self.assertEqual(self.store.snapshot["demand"]["sources"], ["rocketpunch", "wanted-dataset"])
+        self.assertEqual(
+            self.store.snapshot["policy"]["selection_version"], "rocketpunch-reviewed-v1+wanted-dataset-v1",
+        )
+        self.assertEqual(batch.parse_exclusions(["hf-wanted-7=manual review"]), {"hf-wanted-7": "manual review"})
+
+    def test_reviewed_paths_adds_dataset_only_when_asked(self):
+        from pipeline.reviewed_postings import reviewed_paths
+
+        for folder in ("rocketpunch-2026-11-17/postings-reviewed/cloud", "rocketpunch-2026-11-17/postings-reviewed/ai"):
+            (self.root / folder).mkdir(parents=True)
+        (self.root / "rocketpunch-2026-11-17/postings-reviewed/cloud/rp-1.posting.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(len(reviewed_paths("cloud", raw_dir=self.root)), 1)
+        with self.assertRaises(FileNotFoundError):  # 데이터셋 폴더가 없으면 조용히 줄이지 않는다
+            reviewed_paths("cloud", raw_dir=self.root, include_dataset=True)
+        (self.root / "hf/postings-reviewed/cloud").mkdir(parents=True)
+        (self.root / "hf/postings-reviewed/cloud/hf-wanted-7.posting.json").write_text("{}", encoding="utf-8")
+        names = [path.name for path in reviewed_paths("cloud", raw_dir=self.root, include_dataset=True)]
+        self.assertEqual(names, ["hf-wanted-7.posting.json", "rp-1.posting.json"])
+        self.assertEqual(reviewed_paths("ai", raw_dir=self.root, include_dataset=True), [])  # AI 용 데이터셋 폴더는 없어도 된다
+
     def test_explicit_title_filter_narrows_full_reviewed_demand(self):
         second = self.write_posting(
             "rp-2", title="Platform Engineer", text="Kubernetes operations",
@@ -373,6 +399,7 @@ class ExtractionBatchTest(unittest.TestCase):
 
     def test_cli_analyzes_only_the_selected_reviewed_directory(self):
         reviewed = self.root / "rocketpunch-2026-11-17" / "postings-reviewed"
+        (self.root / "hf" / "postings-reviewed").mkdir(parents=True)  # 오픈 데이터셋 폴더(비어 있음)
         cases = [
             ("cloud", "cloud_engineer", "클라우드 엔지니어", "rp-2"),
             ("ai", "ai_engineer", "AI 엔지니어", "rp-3"),

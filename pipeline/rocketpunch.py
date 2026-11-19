@@ -390,7 +390,7 @@ def persist_extractions(options: dict | None) -> None:
         return
     from pipeline.extraction_batch import run_batch
 
-    paths = reviewed_paths(REVIEWED_DOMAINS[options["job_category"]], raw_dir=RAW_DIR)
+    paths = reviewed_paths(REVIEWED_DOMAINS[options["job_category"]], raw_dir=RAW_DIR, include_dataset=True)
     summary = run_batch(paths, **options)
     print(json.dumps(summary, ensure_ascii=False))
     if not summary["published"]:

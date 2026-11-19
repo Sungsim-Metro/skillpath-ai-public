@@ -34,7 +34,7 @@ uv run --python 3.11 python -m pipeline.market_gap --example
 
 ## 분석에 쓰는 채용공고
 
-분석 입력은 `data/raw/rocketpunch-2026-11-17/postings-reviewed/` 아래 두 폴더다. `cloud/`는 클라우드 엔지니어, `ai/`는 AI 엔지니어 공고다. 분류는 모델이 공고의 근거 문장을 확인한 결과이며, 해당 시점의 수량은 [데이터 출처](../docs/data-sources.md)에 기록한다.
+분석 입력은 `data/raw/rocketpunch-2026-11-17/postings-reviewed/` 아래 두 폴더다. 수요 배치는 여기에 오픈 데이터셋의 원티드 공고 `data/raw/hf/postings-reviewed/<cloud|ai>/hf-wanted-<번호>.posting.json`을 더해 집계한다(2026-11-19). 이 파일은 `python -m pipeline.wanted_dataset <parquet 폴더>`가 데이터셋에서 후보를 거르고 모델의 직무 판정을 거쳐 만든다. 이 폴더가 없으면 배치는 수요가 조용히 줄지 않게 오류로 멈춘다. 파일은 S3 `skillpath/wanted-dataset/processed/postings/`의 객체를 바이트 그대로 받아 둔다. `cloud/`는 클라우드 엔지니어, `ai/`는 AI 엔지니어 공고다. 분류는 모델이 공고의 근거 문장을 확인한 결과이며, 해당 시점의 수량은 [데이터 출처](../docs/data-sources.md)에 기록한다.
 
 검토본은 Git에서 제외되므로 새 작업 환경에는 같은 경로에 데이터를 준비한다. 직무별 수요 배치는 해당 폴더의 공고를 전부 사용한다. 두 직무에 속한 공고는 각 직무에서 한 번씩 센다. 전체 추출 점검(`python -m ai.eval.run_raw`)에서는 같은 ID를 한 번만 분석한다. 양쪽에 있는 ID는 `ai/`의 파일을 대표로 읽는다. `python -m pipeline.rocketpunch export-eval`도 같은 모집단에서 튜닝 공고와 중복 재공고를 제외하고 표본을 뽑는다.
 
@@ -147,9 +147,9 @@ uv run --python 3.11 --with boto3 python -m pipeline.extraction_batch --job-cate
 - 두 테이블 이름이 모두 비어 있으면 수집은 기존 로컬·S3 저장까지 실행한다. 하나라도 설정하면 두 테이블과 S3 버킷,
   실제 모델 설정을 모두 검사하고 수집 후 저장 배치를 실행한다. 가짜 모드에서는 저장 배치를 시작하지 않는다.
 - 분석 목록은 배치 시작 시 직무별 검토 폴더에서 고정한다. S3에서 같은 바이트를 다시 읽어 분석하고 객체 키와 본문 해시를 기록한다.
-- 기본 선정 버전은 `rocketpunch-reviewed-v1`이다. 독립 배치에 `--terms`를 지정하면 검토본 중 제목이 일치하는 공고로 범위를 좁히고 필터 해시를 버전에 반영한다. 수집기의 `--terms`는 수집 후보만 고른다.
+- 기본 선정 버전은 `rocketpunch-reviewed-v1`이다. 입력에 원티드 공고가 있으면 뒤에 `+wanted-dataset-v1`이 붙는다. 독립 배치에 `--terms`를 지정하면 검토본 중 제목이 일치하는 공고로 범위를 좁히고 필터 해시를 버전에 반영한다. 수집기의 `--terms`는 수집 후보만 고른다.
 - 같은 본문·프롬프트·모델·추출기·설정의 성공 결과는 재사용한다. `--force`를 추가하면 같은 입력도 다시 분석한다.
-- `--exclude rp-<ID>=<사유>`를 반복 지정하면 해당 공고를 분모에서 빼고 제외 사유를 집계에 남긴다.
+- `--exclude rp-<ID>=<사유>`(원티드는 `hf-wanted-<ID>=<사유>`)를 반복 지정하면 해당 공고를 분모에서 빼고 제외 사유를 집계에 남긴다.
 - 직무별로 배치 하나를 실행한다. 기본 직무는 `cloud_engineer`이며 공고의 `role`이 대응하는 직무와 다르면 오류로 보고한다.
 - 기술별로 확신도가 `high`인 고유 공고만 센다. 빈 기술 목록이나 `uncertain`만 있는 정상 추출도 전체 공고 수에는 포함한다.
 - 일부 추출·S3·DB 저장이 실패하면 성공한 추출 결과는 보존하고 수요 집계 교체는 보류한다. 같은 명령으로 재시도하면 성공 결과를 재사용한다.

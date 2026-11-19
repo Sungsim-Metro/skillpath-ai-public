@@ -35,12 +35,23 @@ class StorageTest(unittest.TestCase):
             "rp-1.raw.json": ("raw/details", "rp-1"),
             "rp-1.posting.json": ("processed/postings", "rp-1"),
             "rp-1_회사_Cloud-Engineer.posting.json": ("processed/postings", "rp-1"),
+            "hf-wanted-162049.posting.json": ("processed/postings", "hf-wanted-162049"),
         }
         for filename, expected in cases.items():
             with self.subTest(filename=filename):
                 self.assertEqual(storage.classify_file(Path(filename)), expected)
         with self.assertRaises(ValueError):
             storage.classify_file(Path("unrelated.json"))
+
+    def test_dataset_posting_goes_to_its_own_prefix_and_source(self) -> None:
+        path = self.root / "hf-wanted-7.posting.json"
+        digest = hashlib.sha256(self.content).hexdigest()
+        self.assertEqual(
+            storage.object_key(path, self.content, "custom/rocketpunch"),
+            f"skillpath/wanted-dataset/processed/postings/hf-wanted-7/{digest}.json",
+        )
+        self.assertEqual(storage.source_of("hf-wanted-7"), "wanted-dataset")
+        self.assertEqual(storage.source_of("rp-7"), "rocketpunch")
 
     def test_readable_posting_name_keeps_the_same_identity_and_content_key(self) -> None:
         legacy = self.root / "rp-1.posting.json"

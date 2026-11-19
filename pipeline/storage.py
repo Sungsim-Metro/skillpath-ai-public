@@ -1,4 +1,7 @@
-"""로켓펀치 JSON을 종류별 S3 경로에 보관한다. 로컬 원본은 지우지 않는다."""
+"""채용공고 JSON을 종류별 S3 경로에 보관한다. 로컬 원본은 지우지 않는다.
+
+전처리 공고는 로켓펀치(rp-번호)와 오픈 데이터셋의 원티드 공고(hf-wanted-번호, 2026-11-19 분석 입력에 포함) 두 가지다.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -10,6 +13,9 @@ from functools import lru_cache
 from pathlib import Path
 
 DEFAULT_PREFIX = "skillpath/rocketpunch"
+DATASET_PREFIX = "skillpath/wanted-dataset"  # 오픈 데이터셋 공고의 S3 경로. 로켓펀치 경로 설정과 따로 둔다
+DATASET_ID_PREFIX = "hf-wanted-"
+POSTING_ID = r"(?:rp|hf-wanted)-\d+"
 
 
 @dataclass(frozen=True)
@@ -41,17 +47,22 @@ def classify_file(path: Path) -> tuple[str, str]:
         return "raw/lists", name.removesuffix(".json")
     if re.fullmatch(r"rp-\d+\.raw\.json", name):
         return "raw/details", name.removesuffix(".raw.json")
-    posting = re.fullmatch(r"(rp-\d+)(?:_.+)?\.posting\.json", name)
+    posting = re.fullmatch(rf"({POSTING_ID})(?:_.+)?\.posting\.json", name)
     if posting:
         return "processed/postings", posting.group(1)
     raise ValueError(f"지원하지 않는 공고 파일 이름: {name}")
+
+
+def source_of(posting_id: str) -> str:
+    """공고 ID로 데이터 출처 이름을 정한다(수요 집계의 sources 에 들어간다)."""
+    return "wanted-dataset" if posting_id.startswith(DATASET_ID_PREFIX) else "rocketpunch"
 
 
 def object_key(path: Path, content: bytes, prefix: str) -> str:
     """내용이 같으면 같은 키, 내용이 바뀌면 새 키를 만들어 이전 원본을 보존한다."""
     category, identifier = classify_file(path)
     digest = hashlib.sha256(content).hexdigest()
-    base = prefix.strip("/")
+    base = DATASET_PREFIX if identifier.startswith(DATASET_ID_PREFIX) else prefix.strip("/")
     parts = (base, category, identifier, f"{digest}.json")
     return "/".join(part for part in parts if part)
 
