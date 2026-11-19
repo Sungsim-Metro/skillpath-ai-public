@@ -6,5 +6,12 @@
     "C1-4": 2,
     "A1-1": 1,
     "custom:OpenTelemetry": 4
-  }
+  },
+  "saved_courses": [
+    {
+      "title": "Beyond Monitoring: Building Agentic SOC with Amazon Quick",
+      "url": "https://skillbuilder.aws/learn/19ZS89RSVP/beyond-monitoring-building-agentic-soc-with-amazon-quick/BBFPXZJ48N",
+      "level": "중급"
+    }
+  ]
 }

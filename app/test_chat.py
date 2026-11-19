@@ -576,16 +576,14 @@ class ChatScreenTest(unittest.TestCase):
         badges = [m.value for m in answer.markdown if "위]" in m.value]
         self.assertEqual([b.split("]")[0] for b in badges], [":blue-badge[1위", ":blue-badge[2위", ":blue-badge[1위"])
         self.assertEqual([b.label for b in answer.button], ["담기", "담기", "담기", "추천 과정 보기"])
-        self.assertFalse([box for box in at.sidebar.expander if "담아 둔 과정" in box.label])
-        answer.button[0].click().run()  # 과정을 담으면 사이드바에 모인다
+        self.assertNotIn("saved_courses", at.session_state)
+        answer.button[0].click().run()  # 과정을 담는다(모아 보는 화면은 app/test_saved.py 가 본다)
         self.assertFalse(at.exception)
-        kept = next(box for box in at.sidebar.expander if "담아 둔 과정" in box.label)
-        self.assertEqual(kept.label, "담아 둔 과정 1개")
-        self.assertEqual([b.proto.label for b in kept.get("link_button")], ["평점 있는 과정"])
+        self.assertEqual([c["title"] for c in at.session_state["saved_courses"].values()], ["평점 있는 과정"])
         answer = at.chat_message[-1]
         self.assertEqual([b.label for b in answer.button][:3], ["담아 둠"] * 3)  # 테스트의 세 과정은 주소가 같아 함께 바뀐다
         answer.button[0].click().run()  # 다시 누르면 뺀다
-        self.assertFalse([box for box in at.sidebar.expander if "담아 둔 과정" in box.label])
+        self.assertEqual(at.session_state["saved_courses"], {})
         answer = at.chat_message[-1]
         next(b for b in answer.button if b.label == "추천 과정 보기").click().run()
         self.assertFalse(at.exception)

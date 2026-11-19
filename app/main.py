@@ -43,6 +43,7 @@ from app.tabs import connect as tab_connect  # noqa: E402
 from app.tabs import demand as tab_demand  # noqa: E402
 from app.tabs import gap as tab_gap  # noqa: E402
 from app.tabs import recommend as tab_recommend  # noqa: E402
+from app.tabs import saved as tab_saved  # noqa: E402
 
 DEFAULT_VIEW = "chat"
 # view 값: (메뉴 이름, 그리는 함수, 미리 불러올 데이터). 순서대로 사이드바 메뉴에 놓인다.
@@ -53,6 +54,7 @@ VIEWS = {
     "demand": ("시장 수요", tab_demand.render, "demand"),
     "gap": ("부족 역량", tab_gap.render, "gap"),
     "recommend": ("학습 추천", tab_recommend.render, "gap"),
+    "saved": ("담은 교육과정", tab_saved.render, None),
     "connect": ("현직자에게 물어보기", tab_connect.render, "gap"),
     "report": ("진단 보고서", report_dialog.render, None),
 }
@@ -81,6 +83,7 @@ with st.sidebar:
         st.session_state.view = asked if asked in VIEWS else DEFAULT_VIEW
     st.markdown("**마이페이지**")  # 프로필(로그인), 목표 직무. 바로 아래에 화면 메뉴를 둔다
     session = chat_screen.profile_access()
+    course_card.sync_saved(session)  # 로그인하면 프로필에 담아 둔 교육과정을 불러온다
     # 목표 직무는 고르는 칸을 두지 않는다. 학습 상담의 첫 화면에서 고르거나 대화로 바꾼다(2026-11-20)
     if st.session_state.get("job") not in JOBS:
         st.session_state.job = DEFAULT_JOB
@@ -92,7 +95,6 @@ with st.sidebar:
     st.divider()
     levels = levels_screen.sidebar_summary(session, job)
     st.divider()
-    course_card.saved_list()  # 담아 둔 과정
     tour.sidebar_link()
     survey = os.getenv("SURVEY_URL", "").strip()
     if survey.startswith("https://"):  # 사용자 테스트 설문 주소가 있을 때만 보인다

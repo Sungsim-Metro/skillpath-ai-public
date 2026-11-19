@@ -154,6 +154,8 @@ AWS 운영 경험 우대
 
 사이드바와 상담은 인증된 세션으로 프로필을 읽고 쓴다. 반환값은 `job`, `skills`, `experiences`, `levels` 네 필드다. 비밀번호 검증 정보는 이 반환값과 모델 입력에서 제외한다.
 
+담은 교육과정은 같은 프로필 항목의 `saved_courses`에 `[{"title", "url", "level"}]`로 담은 순서대로 둔다(2026-11-20). 주소는 https만 받고 같은 주소는 한 번만 담으며 한 사람당 50개까지다. `backend.chat_profiles`의 `load_saved_courses`, `update_saved_courses`로만 읽고 쓰고, 위 네 필드의 반환값과 모델 입력에는 넣지 않는다. 비회원이 담은 과정은 저장하지 않는다.
+
 Gap 행(`get_gap`)에 더한 필드:
 
 | 필드 | 타입 | 설명 |

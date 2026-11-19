@@ -5,7 +5,7 @@ from streamlit.testing.v1 import AppTest
 
 MAIN = str(Path(__file__).with_name("main.py"))
 # 사이드바 메뉴에 놓이는 순서(app/main.py 의 VIEWS)
-MENU = {"chat": "학습 상담", "demand": "시장 수요", "gap": "부족 역량", "recommend": "학습 추천",
+MENU = {"chat": "학습 상담", "demand": "시장 수요", "gap": "부족 역량", "recommend": "학습 추천", "saved": "담은 교육과정",
         "connect": "현직자에게 물어보기", "report": "진단 보고서"}
 
 

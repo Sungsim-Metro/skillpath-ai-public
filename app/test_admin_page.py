@@ -44,7 +44,7 @@ class AdminPageTest(unittest.TestCase):
         self.assertFalse(at.exception)
         self.assertFalse(at.tabs)
         self.assertEqual(list(at.sidebar.radio(key="view").options),
-                         ["학습 상담", "시장 수요", "부족 역량", "학습 추천", "현직자에게 물어보기", "진단 보고서"])  # 메뉴에 관리자 항목이 없다
+                         ["학습 상담", "시장 수요", "부족 역량", "학습 추천", "담은 교육과정", "현직자에게 물어보기", "진단 보고서"])  # 메뉴에 관리자 항목이 없다
 
     def test_every_section_renders_without_data(self):
         at = AppTest.from_string(PAGE, default_timeout=60).run()

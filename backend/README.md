@@ -2,7 +2,7 @@ Lambda, DynamoDB, 집계·Gap 계산. (담당: 일현)
 
 ## 프로필 저장소
 
-실제 모드는 `DYNAMODB_PROFILE_TABLE`의 문자열 파티션 키 `nickname`으로 한 사람의 프로필을 찾습니다. `profile`에는 직무·기술·경험·수준을 담고, 같은 항목의 `credential`에는 임의 솔트와 PBKDF2-HMAC-SHA256 검증값을 보관합니다. 화면과 상담에는 인증된 세션으로 읽은 프로필만 전달합니다. [프로필 데이터 예시](../data/sample/profile.json)
+실제 모드는 `DYNAMODB_PROFILE_TABLE`의 문자열 파티션 키 `nickname`으로 한 사람의 프로필을 찾습니다. `profile`에는 직무·기술·경험·수준과 담은 교육과정(`saved_courses`)을 담고, 같은 항목의 `credential`에는 임의 솔트와 PBKDF2-HMAC-SHA256 검증값을 보관합니다. 화면과 상담에는 인증된 세션으로 읽은 프로필만 전달합니다. [프로필 데이터 예시](../data/sample/profile.json)
 
 AWS 환경에서는 `DYNAMODB_PROFILE_TABLE`과 `AWS_REGION`을 앱과 같은 값으로 설정한 뒤 아래 명령으로 프로필 테이블을 준비합니다. 테이블이 이미 있으면 키와 온디맨드 설정을 확인합니다. 런타임에는 이 테이블의 `GetItem`, `UpdateItem` 권한이 필요합니다. 모의 모드에서는 첫 등록 시 로컬 SQLite 파일이 생성됩니다.
 

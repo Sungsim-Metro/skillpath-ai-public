@@ -156,6 +156,18 @@ def owned_skill_names(job_category: str, owned_skills) -> list[str]:
     return [s for s in skills if mine[s] >= required_level(s, job_category)[0]]
 
 
+def get_saved_course_cards(saved: list[dict]) -> list[dict]:
+    """담은 교육과정에 과정 표의 평점을 붙여 돌려준다. '담은 교육과정' 화면이 쓴다(2026-11-20).
+
+    saved 는 backend.chat_profiles 가 보관하는 [{"title", "url", "level"}] 이다. 주소가 과정 표에 있으면
+    rating_avg, rating_count 를 더하고 없으면 받은 그대로 둔다. 순서는 바꾸지 않는다.
+    """
+    from ai.recommend import _courses, course_rating
+
+    by_url = {row["url"]: row for row in _courses().values()}
+    return [{**course, **course_rating(by_url.get(course["url"], {}))} for course in saved]
+
+
 def get_level_radar(job_category: str, owned_skills) -> list[dict]:
     """영역마다 그 영역 기술들의 내 단계 평균과 기준 단계 평균(0~5)을 돌려준다. 마이페이지의 레이더 차트가 쓴다.
 
