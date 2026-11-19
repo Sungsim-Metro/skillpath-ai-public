@@ -33,6 +33,7 @@ from backend.jobs import JOBS  # noqa: E402
 
 from app import chat as chat_screen  # noqa: E402
 from app import levels as levels_screen  # noqa: E402
+from app import report_dialog  # noqa: E402
 from app.common import Ctx, Pending, load  # noqa: E402
 from app.tabs import demand as tab_demand  # noqa: E402
 from app.tabs import extract as tab_extract  # noqa: E402
@@ -64,6 +65,7 @@ with st.sidebar:
     job = st.selectbox("목표 직무", options=list(JOBS), format_func=JOBS.get, key="job")
     nickname = chat_screen.nickname_input()
     levels = levels_screen.sidebar_summary(nickname)
+    report_dialog.sidebar_button(job, levels)
     demand, demand_err = (None, None) if view == "chat" else load(api.get_demand, job)
     skill_options = [s["skill"] for s in demand["skills"]] if demand else []
     st.divider()
