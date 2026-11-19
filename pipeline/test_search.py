@@ -183,6 +183,26 @@ def test_kb_retrieval():
             client.retrieve.reset_mock()
             assert search_courses("Docker") == search_courses("Docker", mode="rules")
             client.retrieve.assert_not_called()
+def bm25():
+    """BM25 단계(비교용 방식). 낱말 쪼개기, 순위, 임계값, 기본 방식이 바뀌지 않았는지 확인한다."""
+    assert S._tokens("Run EC2. Use S3-backed, CI/CD") == ["run", "ec2", "use", "s3-backed", "ci", "cd"]
+    courses = _courses()
+    ranked = S._bm25_ranking("EKS")
+    assert ranked and all(_usable(courses[c]) for c in ranked)
+    assert "eks" in courses[ranked[0]]["title"].lower() or "eks" in courses[ranked[0]]["aws_services"].lower()  # 이름이 제목·서비스에 나오는 과정이 1등
+    assert S._bm25_ranking("zzzunknownskill") == []
+    assert all(v > S.BM25_MIN for v in (S._bm25_scores("EKS")[c] for c in ranked))  # 임계값 이하는 뺀다
+    assert {"bm25", "hybrid_bm25", "final_bm25"} <= set(S.MODES)
+    assert search_courses("Kubernetes", 3, mode="bm25")  # 가짜 모드에서도 키워드 방식이므로 돈다
+    try:
+        search_courses("Kubernetes", 3, mode="hybrid_bm25")
+        raise AssertionError("가짜 모드에서 의미 검색은 막혀야 한다")
+    except RuntimeError:
+        pass
+    assert search_courses("EKS", 3) == search_courses("EKS", 3, mode="final")  # 기본 방식은 그대로 final
+    assert search_courses("EKS", 3, mode="final_bm25") == search_courses("EKS", 3, mode="final")  # 가짜 모드의 final 계열은 규칙만 쓴다
+
+
 def jobs():
     """AI 세부 능력 검색어(2026-11-19): 클라우드와 별칭이 겹치지 않고, AI 기술은 A* 로, 클라우드 진단은 C* 만 본다."""
     from pipeline.aliases import _key
@@ -202,5 +222,6 @@ if __name__ == "__main__":
     demo()
     hybrid()
     test_kb_retrieval()
+    bm25()
     jobs()
     print("통과")
