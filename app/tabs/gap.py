@@ -3,6 +3,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from app.tabs.connect import render_connect
 from app.common import (
     ACCENT,
     ACCENT_LIGHT,
@@ -182,6 +183,10 @@ def _render_gap(ctx: Ctx):
         if have:
             st.caption("이미 보유: " + ", ".join(
                 r["skill"] + (" (불확실)" if r["required_level_confidence"] == "uncertain" else "") for r in have))
+
+    with st.container(border=True):
+        st.subheader("현직자에게 물어보기")
+        render_connect(ctx)
 
 
 

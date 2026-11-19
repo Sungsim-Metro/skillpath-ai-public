@@ -1,0 +1,204 @@
+{
+ "note": "개발자 모임 목록(AWS한국사용자모임 소모임과 AI 모임). 공개 페이지를 보고 골라 적은 데이터이고 코드는 조회만 한다. 사람(개인) 정보는 넣지 않는다. areas 는 data/skill_areas.json(C1~C8)과 data/skill_areas_ai_engineer.json(A1~A4)의 영역 id 로, 모임 이름과 소개 글의 주제를 보고 짝지었다. org 는 모임이 속한 단체다. last_seen 은 그 모임의 일정이나 활동을 공개 페이지에서 확인한 가장 최근 날짜다. link 는 확인한 일정의 주소가 있으면 그 주소, 없으면 모임의 대표 페이지다. 일정·장소·참가비는 바뀌므로 화면에서는 링크로 보내고 모임마다 적지 않는다.",
+ "source": "AWSKRUG Meetup 페이지(https://www.meetup.com/awskrug/), 가짜연구소(https://pseudo-lab.com/), 파이토치 한국 사용자 모임(https://discuss.pytorch.kr/), Instruct.KR 행사 안내(https://luma.com/7nt9s63z), 공개 행사 목록(https://github.com/brave-people/Dev-Event)",
+ "checked": "2026-11-19",
+ "limits": "AWSKRUG 일정은 모두 오프라인이고 대부분 서울 강남입니다. 대전·충청권 모임은 확인하지 못했습니다. 온라인으로 참여할 수 있는 곳은 파이토치 한국 사용자 모임(게시판)과 가짜연구소(Discord)뿐입니다. 확인한 AWSKRUG 11월 일정은 참가비(7,000~10,000원)와 사전 신청 마감이 있었고, 건물 출입 때문에 이름·소속·연락처를 적어 내야 했습니다. 스토리지·데이터베이스와 비용 최적화 영역은 맞는 모임을 확인하지 못했습니다. 운영·모니터링은 전용 모임이 아니라 플랫폼엔지니어링 소모임으로 이었습니다. AI 영역의 짝은 모임 이름과 소개 글의 주제를 보고 정한 것이라 회차마다 다루는 내용이 다를 수 있습니다. AWSKRUG 밖의 모임은 2026-11-19에, 일부 AWSKRUG 소모임은 2026-11-17에 확인했습니다. 지난 일정의 주소는 그 회차의 안내이므로 다음 일정은 각 모임의 페이지에서 확인합니다.",
+ "join": {
+  "slack": "https://slack.awskr.org",
+  "text": "일정은 Meetup 페이지에서 보고 참가 신청(RSVP)을 합니다. 문의는 AWSKRUG Slack의 소모임 채널에서 합니다."
+ },
+ "communities": [
+  {
+   "id": "container",
+   "name": "AWSKRUG 컨테이너 #container 소모임",
+   "org": "AWSKRUG",
+   "areas": [
+    "C1",
+    "A4"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/events/317143207/",
+   "last_seen": "2026-11-24 일정",
+   "note": "2026-11-24 일정은 GPU 컨테이너 활용 사례를 다룬다."
+  },
+  {
+   "id": "serverless",
+   "name": "AWSKRUG 서버리스 #Serverless 소모임",
+   "org": "AWSKRUG",
+   "areas": [
+    "C1",
+    "C7"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/",
+   "last_seen": "2026-07-14 일정",
+   "note": ""
+  },
+  {
+   "id": "security",
+   "name": "AWSKRUG 보안 #Security 소모임",
+   "org": "AWSKRUG",
+   "areas": [
+    "C4"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/events/317392910/",
+   "last_seen": "2026-11-24 일정",
+   "note": ""
+  },
+  {
+   "id": "devops",
+   "name": "AWSKRUG 데브옵스 #DevOps 소모임",
+   "org": "AWSKRUG",
+   "areas": [
+    "C5"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/events/316366209/",
+   "last_seen": "2026-09-15 일정",
+   "note": ""
+  },
+  {
+   "id": "platform",
+   "name": "AWSKRUG 플랫폼엔지니어링 소모임",
+   "org": "AWSKRUG",
+   "areas": [
+    "C5",
+    "C6"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/",
+   "last_seen": "2026-06-02 일정",
+   "note": ""
+  },
+  {
+   "id": "architecture",
+   "name": "AWSKRUG 아키텍처 #architecture 소모임",
+   "org": "AWSKRUG",
+   "areas": [
+    "C7"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/",
+   "last_seen": "2026-08-26 일정",
+   "note": ""
+  },
+  {
+   "id": "network",
+   "name": "AWSKRUG 네트워크 #network 소모임",
+   "org": "AWSKRUG",
+   "areas": [
+    "C3"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/events/316307770/",
+   "last_seen": "2026-09-08 일정",
+   "note": ""
+  },
+  {
+   "id": "data",
+   "name": "AWSKRUG #Data x AIEngineering 소모임",
+   "org": "AWSKRUG",
+   "areas": [
+    "A1",
+    "A3"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/events/317406828/",
+   "last_seen": "2026-11-26 일정",
+   "note": "데이터와 AI 엔지니어링을 함께 다룬다. 2026-11-26 일정은 비전 파운데이션 모델 개발 과정 발표다."
+  },
+  {
+   "id": "pseudolab",
+   "name": "가짜연구소 (Pseudo Lab)",
+   "org": "가짜연구소",
+   "areas": [
+    "A1",
+    "A2"
+   ],
+   "kind": "topic",
+   "place": "온라인 위주(Discord, 행사는 서울)",
+   "link": "https://pseudo-lab.com/",
+   "last_seen": "2026-12-05 일정",
+   "note": "AI 연구·학습 비영리 모임. LLM, AI 에이전트, 데이터 과학 등의 프로젝트와 누구나 들을 수 있는 공개 세션이 있다. 프로젝트는 모집 기간에만 지원할 수 있다."
+  },
+  {
+   "id": "pytorchkr",
+   "name": "파이토치 한국 사용자 모임",
+   "org": "파이토치 한국 사용자 모임",
+   "areas": [
+    "A2"
+   ],
+   "kind": "topic",
+   "place": "온라인(게시판)",
+   "link": "https://discuss.pytorch.kr/",
+   "last_seen": "2026-11 게시글",
+   "note": "파이토치 한국어 게시판. 질문과 소식, 행사 안내가 올라온다. 오프라인 정기 모임은 확인하지 못했다."
+  },
+  {
+   "id": "instructkr",
+   "name": "Instruct.KR",
+   "org": "Instruct.KR",
+   "areas": [
+    "A1"
+   ],
+   "kind": "topic",
+   "place": "서울(오프라인)",
+   "link": "https://luma.com/7nt9s63z",
+   "last_seen": "2026년 ICML 연계 밋업 안내",
+   "note": "AI 연구자·엔지니어 모임. 확인한 밋업은 검색, RAG, 에이전트를 다뤘다. 다음 일정은 확인하지 못했다."
+  },
+  {
+   "id": "junior",
+   "name": "AWSKRUG #Junior 소모임",
+   "org": "AWSKRUG",
+   "areas": [],
+   "kind": "general",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/events/316937476/",
+   "last_seen": "2026-11-05 일정",
+   "note": "주니어 대상 모임. 2026-11-05 일정은 경력 이야기와 입문 발표였다."
+  },
+  {
+   "id": "ausg",
+   "name": "AUSG (AWSKRUG 대학생 소모임)",
+   "org": "AWSKRUG",
+   "areas": [],
+   "kind": "general",
+   "place": "서울(오프라인)",
+   "link": "https://www.meetup.com/awskrug/",
+   "last_seen": "2026년 AUSGCON 안내",
+   "note": "대학생 대상."
+  },
+  {
+   "id": "busan",
+   "name": "AWSKRUG 부산 지역 소모임",
+   "org": "AWSKRUG",
+   "areas": [],
+   "kind": "region",
+   "place": "부산(오프라인)",
+   "link": "https://www.meetup.com/awskrug/",
+   "last_seen": "2026-08-28 일정",
+   "note": ""
+  },
+  {
+   "id": "incheon",
+   "name": "AWSKRUG 인천 지역 #incheon 소모임",
+   "org": "AWSKRUG",
+   "areas": [],
+   "kind": "region",
+   "place": "인천(오프라인)",
+   "link": "https://www.meetup.com/awskrug/",
+   "last_seen": "2026-08-24 일정",
+   "note": ""
+  }
+ ]
+}
