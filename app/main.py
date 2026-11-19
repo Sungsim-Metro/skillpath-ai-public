@@ -52,7 +52,9 @@ VIEWS = {
     "gap": ("부족 역량", tab_gap.render, "gap"),
     "recommend": ("학습 추천", tab_recommend.render, "gap"),
     "connect": ("현직자에게 물어보기", tab_connect.render, "gap"),
+    "report": ("진단 보고서", report_dialog.render, None),
 }
+DEFAULT_JOB = next(iter(JOBS))
 
 st.set_page_config(page_title="skillpath-ai", layout="wide")
 
@@ -75,15 +77,18 @@ with st.sidebar:
     if st.session_state.get("view") not in VIEWS:  # 첫 실행이거나 모르는 값이면 주소의 값을 보고, 없으면 학습 상담으로 연다
         asked = st.query_params.get("view")
         st.session_state.view = asked if asked in VIEWS else DEFAULT_VIEW
-    st.markdown("**마이페이지**")  # 프로필(로그인), 목표 직무, 보유 수준, 진단 보고서
+    st.markdown("**마이페이지**")  # 프로필(로그인), 목표 직무. 바로 아래에 화면 메뉴를 둔다
     session = chat_screen.profile_access()
-    job = st.selectbox("목표 직무", options=list(JOBS), format_func=JOBS.get, key="job")
-    levels = levels_screen.sidebar_summary(session, job)
-    report_dialog.sidebar_button(job, levels)
-    st.divider()
+    # 목표 직무는 고르는 칸을 두지 않는다. 학습 상담의 첫 화면에서 고르거나 대화로 바꾼다(2026-11-20)
+    if st.session_state.get("job") not in JOBS:
+        st.session_state.job = DEFAULT_JOB
+    job = st.session_state.job
+    st.caption(f":material/flag: 목표 직무 · **{JOBS[job]}** (학습 상담에서 바꿉니다)")
     view = st.radio("화면", list(VIEWS), format_func=lambda key: VIEWS[key][0], key="view")
     if view != st.query_params.get("view", DEFAULT_VIEW):
         st.query_params["view"] = view
+    st.divider()
+    levels = levels_screen.sidebar_summary(session, job)
     st.divider()
     survey = os.getenv("SURVEY_URL", "").strip()
     if survey.startswith("https://"):  # 사용자 테스트 설문 주소가 있을 때만 보인다
@@ -100,15 +105,20 @@ if view == "chat":
     st.stop()
 
 ctx = build_ctx(job, levels, need)  # 화면에 필요한 데이터만 불러온다(상담은 수요를 부르지 않는다)
-if st.session_state.get("from_chat"):  # 상담 답 아래의 버튼으로 넘어왔으면 돌아가는 길을 둔다
+if st.session_state.get("from_chat") != view:  # 메뉴로 다른 화면에 갔으면 표시를 지운다
+    st.session_state.pop("from_chat", None)
+else:  # 상담 답 아래의 버튼으로 넘어온 화면에만 돌아가는 길을 둔다
     st.button("상담으로 돌아가기", key="back_to_chat", on_click=chat_screen.back_to_chat, icon=":material/arrow_back:")
 st.title(label)
-demand = ctx.demand
-origin = [f"수집일 {demand['collected']}"] if demand and demand.get("collected") else []
-origin += [f"출처 {', '.join(demand['sources'])}"] if demand and demand.get("sources") else []
-count = f" {demand['total_postings']}건" if demand else ""
-st.caption(
-    f"{JOBS[job]} · 채용공고{count}을 분석해 부족한 역량과 학습 프로그램을 근거와 함께 보여줍니다."
-    + (f" {', '.join(origin)}." if origin else "")
-)
+if need:
+    demand = ctx.demand
+    origin = [f"수집일 {demand['collected']}"] if demand and demand.get("collected") else []
+    origin += [f"출처 {', '.join(demand['sources'])}"] if demand and demand.get("sources") else []
+    count = f" {demand['total_postings']}건" if demand else ""
+    st.caption(
+        f"{JOBS[job]} · 채용공고{count}을 분석해 부족한 역량과 학습 프로그램을 근거와 함께 보여줍니다."
+        + (f" {', '.join(origin)}." if origin else "")
+    )
+else:
+    st.caption(f"{JOBS[job]} 기준")
 render(ctx)

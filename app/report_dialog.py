@@ -38,8 +38,16 @@ def _build(job: str, levels: dict[str, int]) -> tuple[str | None, str | None]:
     return md, ("추천을 불러오지 못해 보고서의 학습 프로그램 추천 절은 비어 있습니다." if rec_err else None)
 
 
-@st.dialog("진단 보고서", width="large")
-def report_dialog(job: str, levels: dict[str, int]) -> None:
+def render(ctx) -> None:
+    """메뉴의 '진단 보고서' 화면(2026-11-20, 전에는 사이드바 버튼으로 여는 창이었다).
+
+    진단 전(예시 값)에는 만들지 않는다. 예시 값 보고서가 내 보고서처럼 보이지 않게.
+    """
+    job, levels = ctx.job, ctx.levels
+    if st.session_state.get("levels_example"):
+        st.info("수준 진단을 하거나 기술 수준을 직접 입력하면 진단 보고서를 받을 수 있습니다. "
+                "학습 상담 화면의 '수준 진단 설문'에서 시작하세요.", icon=":material/checklist:")
+        return
     with st.spinner("보고서를 만드는 중입니다"):
         md, note = _build(job, levels)
     if md is None:
@@ -48,17 +56,10 @@ def report_dialog(job: str, levels: dict[str, int]) -> None:
     st.write("역량 진단, 학습 프로그램 추천, 수강 순서, 과정으로 채우기 어려운 기술을 마크다운(.md) 파일 하나로 받습니다.")
     if note:
         st.caption(note)
-    # on_click="ignore": 내려받아도 화면을 다시 그리지 않아 창이 닫히지 않는다
+    # on_click="ignore": 내려받아도 화면을 다시 그리지 않는다
     st.download_button("내려받기 (.md)", data=md.encode("utf-8"), file_name=file_name(), mime="text/markdown",
                        type="primary", icon=":material/download:", key="report_btn", on_click="ignore")
     st.caption("노션, GitHub, VS Code, 메모장 등에서 열 수 있습니다. 화면에 나온 값만 담기며, 이 서비스는 보고서를 저장하지 않습니다.")
     with st.container(height=480, border=True):
         st.markdown(md)  # 내려받는 파일과 같은 글. 데이터 글자는 이스케이프돼 있다(app/report.py)
 
-
-def sidebar_button(job: str, levels: dict[str, int]) -> None:
-    """마이페이지의 보고서 버튼. 진단 전(예시 값)에는 막는다. 예시 값 보고서가 내 보고서처럼 보이지 않게."""
-    example = bool(st.session_state.get("levels_example"))
-    if st.button("진단 보고서", key="open_report", icon=":material/description:", width="stretch", disabled=example,
-                 help="수준 진단을 마치거나 기술 수준을 직접 입력하면 받을 수 있습니다." if example else "진단 결과를 .md 파일로 받습니다."):
-        report_dialog(job, levels)

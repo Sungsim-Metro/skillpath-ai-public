@@ -68,38 +68,63 @@ class AppSmokeTest(unittest.TestCase):
         self.assertFalse(at.exception)
         self.assertIn("추출 결과", [h.value for h in at.subheader])
 
-    def test_level_dialog_requires_every_answer(self):
+    def test_level_survey_opens_from_chat_shows_steps_and_saves_partial_answers(self):
         from backend.levels import job_subskills
 
         subskills = list(job_subskills("cloud_engineer"))  # 기본 직무(클라우드)의 질문만 나온다
 
         def reopen(at, button=None):
             # AppTest 는 모달 안 클릭 뒤 모달을 다시 그리지 않아, 같은 실행에서 모달 열기도 누른다
-            at.sidebar.button(key="open_levels").click()
+            at.button(key="open_levels").click()
             if button:
                 at.button(key=button).click()
             return at.run()
 
-        at = reopen(self.at)
-        self.assertTrue(at.get("progress")[0].proto.text.startswith(f"0 / {len(subskills)}개 응답 · 남은 시간 약"))
-        self.assertNotIn("save_levels", [b.key for b in at.button])  # 저장은 마지막 영역에만
+        self.assertFalse([b for b in self.at.button if b.key == "open_levels"])  # 다른 화면과 사이드바에는 없다
+        at = reopen(open_app())  # 수준 진단 설문은 학습 상담 화면에서 연다
+        self.assertFalse(at.get("progress"))  # 진행 막대 대신 단계 표시
+        steps = next(m.value for m in at.markdown if m.value.startswith(":blue-badge[**1 "))
+        self.assertEqual(steps.count("badge["), 8)  # 영역 8개
+        self.assertEqual(steps.count(":gray-badge["), 7)
+        self.assertTrue(any(c.value.startswith(f"0 / {len(subskills)}개 응답 · 남은 시간 약") for c in at.caption))
+        self.assertTrue(at.button(key="save_levels").disabled)  # 답한 것이 없으면 저장할 것이 없다
         at = reopen(at, "lvb_C1-4_4")  # 카드를 누르면 그 단계를 고른다
         self.assertEqual(at.session_state["lv_C1-4"], 4)
+        self.assertFalse(at.button(key="save_levels").disabled)  # 하나만 답해도 저장할 수 있다
         at = reopen(at, "lvnav_next")
         self.assertIn("2/8", at.subheader[-1].value)
-        for sid in subskills:
-            if sid != "C1-4":
-                at.session_state[f"lv_{sid}"] = None if sid == "C8-3" else 0
-        at.session_state["lv_page"] = 7
-        at = reopen(at)
-        self.assertTrue(at.button(key="save_levels").disabled)
-        at = reopen(at, "lvb_C8-3_0")
-        self.assertFalse(at.button(key="save_levels").disabled)
-        at = reopen(at, "save_levels")
+        at = reopen(at, "save_levels")  # 첫 영역도 다 답하지 않은 채 저장한다
         self.assertFalse(at.exception)
-        self.assertEqual({k: v for k, v in at.session_state["levels"].items() if v}, {"C1-4": 4})
+        self.assertEqual(at.session_state["levels"], {"C1-4": 4})
         self.assertFalse(at.session_state["levels_example"])
         self.assertNotIn("lv_page", at.session_state)
+        at = reopen(at)
+        self.assertTrue(at.button(key="save_levels").disabled)  # 바뀐 답이 없으면 다시 막힌다
+
+    def test_first_chat_screen_picks_the_target_job_and_the_selector_is_gone(self):
+        at = open_app()
+        self.assertFalse([box for box in at.selectbox if box.key == "job"])  # 목표 직무를 고르는 칸은 없다
+        self.assertTrue(any("목표 직무 · **클라우드 엔지니어**" in c.value for c in at.sidebar.caption))
+        picks = [b for b in at.button if b.key and b.key.startswith("pick_job_")]
+        self.assertEqual([b.label for b in picks], ["클라우드 엔지니어", "AI 엔지니어", "아직 모르겠어요"])
+        at.button(key="pick_job_ai_engineer").click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["job"], "ai_engineer")
+        self.assertTrue(any("목표 직무 · **AI 엔지니어**" in c.value for c in at.sidebar.caption))
+        self.assertFalse([b for b in at.button if b.key and b.key.startswith("pick_job_")])  # 고르면 사라진다
+        at.radio(key="view").set_value("gap").run()
+        self.assertTrue(any(c.value.startswith("AI 엔지니어 · 채용공고") for c in at.caption))
+
+        unsure = open_app()
+        unsure.button(key="pick_job_unknown").click().run()
+        self.assertEqual(unsure.session_state["job"], "cloud_engineer")
+        self.assertTrue(any("클라우드 엔지니어 기준" in i.value for i in unsure.info))
+
+        talk = open_app()
+        talk.chat_input[0].set_value("AI 엔지니어 기준으로 뭐가 부족해?").run()  # 대화로 말해도 직무가 바뀐다
+        self.assertFalse(talk.exception)
+        self.assertEqual(talk.session_state["job"], "ai_engineer")
+        self.assertEqual(len(talk.chat_message), 2)
 
     def test_renders_without_owned_skills(self):
         self.at.session_state["levels"] = {}

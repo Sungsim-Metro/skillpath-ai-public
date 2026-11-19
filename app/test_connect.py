@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest import mock
 
-from app.testing import open_app
+from app.testing import open_app, set_job
 
 
 class ConnectScreenTest(unittest.TestCase):
@@ -20,7 +20,7 @@ class ConnectScreenTest(unittest.TestCase):
 
     def test_section_shows_for_both_jobs(self):
         self.assertIn("부족한 영역을 다루는 개발자 모임", self._section_text(self.at))
-        at = self.at.sidebar.selectbox(key="job").set_value("ai_engineer").run()
+        at = set_job(self.at, "ai_engineer")
         text = self._section_text(at)
         self.assertIn("LinkedIn에서 직접 찾아보기", text)
         self.assertNotIn("컨테이너 #container 소모임** · 서울(오프라인) · 부족 영역: 컴퓨팅", text)  # 클라우드 영역 이름이 섞이지 않는다

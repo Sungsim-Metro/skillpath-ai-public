@@ -6,7 +6,13 @@ from streamlit.testing.v1 import AppTest
 MAIN = str(Path(__file__).with_name("main.py"))
 # 사이드바 메뉴에 놓이는 순서(app/main.py 의 VIEWS)
 MENU = {"chat": "학습 상담", "demand": "시장 수요", "gap": "부족 역량", "recommend": "학습 추천",
-        "connect": "현직자에게 물어보기"}
+        "connect": "현직자에게 물어보기", "report": "진단 보고서"}
+
+
+def set_job(at: AppTest, job: str) -> AppTest:
+    """목표 직무를 바꾸고 다시 그린다. 화면에서는 학습 상담의 직무 버튼이나 대화로 바꾼다."""
+    at.session_state["job"] = job
+    return at.run()
 
 
 def open_app(view: str | None = None, *, entered: bool = True, **query) -> AppTest:

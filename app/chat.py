@@ -136,7 +136,10 @@ def _go(view: str) -> None:
     상담에서 넘어갔다는 표시를 남겨, 넘어간 화면에 상담으로 돌아가는 버튼을 보여 준다(app/main.py).
     """
     st.session_state.view = view
-    st.session_state.from_chat = view != "chat"
+    if view == "chat":
+        st.session_state.pop("from_chat", None)
+    else:
+        st.session_state.from_chat = view  # 넘어간 그 화면에서만 돌아가기 버튼을 보여 준다
 
 
 def back_to_chat() -> None:
@@ -147,6 +150,25 @@ def _suggest(text: str) -> None:
     st.session_state.chat_suggested = text
 
 
+def _pick_job(job: str | None) -> None:
+    """상담 첫 화면에서 목표 직무를 고른다. None 은 '아직 모르겠어요'(기본 직무로 두고 안내만 한다)."""
+    if job in JOBS:
+        st.session_state.job = job
+    st.session_state.job_picked = job or "unknown"
+
+
+def _job_picker() -> None:
+    """아직 직무를 고르지 않았고 대화도 시작하지 않았을 때만 보여 준다. 고른 뒤에도 대화로 바꿀 수 있다."""
+    with st.container(border=True):
+        st.markdown("**어떤 직무를 준비하세요?**")
+        names = list(JOBS)
+        for column, job in zip(st.columns(len(names) + 1), [*names, None]):
+            column.button(JOBS[job] if job else "아직 모르겠어요", key=f"pick_job_{job or 'unknown'}",
+                          on_click=_pick_job, args=(job,), width="stretch",
+                          type="primary" if job else "secondary")
+        st.caption("고른 직무의 채용공고로 부족한 역량을 봅니다. 나중에 '클라우드 엔지니어 기준으로 봐줘'처럼 말하면 바뀝니다.")
+
+
 def _reset_chat() -> None:
     """새 상담: 대화와 진행 중인 수준 문항만 비운다. 로그인, 진단 결과, 프로필은 그대로다."""
     for key in ("chat_conversation", "chat_history", "chat_assessment", "chat_suggested"):
@@ -154,23 +176,25 @@ def _reset_chat() -> None:
     levels_screen.clear_chat_level_drafts()
 
 
-def _save(entry: dict, **fields) -> None:
-    """평가 한 건을 기록한다. 기록 실패는 상담을 막지 않고 한 줄로만 알린다."""
+def _save(entry: dict, **fields) -> bool:
+    """평가 한 건을 기록하고 성공했는지 돌려준다. 기록 실패는 상담을 막지 않고 한 줄로만 알린다."""
     from backend import experiments
 
     try:
         experiments.save_feedback(entry["session_id"], entry["turn_id"], job=entry["job"],
                                   action=entry["action"] or None, model=entry["model"] or None, **fields)
     except Exception:
-        st.toast("평가를 저장하지 못했습니다. 상담은 계속할 수 있습니다.")
+        st.toast("평가를 저장하지 못했습니다. 다시 눌러 주세요. 상담은 계속할 수 있습니다.")
+        return False
+    return True
 
 
 def _on_rating(entry: dict) -> None:
     value = st.session_state.get(f"fb_{entry['turn_id']}")
     if value is not None:  # 썸 업 1, 썸 다운 0
-        _save(entry, rating="up" if value == 1 else "down")
-        entry["rated"] = True  # 한 번 고르면 평가 위젯을 숨긴다
-        st.toast(THANKS)
+        if _save(entry, rating="up" if value == 1 else "down"):  # 저장하지 못했으면 다시 누를 수 있게 남겨 둔다
+            entry["rated"] = True  # 한 번 고르면 평가 위젯을 숨긴다
+            st.toast(THANKS)
 
 
 def _on_pick(entry: dict, choice: str) -> None:
@@ -179,10 +203,9 @@ def _on_pick(entry: dict, choice: str) -> None:
 
     left, right = entry["alternatives"]
     picked = {"A": left["structure"], "B": right["structure"], "tie": experiments.TIE}.get(choice)
-    if picked:
-        _save(entry, left=left["structure"], right=right["structure"], picked=picked,
-              tokens={side["structure"]: side["tokens"] for side in (left, right)})
-        entry["picked"] = choice  # 한 번 고르면 선택 버튼을 숨긴다
+    if picked and _save(entry, left=left["structure"], right=right["structure"], picked=picked,
+                        tokens={side["structure"]: side["tokens"] for side in (left, right)}):
+        entry["picked"] = choice  # 한 번 고르면 선택 버튼을 숨긴다(저장하지 못했으면 남겨 둔다)
         st.toast(THANKS)
 
 
@@ -275,6 +298,12 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
     mentioned = sum(1 for used in conversation.skills.values() if used)
     diagnosed = f"진단으로 확인한 보유 기술 {len(sidebar_skills)}개" if sidebar_levels is not None else "수준 진단 전"
     st.caption(f":material/flag: 목표 직무 {JOBS.get(target, target)} · {diagnosed} · 대화에서 말한 기술 {mentioned}개")
+    picked = st.session_state.get("job_picked")
+    if not picked and not history and not message:
+        _job_picker()
+    elif picked == "unknown" and not history:
+        st.info(f"우선 {JOBS[job]} 기준으로 보여 드립니다. 해 본 일을 적어 주시면 상담에서 맞는 직무를 함께 찾아볼 수 있습니다.",
+                icon=":material/explore:")
 
     for index, entry in enumerate(history):
         if isinstance(entry, tuple):  # 평가 기능 이전의 열린 세션에는 턴 ID가 없다.
@@ -307,8 +336,20 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
                              "model": "", "action": "", "alternatives": []}
             history.append({"prompt": message, "job": job, "session_id": conversation.usage.session_id, **entry})
             _render_answer(history[-1], len(history) - 1)
+        # 대화에서 목표 직무가 정해지거나 바뀌면 마이페이지와 다른 화면도 그 직무를 따른다
+        if conversation.job in JOBS and conversation.job != st.session_state.get("job"):
+            st.session_state.job = conversation.job
+            st.session_state.job_picked = conversation.job
+            # 다시 그리면 이번 답(reply)이 사라지므로, 이번 턴에 말한 기술의 수준 문항을 먼저 맡겨 둔다
+            mentioned = list(getattr(reply, "assessment_skills", None) or [])
+            if mentioned and getattr(reply, "assessment_job", "") == conversation.job:
+                st.session_state.chat_assessment = (conversation.job, mentioned, set())
+            st.rerun()
     _assessment_panel(conversation, job, session, sidebar_levels, reply)
 
+    survey, _ = st.columns([1, 3])
+    with survey:
+        levels_screen.survey_button(session, target if target in JOBS else job)
     st.caption("이렇게 물어보세요")
     for number, (column, (label, text)) in enumerate(zip(st.columns(len(SUGGESTIONS)), SUGGESTIONS)):
         column.button(label, key=f"suggest_{number}", on_click=_suggest, args=(text,), width="stretch", help=text)

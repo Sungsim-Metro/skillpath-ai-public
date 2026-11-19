@@ -1,4 +1,6 @@
-"""사이드바 마이페이지와 보유 수준 진단 모달 (#90).
+"""사이드바 마이페이지의 보유 수준 요약과 보유 수준 진단 설문 (#90).
+
+설문은 학습 상담 화면에서 연다(2026-11-20). 영역마다 단계 표시로 어디까지 했는지 보여 주고, 일부만 답해도 저장한다.
 
 화면 코드만 둔다. 단계 예시는 backend.levels.level_guide(), 저장은 backend.chat_profiles 가 맡는다.
 세션 값:
@@ -117,11 +119,21 @@ def diagnose_dialog(session: chat_profiles.ProfileSession | None, job: str) -> N
     answered = sum(st.session_state[f"lv_{sid}"] is not None for sid in subskills)
     left = len(subskills) - answered
     minutes = max(1, round(left * SECONDS_PER_QUESTION / 60))
-    st.progress(answered / len(subskills), text=f"{answered} / {len(subskills)}개 응답"
-                + (f" · 남은 시간 약 {minutes}분" if left else " · 완료"))
-    st.caption(f"영역 {len(areas)}개 · 질문 {len(subskills)}개 · 약 "
-               f"{max(1, round(len(subskills) * SECONDS_PER_QUESTION / 60))}분(질문당 10초 어림). "
-               "지금 할 수 있는 일에 가장 가까운 카드를 누르세요. 시험이 아니며, 예시는 팀이 확인 중인 AI 초안입니다.")
+    # 단계 표시: 다 답한 영역은 초록, 지금 보는 영역은 파랑, 나머지는 회색
+    steps = []
+    for number, (aid, name) in enumerate(areas, start=1):
+        ids = [sid for sid, row in subskills.items() if row["area_id"] == aid]
+        complete = bool(ids) and all(st.session_state[f"lv_{sid}"] is not None for sid in ids)
+        if number - 1 == page:
+            steps.append(f":blue-badge[**{number} {name}**]")
+        elif complete:
+            steps.append(f":green-badge[:material/check: {name}]")
+        else:
+            steps.append(f":gray-badge[{number} {name}]")
+    st.markdown(" → ".join(steps))
+    st.caption(f"{answered} / {len(subskills)}개 응답" + (f" · 남은 시간 약 {minutes}분" if left else " · 완료")
+               + ". 지금 할 수 있는 일에 가장 가까운 카드를 누르세요. 전부 답하지 않아도 저장할 수 있고, "
+               "답하지 않은 항목은 바꾸지 않습니다(저장한 값이 없으면 0단계). 시험이 아니며, 예시는 팀이 확인 중인 AI 초안입니다.")
 
     area_id, area_name = areas[page]
     rows = [(sid, row) for sid, row in subskills.items() if row["area_id"] == area_id]
@@ -141,15 +153,19 @@ def diagnose_dialog(session: chat_profiles.ProfileSession | None, job: str) -> N
     finished = sum(all(st.session_state[f"lv_{s}"] is not None for s, r in subskills.items() if r["area_id"] == a)
                    for a, _ in areas)
     status.caption(f"<div style='text-align:center'>완료한 영역 {finished}/{len(areas)}</div>", unsafe_allow_html=True)
-    if page < len(areas) - 1:
+    last = page == len(areas) - 1
+    if not last:
         forward.button("다음 영역", key="lvnav_next", type="primary", on_click=_move, args=(1,), width="stretch")
-        return
-    status.caption(("모든 질문에 답하면 저장할 수 있습니다. " if left else "")
-                   + ("내 프로필에도 저장합니다." if session else "이번 세션에 저장합니다."))
-    label = f"저장 (남은 질문 {left}개)" if left else "저장"
-    if forward.button(label, type="primary", width="stretch", disabled=bool(left), key="save_levels"):
-        answers = {sid: st.session_state[f"lv_{sid}"] for sid in subskills}
-        save_levels(session, {sid: value for sid, value in answers.items() if value != baseline[sid]})
+    # 일부만 답해도 저장한다. 답하지 않은 항목은 건드리지 않는다
+    changed = {sid: st.session_state[f"lv_{sid}"] for sid in subskills
+               if st.session_state[f"lv_{sid}"] is not None and st.session_state[f"lv_{sid}"] != baseline[sid]}
+    where = "내 프로필에도 저장합니다." if session else "이번 세션에 저장합니다."
+    status.caption(f"<div style='text-align:center'>{where}</div>", unsafe_allow_html=True)
+    label = "저장" if not left else f"지금까지 답한 내용 저장 (남은 질문 {left}개)"
+    target = forward if last else status
+    if target.button(label, type="primary" if last else "secondary", width="stretch", disabled=not changed,
+                     key="save_levels"):
+        save_levels(session, changed)
         _clear_survey()
         st.rerun()
 
@@ -297,8 +313,7 @@ def sidebar_summary(session: chat_profiles.ProfileSession | None, job: str) -> d
         avg = sum(values) / len(values) if values else 0
         lines.append(f"{area_name} {avg:.1f}")
     st.caption(" · ".join(lines) + " (영역 평균, 0~5)")
-    if st.button("수준 진단하기", key="open_levels", icon=":material/checklist:", width="stretch"):
-        diagnose_dialog(session, job)
+    st.caption("수준 진단은 학습 상담 화면의 '수준 진단 설문'에서 합니다.")
     _custom_levels(session)
     notice = st.session_state.pop("levels_notice", None)
     if notice:
@@ -307,6 +322,13 @@ def sidebar_summary(session: chat_profiles.ProfileSession | None, job: str) -> d
         _persist_levels(session, {})
         st.rerun()
     return dict(levels)
+
+
+def survey_button(session: chat_profiles.ProfileSession | None, job: str) -> None:
+    """학습 상담 화면에 두는 수준 진단 설문 버튼. 누르면 그 직무의 설문 창이 열린다."""
+    if st.button("수준 진단 설문", key="open_levels", icon=":material/checklist:", width="stretch",
+                 help="세부 능력마다 지금 할 수 있는 일을 고릅니다. 일부만 답해도 저장됩니다."):
+        diagnose_dialog(session, job)
 
 
 def chat_skills(job: str, levels: dict[str, int]) -> list[str]:

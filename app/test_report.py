@@ -7,7 +7,7 @@ from unittest import mock
 
 from streamlit.testing.v1 import AppTest
 
-from app.testing import open_app
+from app.testing import open_app, set_job
 
 MAIN = str(Path(__file__).resolve().parent / "main.py")
 
@@ -107,17 +107,19 @@ class ReportTest(unittest.TestCase):
         self.assertIn("이번에 추천하지 않은 기술:", partial)
         self.assertIn(missing[1]["skill"], partial.split("이번에 추천하지 않은 기술:")[1])
 
-    def test_sidebar_button_opens_report_only_after_diagnosis(self):
-        """마이페이지 버튼: 진단 전(예시 값)에는 막혀 있고, 진단 뒤에는 창에서 내려받는다. 상담 화면에서도 보인다."""
-        at = open_app()
-        self.assertTrue(at.button(key="open_report").disabled)
+    def test_report_screen_builds_the_report_only_after_diagnosis(self):
+        """메뉴의 진단 보고서 화면: 진단 전(예시 값)에는 안내만 하고, 진단 뒤에는 화면에서 보고 내려받는다."""
+        at = open_app("report")
+        self.assertFalse(at.exception)
+        self.assertEqual(at.title[0].value, "진단 보고서")
+        self.assertTrue(any("수준 진단" in i.value for i in at.info))
+        self.assertFalse(at.get("download_button"))
+        self.assertFalse([b for b in at.button if b.key == "open_report"])  # 사이드바 버튼은 없앴다
         at.session_state["levels_example"] = False
         at.run()
-        self.assertFalse(at.button(key="open_report").disabled)
-        at.button(key="open_report").click().run()
+        self.assertFalse(at.exception)
         self.assertTrue([b for b in at.get("download_button") if b.key == "report_btn"])
-        at.sidebar.radio(key="view").set_value("chat").run()
-        self.assertTrue(at.button(key="open_report"))
+        self.assertTrue(any("역량 진단 보고서" in m.value for m in at.markdown))
 
     def test_switching_target_role_changes_both_the_dashboard_and_report(self):
         def market(job):
@@ -133,11 +135,11 @@ class ReportTest(unittest.TestCase):
             self.assertEqual(table["Gap"].tolist(), [50.])
             at.session_state["levels"] = {}
             at.session_state["levels_example"] = False
-            at.sidebar.selectbox(key="job").set_value("ai_engineer").run()
+            set_job(at, "ai_engineer")
             table = next(frame.value for frame in at.dataframe if "Gap" in frame.value.columns)
             self.assertEqual(table["직군"].tolist(), ["AI 엔지니어"])
             self.assertEqual(table["Gap"].tolist(), [60.])
-            at.button(key="open_report").click().run()
+            at.radio(key="view").set_value("report").run()
         self.assertFalse(at.exception)
         md = next(item.value for item in at.markdown if "시장 Gap (내 부족 기술)" in item.value)
         self.assertIn("AI 엔지니어", md)

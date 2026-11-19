@@ -20,6 +20,7 @@ def sidebar():
 
     with st.sidebar:
         mine = levels.sidebar_summary(st.session_state.get("test_session"), "cloud_engineer")
+    levels.survey_button(st.session_state.get("test_session"), "cloud_engineer")  # 화면에서는 학습 상담에 있다
     st.text(str(levels.chat_skills("cloud_engineer", mine)))
 
 

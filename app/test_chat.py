@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
+from app.testing import set_job
+
 from ai.chat import Turn
 from backend import api, chat_profiles
 from backend.jobs import JOBS
@@ -192,6 +194,11 @@ class ChatScreenTest(unittest.TestCase):
                      patch.object(chat_screen.st, "toast") as toast:
                     chat_screen._on_rating(entry)
                 toast.assert_called_once_with("의견 주셔서 감사합니다!")
+                failed = at.session_state["chat_history"][1]
+                with patch.object(chat_screen.st, "session_state", {f"fb_{failed['turn_id']}": 0}),                      patch.object(chat_screen.st, "toast") as toast,                      patch.object(experiments, "save_feedback", side_effect=RuntimeError("down")):
+                    chat_screen._on_rating(failed)
+                self.assertNotIn("rated", failed)                   # 저장하지 못한 평가는 숨기지 않고 감사 인사도 하지 않는다
+                self.assertNotIn("감사", toast.call_args.args[0])
                 at.run()
                 self.assertEqual(len(at.get("feedback")), 1)        # 평가한 답의 위젯은 숨긴다
                 rows = experiments.load_feedback()
@@ -241,7 +248,6 @@ class ChatScreenTest(unittest.TestCase):
         self.assertEqual(at.session_state["levels"]["C1-4"], 4)
         at.button(key="auth_logout").click().run()
         self.assertTrue(at.session_state["levels_example"])
-        self.assertTrue(at.button(key="open_report").disabled)
         self.assertEqual(at.text_input(key="auth_password").value, "")
         self.assertFalse(at.exception)
 
@@ -338,8 +344,8 @@ class ChatScreenTest(unittest.TestCase):
         message = "제가 Docker로 API를 배포했어요."
         at.chat_input[0].set_value(message).run()
         next(r for r in at.radio if "컨테이너" in r.label).set_value(1).run()
-        at.selectbox(key="job").set_value("ai_engineer").run()
-        at.selectbox(key="job").set_value("cloud_engineer").run()
+        set_job(at, "ai_engineer")
+        set_job(at, "cloud_engineer")
         at.chat_input[0].set_value(message).run()
         self.assertEqual(next(r.value for r in at.radio if "컨테이너" in r.label), 3)
         self.assertTrue(at.button(key="apply_chat_levels").disabled)
@@ -366,7 +372,7 @@ class ChatScreenTest(unittest.TestCase):
         self.assertIn("Docker", question.label)
         self.assertIn("Kubernetes", question.label)
         question.set_value(4).run()
-        at.selectbox(key="job").set_value("ai_engineer").run()
+        set_job(at, "ai_engineer")
         self.assertFalse([r for r in at.radio if r.key.startswith("chat_level_")])
         at.chat_input[0].set_value("제가 Python을 사용했어요.").run()
         at.radio(key="chat_level_A2-2").set_value(1).run()
@@ -394,7 +400,6 @@ class ChatScreenTest(unittest.TestCase):
             self.assertFalse(at.chat_message)
             self.assertIsNot(at.session_state["chat_conversation"], first_state)
             self.assertTrue(at.session_state["levels_example"])
-            self.assertTrue(at.button(key="open_report").disabled)
             for key in ("lv_page", "extraction", "extracted_text", "profile_session"):
                 self.assertNotIn(key, at.session_state)
             at.chat_input[0].set_value("내 상태를 정리해줘").run()
@@ -472,7 +477,7 @@ class ChatScreenTest(unittest.TestCase):
 
         second = self.open_screen()
         self.authenticate(second, "역량 예시", password="x")
-        second.selectbox(key="job").set_value("ai_engineer").run()
+        set_job(second, "ai_engineer")
         second.chat_input[0].set_value("제가 acme.flow를 사용했어요. acme.flow만 프로필에 저장해줘.").run()
         self.assertFalse(second.exception)
         profile = chat_profiles.load_profile(second.session_state["profile_session"])
@@ -502,6 +507,12 @@ class ChatScreenTest(unittest.TestCase):
         at.radio(key="view").set_value("gap").run()
         self.assertFalse([b for b in at.button if b.key == "back_to_chat"])  # 메뉴로 직접 가면 돌아가기 버튼이 없다
         at.radio(key="view").set_value("chat").run()
+        next(b for b in at.button if b.key and b.key.startswith("go_")).click().run()
+        at.radio(key="view").set_value("demand").run()  # 바로가기로 간 뒤 메뉴로 다른 화면에 가면 버튼이 남지 않는다
+        self.assertFalse([b for b in at.button if b.key == "back_to_chat"])
+        at.radio(key="view").set_value("gap").run()
+        self.assertFalse([b for b in at.button if b.key == "back_to_chat"])
+        at.radio(key="view").set_value("chat").run()
 
         self.diagnose(at, {"C1-4": 3})
         at.button(key="chat_reset").click().run()  # 새 상담: 대화만 비우고 진단은 그대로 둔다
@@ -509,6 +520,15 @@ class ChatScreenTest(unittest.TestCase):
         self.assertFalse(at.chat_message)
         self.assertEqual(at.session_state["levels"], {"C1-4": 3})
         self.assertTrue(any("진단으로 확인한 보유 기술" in c.value for c in at.caption))
+
+    def test_level_questions_survive_the_turn_that_sets_the_job_by_conversation(self):
+        at = self.open_screen()
+        self.assertEqual(at.session_state["job"], "cloud_engineer")
+        at.chat_input[0].set_value("AI 엔지니어 준비 중이고 제가 RAG를 사용했어요.").run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["job"], "ai_engineer")  # 대화로 직무가 바뀌고
+        pending = at.session_state["chat_assessment"]            # 그 턴에 말한 기술의 문항도 남는다
+        self.assertEqual((pending[0], pending[1]), ("ai_engineer", ["RAG"]))
 
     def test_survey_button_appears_only_with_an_https_address(self):
         self.assertFalse(self.open_screen().sidebar.get("link_button"))
