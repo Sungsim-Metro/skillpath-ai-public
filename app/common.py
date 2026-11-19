@@ -29,7 +29,7 @@ logger = logging.getLogger("skillpath.app")
 
 @dataclass
 class Ctx:
-    """사이드바 입력과 그 입력으로 미리 불러온 값. `app/main.py` 가 만들어 탭마다 넘긴다."""
+    """사이드바 입력과 그 입력으로 미리 불러온 값. `build_ctx` 가 만들고 `app/main.py` 가 고른 화면에 넘긴다."""
 
     job: str
     demand: dict | None  # backend.api.get_demand 결과. 못 받으면 None
@@ -64,6 +64,24 @@ def load(fn, *args, **kwargs):
     except Exception as e:  # noqa: BLE001 - 시연 중 한 구역 오류로 화면 전체가 멈추지 않게
         logger.exception("%s 호출 실패", fn.__name__)
         return None, f"불러오지 못했습니다({type(e).__name__}). 실행한 터미널의 로그를 확인하세요."
+
+
+def build_ctx(job: str, levels: dict[str, int], need: str | None) -> Ctx:
+    """고른 화면에 필요한 데이터만 불러와 Ctx 를 만든다. need 는 None(불러오지 않음), "demand"(수요), "gap"(수요와 Gap)."""
+    from backend import api
+
+    demand, demand_err = load(api.get_demand, job) if need else (None, None)
+    skill_options = [s["skill"] for s in demand["skills"]] if demand else []
+    gap_rows, gap_err, owned = None, None, []
+    if need == "gap" and demand:
+        gap_rows, gap_err = load(api.get_gap, job, levels)
+        owned, _ = load(api.owned_skill_names, job, levels)
+    elif need == "gap":  # 수요 집계가 구현 전이면 이어지는 구역도 '개발 중', 오류면 오류로 보여준다
+        needs_demand = "시장 수요 집계가 있어야 계산할 수 있습니다."
+        gap_err = Pending(needs_demand) if isinstance(demand_err, Pending) else needs_demand
+    missing = [r for r in gap_rows if not r["owned"]] if gap_rows is not None else []
+    return Ctx(job=job, demand=demand, demand_err=demand_err, owned=owned or [], levels=levels,
+               skill_options=skill_options, gap_rows=gap_rows, gap_err=gap_err, missing=missing)
 
 
 def notice(title: str, err: str, will_show: str = ""):

@@ -1,9 +1,11 @@
-"""탭 2: 부족 역량 (Q2 어떤 근거로 필요하다 판단했나)."""
+"""부족 역량 화면 (Q2 어떤 근거로 필요하다 판단했나).
+
+능력 범주별 Gap 과 영역별 역량을 펼쳐 두고, 부족한 기술 표·교육 공급·채용 시장 Gap 은 아래에 접어 둔다(2026-11-20).
+"""
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-from app.tabs.connect import render_connect
 from app.common import (
     ACCENT,
     ACCENT_LIGHT,
@@ -147,15 +149,16 @@ def render_market_gap(ctx: Ctx) -> None:
         ).properties(height=30 * len(ranked))
         st.altair_chart(gaps, width="stretch")
 
-    with st.expander(f"{job_title} 전체 기술 표"):
-        st.dataframe(df, hide_index=True, width="stretch", column_config={
-            "수요 비중": st.column_config.NumberColumn("수요 비중 (%)", format="%.1f"),
-            "공급 비중": st.column_config.NumberColumn("공급 비중 (%)", format="%.1f"),
-            "Gap": st.column_config.NumberColumn("Gap (%p)", format="%.1f"),
-        })
-        st.download_button("선택 직군 CSV 내려받기", data=job_gap_csv(market["rows"]),
-                           file_name=f"learning_program_gap_{ctx.job}.csv",
-                           mime="text/csv", key="market_gap_csv", on_click="ignore")
+    # 이 구역이 접힌 칸 안에 있어 표를 다시 접지 않는다(접는 칸은 겹칠 수 없다)
+    st.markdown(f"**{job_title} 전체 기술 표**")
+    st.dataframe(df, hide_index=True, width="stretch", column_config={
+        "수요 비중": st.column_config.NumberColumn("수요 비중 (%)", format="%.1f"),
+        "공급 비중": st.column_config.NumberColumn("공급 비중 (%)", format="%.1f"),
+        "Gap": st.column_config.NumberColumn("Gap (%p)", format="%.1f"),
+    })
+    st.download_button("선택 직군 CSV 내려받기", data=job_gap_csv(market["rows"]),
+                       file_name=f"learning_program_gap_{ctx.job}.csv",
+                       mime="text/csv", key="market_gap_csv", on_click="ignore")
 
 
 def _render_gap(ctx: Ctx):
@@ -166,6 +169,7 @@ def _render_gap(ctx: Ctx):
     c2.metric("주요 요구 기술", f"{len(gap_rows)}개", help="공고의 20% 이상이 요구한 기술", border=True)
     c3.metric("그중 보유", f"{len(have)}개", help="내 단계가 기준 단계 이상인 기술", border=True)
     c4.metric("부족", f"{len(missing)}개", border=True)
+    st.caption("사이드바의 목표 직무와 수준 진단으로 계산한 값입니다. 학습 상담의 답은 대화에서 말한 경험까지 반영해 다를 수 있습니다.")
     guessed = [r for r in gap_rows if r["required_level_confidence"] == "uncertain"]
     if guessed:
         st.warning(
@@ -183,13 +187,12 @@ def _render_gap(ctx: Ctx):
         st.subheader("영역별 역량: 지금과 추천 과정을 마친 뒤")
         render_radar(ctx)
 
-    with st.container(border=True):
+    with st.expander(f"부족한 기술 {len(missing)}개 (수요 높은 순)"):
         if not gap_rows:
             st.info("이 직무에서 보유 수준과 비교할 주요 요구 기술이 없습니다.")
         elif not missing:
             st.success("주요 요구 기술을 모두 보유했습니다.")
         else:
-            st.subheader(f"부족한 기술 {len(missing)}개 (수요 높은 순)")
             st.dataframe(
                 pd.DataFrame([
                     {
@@ -221,10 +224,6 @@ def _render_gap(ctx: Ctx):
             st.caption("이미 보유: " + ", ".join(
                 r["skill"] + (" (불확실)" if r["required_level_confidence"] == "uncertain" else "") for r in have))
 
-    with st.container(border=True):
-        st.subheader("현직자에게 물어보기")
-        render_connect(ctx)
-
 
 def render(ctx: Ctx):
     gap_err = ctx.gap_err
@@ -238,10 +237,8 @@ def render(ctx: Ctx):
     else:
         _render_gap(ctx)
 
-    with st.container(border=True):
-        st.subheader("교육 공급")
+    with st.expander("교육 공급"):
         render_supply()
 
-    with st.container(border=True):
-        st.subheader("채용 시장 Gap")
+    with st.expander("채용 시장 Gap"):
         render_market_gap(ctx)

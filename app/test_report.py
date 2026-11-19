@@ -7,6 +7,8 @@ from unittest import mock
 
 from streamlit.testing.v1 import AppTest
 
+from app.testing import open_app
+
 MAIN = str(Path(__file__).resolve().parent / "main.py")
 
 
@@ -125,7 +127,7 @@ class ReportTest(unittest.TestCase):
             return {"rows": [row], "source": "검산 자료"}
 
         with mock.patch("backend.api.get_market_gap", side_effect=market):
-            at = AppTest.from_file(MAIN, default_timeout=60).run()
+            at = open_app("gap")
             self.assertFalse(at.exception)
             table = next(frame.value for frame in at.dataframe if "Gap" in frame.value.columns)
             self.assertEqual(table["Gap"].tolist(), [50.])

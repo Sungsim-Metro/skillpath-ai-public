@@ -2,16 +2,20 @@ Streamlit 화면. 화면 코드만 두고 로직은 다른 폴더의 함수를 �
 
 | 파일 | 내용 |
 | --- | --- |
-| `main.py` | 사이드바 입력과 탭 배치. 실행은 저장소 루트에서 `streamlit run app/main.py` |
-| `common.py` | 함께 쓰는 상수(색, 문구)와 도우미(`load`, `notice`), 탭에 넘기는 입력 묶음 `Ctx` |
-| `tabs/demand.py` | 탭 1 시장 수요 |
-| `tabs/gap.py` | 탭 2 부족 역량 |
-| `tabs/recommend.py` | 탭 3 학습 추천 |
-| `tabs/extract.py` | 탭 4 공고 직접 분석 |
+| `main.py` | 사이드바 입력과 화면 선택. 첫 화면은 학습 상담이고 나머지는 사이드바 메뉴에서 엽니다. 실행은 저장소 루트에서 `streamlit run app/main.py` |
+| `common.py` | 함께 쓰는 상수(색, 문구)와 도우미(`load`, `notice`), 화면에 넘기는 입력 묶음 `Ctx`와 필요한 데이터만 불러오는 `build_ctx` |
+| `chat.py` | 학습 상담(첫 화면)과 프로필 로그인 |
+| `tabs/demand.py` | 시장 수요 |
+| `tabs/gap.py` | 부족 역량. 능력 범주별 Gap과 영역별 역량을 펼치고 부족한 기술 표, 교육 공급, 채용 시장 Gap은 접어 둡니다 |
+| `tabs/recommend.py` | 학습 추천 |
+| `tabs/connect.py` | 현직자에게 물어보기 |
+| `tabs/extract.py` | 공고 직접 분석. 메뉴에서 뺐고 파일만 남겼습니다(2026-11-20) |
+| `testing.py` | 화면 테스트가 함께 쓰는 `open_app` |
 | `test_app.py` | 가짜 모드에서 화면이 오류 없이 뜨는지 확인. `python -m app.test_app` |
 
-새 탭은 `tabs/`에 `render(ctx)` 함수가 있는 파일을 더하고 `main.py`의 `TABS`에 한 줄을 넣습니다.
-탭 파일끼리는 서로 가져다 쓰지 않습니다. 함께 쓸 것은 `common.py`에 둡니다.
+새 화면은 `tabs/`에 `render(ctx)` 함수가 있는 파일을 더하고 `main.py`의 `VIEWS`에 한 줄을 넣습니다.
+화면을 바로 열려면 주소에 `?view=<값>`을 붙입니다(`chat`, `demand`, `gap`, `recommend`, `connect`). 모르는 값은 학습 상담으로 갑니다.
+화면 파일끼리는 서로 가져다 쓰지 않습니다. 함께 쓸 것은 `common.py`에 둡니다.
 
 ## 학습 상담 실행
 
@@ -19,7 +23,7 @@ Streamlit 화면. 화면 코드만 두고 로직은 다른 폴더의 함수를 �
 BEDROCK_MOCK=1 uv run --python 3.11 --with-requirements requirements.txt streamlit run app/main.py
 ```
 
-사이드바에서 **학습 상담**을 선택하거나 `http://localhost:8501/?view=chat`으로 바로 접속합니다. “제가 Docker로 API를 배포했어요” 다음에 “내 경험을 정리해줘”, “무엇이 부족해?”, “그중 어떤 과정을 들을까?”를 차례로 입력하면 각 요청의 결과를 확인할 수 있습니다.
+접속하면 첫 화면이 **학습 상담**입니다(`http://localhost:8501`). “제가 Docker로 API를 배포했어요” 다음에 “내 경험을 정리해줘”, “무엇이 부족해?”, “그중 어떤 과정을 들을까?”를 차례로 입력하면 각 요청의 결과를 확인할 수 있습니다.
 
 사이드바에서 닉네임과 비밀번호를 입력하고 **새 프로필 만들기**를 누릅니다. 다시 접속하면 같은 정보로 **로그인**합니다. 상담에서 “Docker 배포 경험을 프로필에 저장해줘”처럼 저장 대상을 지정할 수 있습니다. 대화 원문은 현재 Streamlit 세션에만 두며 **로그아웃**하면 대화와 개인 입력을 비웁니다. 손님도 현재 세션에서 진단과 상담을 이용할 수 있습니다.
 

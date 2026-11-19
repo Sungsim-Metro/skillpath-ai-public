@@ -1,12 +1,9 @@
 """목표 직무를 AI 엔지니어로 골랐을 때의 화면 확인(가짜 모드, 2026-11-19). 실행: python -m unittest app.test_ai_job"""
 import os
 import unittest
-from pathlib import Path
 from unittest import mock
 
-from streamlit.testing.v1 import AppTest
-
-MAIN = str(Path(__file__).resolve().parent / "main.py")
+from app.testing import open_app
 
 
 class AiJobScreenTest(unittest.TestCase):
@@ -14,13 +11,14 @@ class AiJobScreenTest(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1"})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.at = AppTest.from_file(MAIN, default_timeout=60).run()
+        self.at = open_app("gap")
         self.at.sidebar.selectbox(key="job").set_value("ai_engineer").run()
 
     def test_dashboard_uses_ai_data(self):
         at = self.at
         self.assertFalse(at.exception)
-        self.assertEqual(at.title[0].value, "AI 엔지니어 역량 진단")
+        self.assertEqual(at.title[0].value, "부족 역량")
+        self.assertTrue(any(c.value.startswith("AI 엔지니어 · 채용공고") for c in at.caption))
         captions = " ".join(c.value for c in at.sidebar.caption)
         self.assertIn("생성형 AI·프롬프트", captions)      # 사이드바 영역 평균이 AI 영역
         self.assertNotIn("컴퓨팅·서버", captions)

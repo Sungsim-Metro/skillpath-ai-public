@@ -36,12 +36,14 @@ class AdminPageTest(unittest.TestCase):
         with patch.dict(os.environ, {"ADMIN_KEY": ""}):
             self.assertFalse(admin.allowed(""))                # 열쇠를 정하지 않았으면 열리지 않는다
 
-    def test_user_screen_is_unchanged_and_has_no_admin_tab(self):
+    def test_user_screen_has_no_admin_menu(self):
         at = AppTest.from_file(MAIN, default_timeout=60)
         at.query_params["admin"] = "열쇠-1"
         at.run()
         self.assertFalse(at.exception)
-        self.assertEqual([tab.label for tab in at.tabs], ["시장 수요", "부족 역량", "학습 추천", "공고 직접 분석"])
+        self.assertFalse(at.tabs)
+        self.assertEqual(list(at.sidebar.radio(key="view").options),
+                         ["학습 상담", "시장 수요", "부족 역량", "학습 추천", "현직자에게 물어보기"])  # 메뉴에 관리자 항목이 없다
 
     def test_every_section_renders_without_data(self):
         at = AppTest.from_string(PAGE, default_timeout=60).run()

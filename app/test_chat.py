@@ -76,7 +76,7 @@ class ChatScreenTest(unittest.TestCase):
             self.assertEqual(call.call_count, 4)
 
         self.authenticate(at, "처음 닉네임", register=True)
-        at.radio(key="view").set_value("dashboard").run()
+        at.radio(key="view").set_value("gap").run()
         at.radio(key="view").set_value("chat").run()
         self.assertEqual(at.metric[0].value, "110")
         self.assertEqual(session_id, at.session_state["chat_conversation"].usage.session_id)
@@ -193,15 +193,15 @@ class ChatScreenTest(unittest.TestCase):
             at.chat_input[0].set_value("다시 정리해줘").run()
             # 컨테이너 3단계는 기준(3)을 넘어 Docker·Kubernetes 보유, 스크립트 2단계는 Python 미보유
             self.assertEqual(handle.call_args.kwargs["sidebar_skills"], ["Docker", "Kubernetes"])
-        at.radio(key="view").set_value("dashboard").run()
+        at.radio(key="view").set_value("gap").run()
         self.assertEqual(at.session_state["levels"], {"C1-4": 3, "C5-2": 2})
-        self.assertEqual(len(at.tabs), 4)
+        self.assertEqual(at.title[0].value, "부족 역량")
         self.assertFalse(at.exception)
 
     def test_levels_require_authentication_before_they_are_reloaded(self):
         session = chat_profiles.create_profile("수준 예시", self.password)
         chat_profiles.update_profile(session, levels={"C1-4": 4, "C2-3": 2})
-        at = self.open_screen("dashboard")
+        at = self.open_screen("gap")
         with patch.object(chat_profiles, "load_profile", wraps=chat_profiles.load_profile) as read:
             at.text_input(key="auth_nickname").set_value("수준 예시").run()
             self.authenticate(at, "수준 예시", password="incorrect example password")
@@ -223,7 +223,7 @@ class ChatScreenTest(unittest.TestCase):
         self.authenticate(at, "첫째", register=True)
         self.diagnose(at, {"C1-4": 3})
         at.chat_input[0].set_value("프로젝트에서 제가 Docker로 API를 배포했어요.").run()
-        at.radio(key="view").set_value("dashboard").run()
+        at.radio(key="view").set_value("gap").run()
         at.radio(key="view").set_value("chat").run()
         self.assertEqual(len(at.chat_message), 2)
         first_state = at.session_state["chat_conversation"]

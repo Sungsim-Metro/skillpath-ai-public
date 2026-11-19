@@ -1,6 +1,6 @@
 """현직자 연결 카드: 부족 영역에 맞는 개발자 모임과 직무별 사람 찾기 검색 링크 (2026-11-17 결정).
 
-부족 역량 탭 맨 아래의 한 구역이다. 사람을 조회하거나 추천하지 않는다. 모임은 공개 페이지를 보고 적은 목록에서 코드가 고르고,
+사이드바 메뉴의 '현직자에게 물어보기' 화면이다(2026-11-20 에 부족 역량 화면에서 떼어 냈다). 사람을 조회하거나 추천하지 않는다. 모임은 공개 페이지를 보고 적은 목록에서 코드가 고르고,
 사람 찾기는 검색 주소만 만들어 사용자가 직접 누른다. LLM 을 부르지 않는다.
 """
 import streamlit as st
@@ -55,3 +55,13 @@ def render_connect(ctx: Ctx):
     st.link_button(job_link["label"], job_link["url"], icon=":material/search:", type="primary")
     for col, link in zip(st.columns(2), skill_links):
         col.link_button(link["label"], link["url"], icon=":material/search:", width="stretch")
+
+
+def render(ctx: Ctx):
+    if ctx.gap_err:
+        notice("현직자에게 물어보기", ctx.gap_err, "부족한 영역에 맞는 개발자 모임과 사람 찾기 검색 링크가 여기에 나옵니다.")
+        return
+    st.caption("부족한 영역은 사이드바의 목표 직무와 수준 진단으로 계산합니다.")
+    with st.container(border=True):
+        st.subheader("현직자에게 물어보기")
+        render_connect(ctx)

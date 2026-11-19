@@ -5,12 +5,11 @@
 import json
 import os
 import unittest
-from pathlib import Path
 from unittest import mock
 
 from streamlit.testing.v1 import AppTest
 
-MAIN = str(Path(__file__).resolve().parent / "main.py")
+from app.testing import MENU, open_app
 
 
 class AppSmokeTest(unittest.TestCase):
@@ -18,14 +17,24 @@ class AppSmokeTest(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1"})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.at = AppTest.from_file(MAIN, default_timeout=60).run()
+        self.at = open_app("gap")
 
-    def test_all_tabs_render_in_mock_mode(self):
-        self.assertFalse(self.at.exception)
-        self.assertEqual([t.label for t in self.at.tabs], ["시장 수요", "부족 역량", "학습 추천", "공고 직접 분석"])
+    def test_every_menu_screen_renders_in_mock_mode(self):
+        first = open_app()
+        self.assertEqual(first.session_state["view"], "chat")  # 첫 화면은 학습 상담
+        self.assertEqual(list(first.sidebar.radio(key="view").options), list(MENU.values()))
+        self.assertEqual(open_app("dashboard").session_state["view"], "chat")  # 모르는 값은 첫 화면으로
+        for view, label in MENU.items():
+            at = open_app(view)
+            self.assertFalse(at.exception, view)
+            self.assertFalse(at.tabs, view)
+            self.assertEqual(at.title[0].value, label)
 
     def test_extract_button_shows_result(self):
-        at = self.at.button(key="extract_btn").click().run()
+        """공고 직접 분석은 메뉴에서 뺐지만 화면 코드는 남아 있다."""
+        at = AppTest.from_function(_extract_screen).run()
+        self.assertFalse(at.exception)
+        at = at.button(key="extract_btn").click().run()
         self.assertFalse(at.exception)
         self.assertIn("추출 결과", [h.value for h in at.subheader])
 
@@ -69,6 +78,13 @@ class AppSmokeTest(unittest.TestCase):
         self.assertFalse(at.exception)
 
 
+def _extract_screen():
+    from app.common import build_ctx
+    from app.tabs.extract import render
+
+    render(build_ctx("cloud_engineer", {}, None))
+
+
 def _market_without_personal_demand():
     from app.common import Ctx
     from app.tabs.gap import render
@@ -85,7 +101,7 @@ class MarketGapScreenTest(unittest.TestCase):
              mock.patch("backend.api.get_market_gap", side_effect=FileNotFoundError):
             at = AppTest.from_function(_market_without_personal_demand).run()
         self.assertFalse(at.exception)
-        self.assertIn("교육 공급", [heading.value for heading in at.subheader])
+        self.assertIn("교육 공급", [box.label for box in at.expander])
         self.assertTrue(any("교육과정 목록" in caption.value and "3개" in caption.value for caption in at.caption))
         table = next(frame.value for frame in at.dataframe if "과정 수" in frame.value.columns)
         self.assertEqual(table.to_dict("records"), [{"기술": "SQL", "과정 수": 2}, {"기술": "Docker", "과정 수": 1}])
@@ -96,7 +112,7 @@ class MarketGapScreenTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1"}), \
              mock.patch("backend.api.owned_skill_names", return_value=["AWS"]), \
              mock.patch("backend.api.get_market_gap", return_value={"rows": rows, "source": "검산 자료"}):
-            at = AppTest.from_file(MAIN, default_timeout=60).run()
+            at = open_app("gap")
         self.assertFalse(at.exception)
         table = next(frame.value for frame in at.dataframe if "Gap" in frame.value.columns)
         self.assertEqual(table["내 보유"].tolist(), ["보유", "-"])
@@ -108,7 +124,7 @@ class MarketGapScreenTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1"}), \
              mock.patch("backend.api.get_demand", return_value=demand), \
              mock.patch("backend.api.get_market_gap", return_value={"rows": rows, "source": "예시 입력"}):
-            at = AppTest.from_file(MAIN, default_timeout=60).run()
+            at = open_app("gap")
         self.assertFalse(at.exception)
         table = next(frame.value for frame in at.dataframe if "Gap" in frame.value.columns)
         self.assertEqual(table["직군"].tolist(), ["클라우드 엔지니어"])

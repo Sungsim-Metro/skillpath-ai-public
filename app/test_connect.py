@@ -1,12 +1,9 @@
 """현직자 연결 카드 화면 확인(가짜 모드). 실행: python -m app.test_connect"""
 import os
 import unittest
-from pathlib import Path
 from unittest import mock
 
-from streamlit.testing.v1 import AppTest
-
-MAIN = str(Path(__file__).resolve().parent / "main.py")
+from app.testing import open_app
 
 
 class ConnectScreenTest(unittest.TestCase):
@@ -14,7 +11,7 @@ class ConnectScreenTest(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1"})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.at = AppTest.from_file(MAIN, default_timeout=60).run()
+        self.at = open_app("connect")
 
     def _section_text(self, at) -> str:
         self.assertFalse(at.exception)

@@ -1,12 +1,9 @@
 """영역 레이더 화면 확인(가짜 모드, #91). 실행: python -m unittest app.test_radar"""
 import os
 import unittest
-from pathlib import Path
 from unittest import mock
 
-from streamlit.testing.v1 import AppTest
-
-MAIN = str(Path(__file__).resolve().parent / "main.py")
+from app.testing import open_app
 
 
 def _radar_caption(at) -> str:
@@ -24,7 +21,7 @@ class RadarScreenTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_only_certain_courses_raise_levels(self):
-        at = AppTest.from_file(MAIN, default_timeout=60).run()
+        at = open_app("gap")
         self.assertFalse(at.exception)
         note = _radar_caption(at)
         # 가짜 추천: Terraform 은 불확실 과정만, Linux·Python·Git 은 과정 없음(data/sample/recommendations.json)
@@ -42,7 +39,7 @@ class RadarScreenTest(unittest.TestCase):
             raise RuntimeError("down")
 
         with mock.patch("backend.api.get_recommendations", get_recommendations):
-            at = AppTest.from_file(MAIN, default_timeout=60).run()
+            at = open_app("gap")
         self.assertFalse(at.exception)
         self.assertIn("추천을 불러오지 못해 '마친 뒤'가 지금과 같게 나옵니다", _radar_caption(at))
         table = _radar_table(at)
