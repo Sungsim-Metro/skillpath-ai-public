@@ -156,6 +156,33 @@ def owned_skill_names(job_category: str, owned_skills) -> list[str]:
     return [s for s in skills if mine[s] >= required_level(s, job_category)[0]]
 
 
+def get_level_radar(job_category: str, owned_skills) -> list[dict]:
+    """영역마다 그 영역 기술들의 내 단계 평균과 기준 단계 평균(0~5)을 돌려준다. 마이페이지의 레이더 차트가 쓴다.
+
+    [{"area_id", "area", "skills", "level", "required", "required_uncertain"}] 를 영역 표 순서로 준다(공통 영역 제외).
+    skills 는 그 영역에 배정된 기술 이름, required_uncertain 은 기준 단계가 아직 정해지지 않아 기본값으로 본 기술 수다.
+    계산은 전부 코드로 하고 수요 집계(get_demand)를 부르지 않는다. 상담 화면에서도 그릴 수 있게 하려는 것이다.
+    """
+    table = _skill_areas(job_category)
+    by_area: dict[str, list[str]] = {area_id: [] for area_id in table["areas"] if area_id != "COMMON"}
+    for skill, area_id in table["skills"].items():
+        if area_id in by_area:
+            by_area[area_id].append(skill)
+    mine = skill_levels(owned_skills, [s for names in by_area.values() for s in names], job_category)
+    rows = []
+    for area_id, names in by_area.items():
+        if not names:
+            continue
+        need = [required_level(s, job_category) for s in names]
+        rows.append({
+            "area_id": area_id, "area": table["areas"][area_id], "skills": names,
+            "level": round(sum(mine[s] for s in names) / len(names), 1),
+            "required": round(sum(level for level, _ in need) / len(need), 1),
+            "required_uncertain": sum(confidence == "uncertain" for _, confidence in need),
+        })
+    return rows
+
+
 def get_area_gap(job_category: str, owned_skills) -> list[dict]:
     """영역(능력 범주)마다 공고 수요와 그중 내가 채운 몫을 돌려준다. 계산은 전부 코드로 한다.
 

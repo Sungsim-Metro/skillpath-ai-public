@@ -20,7 +20,9 @@ class AiJobScreenTest(unittest.TestCase):
         self.assertEqual(at.title[0].value, "부족 역량")
         self.assertTrue(any(c.value.startswith("AI 엔지니어 · 채용공고") for c in at.caption))
         captions = " ".join(c.value for c in at.sidebar.caption)
-        self.assertIn("생성형 AI·프롬프트", captions)      # 사이드바 영역 평균이 AI 영역
+        self.assertIn("생성형 AI·프롬프트", captions)      # 사이드바의 보유 수준이 AI 영역
+        self.assertIn("(내 단계/기준 단계, 0~5)", captions)
+        self.assertEqual(len(at.sidebar.get("vega_lite_chart")), 1)  # 마이페이지의 레이더 차트
         self.assertNotIn("컴퓨팅·서버", captions)
         self.assertTrue(any("'마친 뒤'는" in c.value for c in at.caption))  # 레이더가 그려진다(AI 영역 4개)
 

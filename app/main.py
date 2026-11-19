@@ -34,8 +34,10 @@ from backend import api  # noqa: E402
 from backend.jobs import JOBS  # noqa: E402
 
 from app import chat as chat_screen  # noqa: E402
+from app import course_card  # noqa: E402
 from app import levels as levels_screen  # noqa: E402
 from app import report_dialog  # noqa: E402
+from app import tour  # noqa: E402
 from app.common import build_ctx  # noqa: E402
 from app.tabs import connect as tab_connect  # noqa: E402
 from app.tabs import demand as tab_demand  # noqa: E402
@@ -90,6 +92,8 @@ with st.sidebar:
     st.divider()
     levels = levels_screen.sidebar_summary(session, job)
     st.divider()
+    course_card.saved_list()  # 담아 둔 과정
+    tour.sidebar_link()
     survey = os.getenv("SURVEY_URL", "").strip()
     if survey.startswith("https://"):  # 사용자 테스트 설문 주소가 있을 때만 보인다
         st.link_button("사용 후기 설문 참여하기", survey, icon=":material/rate_review:", type="primary", width="stretch")
@@ -98,6 +102,7 @@ with st.sidebar:
     else:
         st.caption("실제 모드입니다 (BEDROCK_MOCK=0).")
 
+tour.show_if_open()  # 처음 들어온 사용자에게 기능을 단계별로 보여 준다
 label, render, need = VIEWS[view]
 if view == "chat":
     confirmed_levels = None if st.session_state.levels_example else levels

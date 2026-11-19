@@ -307,12 +307,9 @@ def sidebar_summary(session: chat_profiles.ProfileSession | None, job: str) -> d
         st.caption(f"아직 진단 전이라 예시 값({EXAMPLE_TEXT.get(job, '예시')})으로 보여줍니다.")
     elif not any(levels.get(sid) is not None for sid in guide):
         st.caption("이 직무는 아직 진단하지 않았습니다. 진단하지 않은 세부 능력은 0단계로 봅니다.")
-    lines = []
-    for area_id, area_name in _areas(job).items():
-        values = [levels.get(sid, 0) for sid, row in guide.items() if row["area_id"] == area_id]
-        avg = sum(values) / len(values) if values else 0
-        lines.append(f"{area_name} {avg:.1f}")
-    st.caption(" · ".join(lines) + " (영역 평균, 0~5)")
+    from app.level_radar import render_level_radar
+
+    render_level_radar(job, levels)  # 영역별 내 단계와 기준 단계를 레이더 차트로 보여 준다
     st.caption("수준 진단은 학습 상담 화면의 '수준 진단 설문'에서 합니다.")
     _custom_levels(session)
     notice = st.session_state.pop("levels_notice", None)

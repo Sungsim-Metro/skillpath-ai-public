@@ -32,7 +32,7 @@ def skill_options() -> tuple[str, ...]:
 
 
 # 로그아웃해도 남기는 값: 보던 화면과 '첫 화면을 지났다'는 표시(로그아웃하면 비회원으로 계속 본다)
-KEPT_AFTER_LOGOUT = ("view", "entered")
+KEPT_AFTER_LOGOUT = ("view", "entered", "tour_hidden")
 
 
 def _clear_private_state() -> None:
@@ -71,8 +71,11 @@ def entry_gate() -> None:
     비회원은 모든 화면을 보지만 프로필을 저장하거나 불러오지 않는다. 한 번 지나면 로그아웃해도 다시 막지 않는다.
     """
     if st.session_state.get("entered") or st.session_state.get("profile_session") is not None:
+        if st.session_state.pop("gate_shown", False) and "tour_hidden" not in st.session_state:
+            st.session_state.tour_open = True  # 방금 첫 화면을 지나 들어왔으면 사용 안내 창을 한 번 연다
         st.session_state.entered = True
         return
+    st.session_state.gate_shown = True
     _, middle, _ = st.columns([1, 2, 1])
     with middle:
         st.title("skillpath-ai")
@@ -225,13 +228,13 @@ def _render_answer(entry: dict, index: int) -> None:
                               width="stretch", on_click=_on_pick, args=(entry, name))
                 elif chosen == name:
                     st.caption(":material/check_circle: 이 추천을 골랐습니다.")
-                render_course_list(side["courses"])
+                render_course_list(side["courses"], key=f"chat{index}{name}")
         if not chosen:
             st.button("둘이 비슷해요", key=f"ab_{entry['turn_id']}_tie", on_click=_on_pick, args=(entry, "tie"))
         elif chosen == "tie":
             st.caption(":material/check_circle: 둘이 비슷하다고 골랐습니다.")
     else:
-        render_course_list(entry["courses"])
+        render_course_list(entry["courses"], key=f"chat{index}")
     action = entry.get("action")  # 평가 기능 이전의 열린 세션 기록에는 요청 종류가 없다
     shortcut = SHORTCUTS.get(action)
     if shortcut and (action == "gap" or entry["courses"] or entry["alternatives"]):

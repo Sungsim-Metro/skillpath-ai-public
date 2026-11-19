@@ -39,7 +39,7 @@ def _render_recommendations(ctx: Ctx):
     area_of = {r["skill"]: r["area"] for r in missing}
     # 길게 늘어놓지 않고 기술마다 탭으로 넘겨 본다. 탭 순서는 공고 수요가 높은 순서다
     labels = [f"{priority}. {md_escape(rec['gap_skill'])}" for priority, rec in enumerate(recs, start=1)]
-    for tab, rec in zip(st.tabs(labels), recs):
+    for number, (tab, rec) in enumerate(zip(st.tabs(labels), recs)):
         d = rec["demand"]
         with tab:
             st.subheader(rec["gap_skill"], anchor=False)
@@ -50,7 +50,7 @@ def _render_recommendations(ctx: Ctx):
                             f"AWS 기초·자격증 과정 연결을 준비하고 있습니다. {PENDING}")
             elif not rec["courses"]:
                 st.write("이 기술을 다루는 교육과정을 찾지 못했습니다.")
-            render_course_list(rec["courses"], columns=CARDS_PER_ROW)
+            render_course_list(rec["courses"], columns=CARDS_PER_ROW, key=f"rec{number}")
     st.caption("탭은 공고 수요가 높은 기술 순서입니다. 카드의 순위는 그 기술 안에서의 추천 순서입니다(직접 다루는 과정이 먼저, "
                "그다음 내 단계에 맞는 난이도). 'AWS Skill Builder'는 그 기술을 직접 다루는 과정, '유사 과정'은 직접 다루는지 "
                "확인하지 못한 관련 과정입니다. " + RATING_NOTE)

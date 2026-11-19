@@ -59,6 +59,37 @@ class EntryScreenTest(unittest.TestCase):
         self.assertNotIn("profile_session", at.session_state)
         self.assertTrue(at.sidebar.button(key="auth_login"))  # 들어온 뒤에도 사이드바에서 로그인할 수 있다
 
+    def test_first_entry_shows_the_guide_once_and_it_can_be_reopened_only_when_asked(self):
+        at = open_app(entered=False)
+        self.assertNotIn("tour_open", at.session_state)
+        at.button(key="guest_enter").click().run()
+        self.assertFalse(at.exception)
+        self.assertTrue(at.session_state["tour_open"])
+        self.assertTrue(at.checkbox(key="tour_hide").value)  # '다시 보지 않기'가 처음부터 체크돼 있다
+        self.assertTrue(at.button(key="tour_prev").disabled)
+        steps = 1
+        while [b for b in at.button if b.key == "tour_next"]:
+            at.button(key="tour_next").click().run()
+            self.assertFalse(at.exception)
+            steps += 1
+        self.assertEqual(steps, 5)
+        at.button(key="tour_done").click().run()
+        self.assertFalse(at.session_state["tour_open"])
+        self.assertFalse([b for b in at.button if b.key and b.key.startswith("tour_")])  # 닫으면 다시 뜨지 않는다
+        at.radio(key="view").set_value("gap").run()
+        self.assertFalse([b for b in at.button if b.key and b.key.startswith("tour_")])
+
+        again = open_app(entered=False)
+        again.button(key="guest_enter").click().run()
+        again.checkbox(key="tour_hide").set_value(False).run()
+        again.button(key="tour_skip").click().run()  # 체크를 풀고 닫으면 사이드바에서 다시 열 수 있다
+        self.assertFalse(again.session_state["tour_open"])
+        again.sidebar.button(key="tour_reopen").click().run()
+        self.assertTrue(again.session_state["tour_open"])
+        self.assertTrue([b for b in again.button if b.key == "tour_next"])
+
+        self.assertNotIn("tour_open", open_app().session_state)  # 화면 테스트처럼 첫 화면을 거치지 않으면 뜨지 않는다
+
     def test_sign_up_and_login_enter_the_chat_and_wrong_passwords_do_not(self):
         at = _submit(open_app(entered=False), "entry_register", "예시 사용자")
         self.assertFalse(at.exception)
