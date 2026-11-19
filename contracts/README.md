@@ -143,6 +143,13 @@ Gap 행(`get_gap`)에 더한 필드:
 
 `get_area_gap`의 `owned`는 기술마다 요구 공고 수 × 충족도를 더한 값이라 소수일 수 있다.
 
+`get_area_gap_after(job, 보유 입력, 추천 목록)`(레이더 "마친 뒤", 2026-11-19 #91)은 `get_area_gap`과 같은 영역 행에 필드 하나를 더한다.
+추천 목록은 ③ `get_recommendations` 결과이고, `match`가 `certain`인 과정만 마친 것으로 본다.
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| `raised` | array | `[{"skill", "from", "to"}]` 이 영역에서 단계가 오르는 기술. 예상 단계는 과정 난이도로 정한다(기초 2, 중급 3, `backend/levels.py`의 `AFTER_COURSE_LEVEL`). 지금이 더 높으면 오르지 않아 넣지 않는다 |
+
 기준 단계(`data/required_levels.json`)는 `pipeline/required_levels.py`가 만든다. 공고 근거 문장(②의 `evidence`, 수요 집계와 같이 `confidence`가 `high`인 것)을
 단계 예시와 임베딩으로 비교해 공고별 요구 단계를 정하고, 기술별 중앙값을 코드로 계산한다. 파일에는 집계 숫자만 쓰고 공고 문장은 넣지 않는다.
 

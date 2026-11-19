@@ -112,6 +112,16 @@ def course_level_first(level: float) -> str:
     return "중급" if level >= INTERMEDIATE_FROM else "기초"
 
 
+# 확실한 추천 과정을 마쳤다고 볼 때의 예상 단계(레이더 "마친 뒤", #91). 팀 결정값(2026-11-19)이며 근거 자료는 없다.
+# 기초 과정은 2단계(안내를 보며 기본 작업), 중급 과정은 3단계(혼자 구성·구현). 그 밖의 난이도는 올리지 않는다
+AFTER_COURSE_LEVEL = {"기초": 2, "중급": 3}
+
+
+def level_after_courses(level: float, course_levels: list[str]) -> float:
+    """지금 단계와 마친 과정들의 난이도로 예상 단계를 낸다. 지금 단계가 더 높으면 그대로 둔다."""
+    return max([level, *(AFTER_COURSE_LEVEL.get(lv, 0) for lv in course_levels)])
+
+
 def whole(x: float):
     """7.0 → 7. 화면과 예전 테스트가 정수를 그대로 받게 한다."""
     return int(x) if float(x).is_integer() else round(x, 1)

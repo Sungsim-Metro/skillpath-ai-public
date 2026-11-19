@@ -16,6 +16,7 @@ from app.common import (
     load,
     notice,
 )
+from app.tabs.radar import render_radar
 from backend import api
 
 def render_area_gap(ctx: Ctx):
@@ -137,6 +138,10 @@ def _render_gap(ctx: Ctx):
     with st.container(border=True):
         st.subheader("능력 범주별 Gap")
         render_area_gap(ctx)
+
+    with st.container(border=True):
+        st.subheader("영역별 역량: 지금과 추천 과정을 마친 뒤")
+        render_radar(ctx)
 
     with st.container(border=True):
         st.subheader("채용 시장 Gap")
