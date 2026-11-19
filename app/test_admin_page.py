@@ -38,6 +38,7 @@ class AdminPageTest(unittest.TestCase):
 
     def test_user_screen_has_no_admin_menu(self):
         at = AppTest.from_file(MAIN, default_timeout=60)
+        at.session_state["entered"] = True
         at.query_params["admin"] = "열쇠-1"
         at.run()
         self.assertFalse(at.exception)

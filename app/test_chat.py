@@ -31,6 +31,7 @@ class ChatScreenTest(unittest.TestCase):
     def open_screen(self, view="chat"):
         at = AppTest.from_file(MAIN, default_timeout=60)
         at.query_params["view"] = view
+        at.session_state["entered"] = True  # 로그인·회원가입 화면을 비회원으로 지난 상태(app/test_entry.py 가 그 화면을 본다)
         at.run()
         self.assertFalse(at.exception)
         return at

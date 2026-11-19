@@ -4,7 +4,8 @@
 실행: 저장소 루트에서 `streamlit run app/main.py`
 색과 글꼴은 `.streamlit/config.toml` 에서 정한다.
 
-이 파일은 사이드바 입력과 화면 선택을 맡는다. 첫 화면은 학습 상담이고 나머지는 사이드바 메뉴에서 연다(2026-11-20).
+이 파일은 사이드바 입력과 화면 선택을 맡는다. 처음 접속하면 로그인·회원가입 화면을 보여 주고, 들어오면 첫 화면은
+학습 상담이다. 나머지는 사이드바 메뉴에서 연다(2026-11-20).
 화면 내용은 `app/tabs/` 의 파일 하나씩에 있고, 함께 쓰는 상수와 도우미는 `app/common.py` 에 있다.
 새 화면은 `app/tabs/` 에 `render(ctx)` 가 있는 파일을 더하고 아래 VIEWS 에 한 줄을 넣는다.
 """
@@ -66,12 +67,15 @@ if st.navigation(_pages, position="hidden").url_path == "admin":
     admin_screen.render()
     st.stop()
 
+chat_screen.entry_gate()  # 로그인하거나 비회원으로 들어오기 전에는 로그인·회원가입 화면만 그린다
+
 with st.sidebar:
     st.subheader("skillpath-ai")
     st.caption("채용공고 기반 역량 진단")
     if st.session_state.get("view") not in VIEWS:  # 첫 실행이거나 모르는 값이면 주소의 값을 보고, 없으면 학습 상담으로 연다
         asked = st.query_params.get("view")
         st.session_state.view = asked if asked in VIEWS else DEFAULT_VIEW
+    st.markdown("**마이페이지**")  # 프로필(로그인), 목표 직무, 보유 수준, 진단 보고서
     session = chat_screen.profile_access()
     job = st.selectbox("목표 직무", options=list(JOBS), format_func=JOBS.get, key="job")
     levels = levels_screen.sidebar_summary(session, job)

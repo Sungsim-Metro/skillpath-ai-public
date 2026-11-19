@@ -109,7 +109,7 @@ class ReportTest(unittest.TestCase):
 
     def test_sidebar_button_opens_report_only_after_diagnosis(self):
         """마이페이지 버튼: 진단 전(예시 값)에는 막혀 있고, 진단 뒤에는 창에서 내려받는다. 상담 화면에서도 보인다."""
-        at = AppTest.from_file(MAIN, default_timeout=60).run()
+        at = open_app()
         self.assertTrue(at.button(key="open_report").disabled)
         at.session_state["levels_example"] = False
         at.run()

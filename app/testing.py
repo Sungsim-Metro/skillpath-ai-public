@@ -9,9 +9,14 @@ MENU = {"chat": "학습 상담", "demand": "시장 수요", "gap": "부족 역�
         "connect": "현직자에게 물어보기"}
 
 
-def open_app(view: str | None = None, **query) -> AppTest:
-    """화면을 한 번 실행해 돌려준다. view 를 주지 않으면 첫 화면(학습 상담)이다. query 는 주소 뒤에 붙는 값이다."""
+def open_app(view: str | None = None, *, entered: bool = True, **query) -> AppTest:
+    """화면을 한 번 실행해 돌려준다. view 를 주지 않으면 첫 화면(학습 상담)이다. query 는 주소 뒤에 붙는 값이다.
+
+    entered 가 True 면 로그인·회원가입 화면을 비회원으로 지난 상태로 연다. 그 화면은 app/test_entry.py 가 본다.
+    """
     at = AppTest.from_file(MAIN, default_timeout=60)
+    if entered:
+        at.session_state["entered"] = True
     if view:
         at.query_params["view"] = view
     for key, value in query.items():

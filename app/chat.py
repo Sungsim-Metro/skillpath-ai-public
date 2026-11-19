@@ -2,6 +2,7 @@
 
 답마다 좋아요·별로예요 평가를 받고, 과정 추천이 두 가지 방식으로 왔으면 A/B 로 나란히 보여 주고 선택을 받는다
 (비교 실험, backend/experiments.py). 어떤 모델·구조인지는 화면에 보여 주지 않는다. 기록에는 내용을 넣지 않는다.
+처음 접속하면 로그인·회원가입 화면(entry_gate)을 먼저 보여 주고, 비회원으로 둘러볼 수도 있다(2026-11-20).
 부족 역량이나 과정 추천을 답하면 답 아래에 해당 화면으로 가는 버튼을 둔다(2026-11-20). 과정 카드는 app/course_card.py 가 그린다.
 """
 from __future__ import annotations
@@ -22,10 +23,14 @@ def skill_options() -> tuple[str, ...]:
     return tuple(skill_aliases())
 
 
+# 로그아웃해도 남기는 값: 보던 화면과 '첫 화면을 지났다'는 표시(로그아웃하면 비회원으로 계속 본다)
+KEPT_AFTER_LOGOUT = ("view", "entered")
+
+
 def _clear_private_state() -> None:
     """Clear account data and widget drafts before the next screen renders."""
     for key in list(st.session_state):
-        if key != "view":
+        if key not in KEPT_AFTER_LOGOUT:
             del st.session_state[key]
 
 
@@ -43,6 +48,43 @@ def _authenticate(register: bool) -> None:
     else:
         st.session_state.pop("auth_error", None)
         st.session_state.profile_session = session
+
+
+def _enter_as_guest() -> None:
+    st.session_state.entered = True
+
+
+def entry_gate() -> None:
+    """처음 접속했을 때의 로그인·회원가입 화면. 로그인하거나 비회원으로 들어오기 전에는 여기서 멈춘다.
+
+    확인은 사이드바 로그인과 같은 `_authenticate` 가 한다(backend.chat_profiles 의 sign_in, create_profile).
+    비회원은 모든 화면을 보지만 프로필을 저장하거나 불러오지 않는다. 한 번 지나면 로그아웃해도 다시 막지 않는다.
+    """
+    if st.session_state.get("entered") or st.session_state.get("profile_session") is not None:
+        st.session_state.entered = True
+        return
+    _, middle, _ = st.columns([1, 2, 1])
+    with middle:
+        st.title("skillpath-ai")
+        st.caption("채용공고에서 요구 기술을 찾아 부족한 역량과 AWS 교육과정을 추천합니다. "
+                   "진단 결과와 상담에서 말한 경험을 이어서 보려면 로그인하세요.")
+        with st.form("entry_access"):
+            st.text_input("닉네임", key="auth_nickname")
+            st.text_input("비밀번호", type="password", key="auth_password",
+                          help="앞뒤 공백도 비밀번호에 포함됩니다.")
+            login, register = st.columns(2)
+            login.form_submit_button("로그인", key="entry_login", on_click=_authenticate, args=(False,),
+                                     type="primary", width="stretch")
+            register.form_submit_button("회원가입", key="entry_register", on_click=_authenticate, args=(True,),
+                                        width="stretch")
+        if error := st.session_state.get("auth_error"):
+            st.error(error)
+        st.caption("처음이면 닉네임과 비밀번호를 적고 회원가입을 누릅니다. 이름이나 연락처는 받지 않습니다. "
+                   "다른 서비스에서 쓰는 비밀번호는 쓰지 마세요.")
+        st.button("로그인 없이 둘러보기", key="guest_enter", on_click=_enter_as_guest, width="stretch")
+        st.caption("비회원도 상담과 모든 화면을 볼 수 있습니다. 진단 결과와 상담 정보는 저장되지 않고 창을 닫으면 사라집니다. "
+                   "들어간 뒤에도 사이드바에서 로그인할 수 있습니다.")
+    st.stop()
 
 
 def profile_access() -> chat_profiles.ProfileSession | None:
