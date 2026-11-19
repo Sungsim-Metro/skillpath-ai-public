@@ -16,13 +16,27 @@ python pipeline/courses/build_courses.py               # 전처리 (몇 초)
 
 상세 원문은 이미 받은 과정이면 건너뛰므로, 중간에 끊겨도 다시 실행하면 이어서 받는다.
 
+### AI 엔지니어 과정 (2026-11-19)
+
+```bash
+python pipeline/courses/collect_courses.py --job ai_engineer   # 검색 24회 + 상세 페이지 (약 10분)
+python pipeline/courses/build_courses.py --job ai_engineer     # 기존 표에 AI 과정만 덧붙인다
+python -X utf8 -m pipeline.build_course_vectors                # 새 과정만 임베딩 (AWS 로그인 필요)
+```
+
+- 검색어는 `queries_ai_engineer.csv`(AI 세부 능력 A1-1~A4-3, 12개)다.
+- `--job ai_engineer` 전처리는 표를 새로 만들지 않는다. `courses.csv`에 없는 과정만 더하고, `course_subskill.csv`는 A로 시작하는 세부 능력 행만 바꾼다.
+  클라우드 원문(11/13 수집분)이 없는 PC에서도 실행할 수 있다. `--job` 없이 실행하면 클라우드 표를 새로 만들므로 클라우드 원문이 있을 때만 쓴다.
+- 두 검색어 파일의 별칭은 겹치지 않게 둔다(`pipeline/test_search.py`가 검사). S3·Docker·SQL 같은 공통 기술은 클라우드 세부 능력의 과정으로 이어진다.
+
 ## 파일
 
 | 파일 | 내용 | 저장소 |
 | --- | --- | --- |
 | `queries.csv` | 세부 능력 → Skill Builder 검색어, 근거 확인용 별칭 | 올림 |
+| `queries_ai_engineer.csv` | AI 세부 능력 12개의 검색어와 별칭 | 올림 |
 | `data/raw/courses/<과정ID>.md` | 과정 상세 페이지 원문. 맨 위에 출처 주소와 수집일 | 올리지 않음 |
-| `data/raw/courses/search_hits.csv` | 어떤 검색어·난이도로 어떤 과정이 몇 위로 나왔는지 | 올리지 않음 |
+| `data/raw/courses/search_hits.csv` | 어떤 검색어·난이도로 어떤 과정이 몇 위로 나왔는지 (AI는 `search_hits_ai_engineer.csv`) | 올리지 않음 |
 | `data/courses/courses.csv` | 과정 1개당 1행: 제목, 링크, 난이도, 소요 시간, 언어, 설명, 학습 목표, 수강 대상, 선수지식 | 올림 |
 | `data/courses/course_subskill.csv` | 과정 ↔ 세부 능력 연결, 근거 문장, `certain`/`uncertain` | 올림 |
 

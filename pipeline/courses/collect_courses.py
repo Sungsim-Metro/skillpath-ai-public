@@ -10,9 +10,11 @@
     pip install playwright pandas && playwright install chromium
     python pipeline/courses/collect_courses.py            # 검색 + 상세 원문 수집
     python pipeline/courses/collect_courses.py --limit 2  # 시험용: 검색어 2개만
+    python pipeline/courses/collect_courses.py --job ai_engineer  # AI 세부 능력(queries_ai_engineer.csv)
 
 출력 (data/raw/는 저장소에 올리지 않는다):
     data/raw/courses/search_hits.csv   어떤 검색어·난이도로 어떤 과정이 나왔는지
+                                       (클라우드 외 직무는 search_hits_<직무 코드>.csv)
     data/raw/courses/<course_id>.md    과정 상세 페이지 원문 (출처 주소와 수집일 포함)
 """
 
@@ -25,12 +27,26 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from playwright.async_api import async_playwright
-
 ROOT = Path(__file__).resolve().parents[2]
-QUERIES_FILE = Path(__file__).with_name("queries.csv")
 RAW_DIR = ROOT / "data" / "raw" / "courses"
-HITS_FILE = RAW_DIR / "search_hits.csv"
+DEFAULT_JOB = "cloud_engineer"
+JOB_CHOICES = ("cloud_engineer", "ai_engineer")  # backend/jobs.py 의 ANALYSIS_JOBS 와 같게 둔다
+
+
+def job_name(name: str, job: str) -> str:
+    """직무별 파일 이름. 클라우드는 예전 이름, 다른 직무는 이름 뒤에 직무 코드를 붙인다(backend/jobs.py 의 job_file 과 같은 규칙)."""
+    if job == DEFAULT_JOB:
+        return name
+    stem, _, suffix = name.rpartition(".")
+    return f"{stem}_{job}.{suffix}"
+
+
+def queries_file(job: str = DEFAULT_JOB) -> Path:
+    return Path(__file__).with_name(job_name("queries.csv", job))
+
+
+def hits_file(job: str = DEFAULT_JOB) -> Path:
+    return RAW_DIR / job_name("search_hits.csv", job)
 
 SEARCH_URL = (
     "https://skillbuilder.aws/search?page=1&typeId=digital_course"
@@ -89,12 +105,13 @@ async def fetch_detail(page, url: str) -> str:
     return await (main.inner_text() if main else page.inner_text("body"))
 
 
-async def run(limit: int | None):
+async def run(limit: int | None, job: str = DEFAULT_JOB):
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-    queries = list(csv.DictReader(QUERIES_FILE.open(encoding="utf-8")))
+    queries = list(csv.DictReader(queries_file(job).open(encoding="utf-8")))
     if limit:
         queries = queries[:limit]
     today = date.today().isoformat()
+    from playwright.async_api import async_playwright  # 전처리(build_courses.py)가 이 파일의 이름 규칙만 쓸 때는 필요 없다
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -112,7 +129,7 @@ async def run(limit: int | None):
                                  "level": level, "rank": rank, "collected_at": today})
                 await page.wait_for_timeout(REQUEST_GAP_MS)
 
-        with HITS_FILE.open("w", encoding="utf-8", newline="") as f:
+        with hits_file(job).open("w", encoding="utf-8", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["subskill_id", "search_text", "level", "rank",
                                               "course_id", "title", "url", "collected_at"])
             w.writeheader()
@@ -141,4 +158,6 @@ async def run(limit: int | None):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, help="시험용: 앞에서부터 검색어 몇 개만")
-    asyncio.run(run(ap.parse_args().limit))
+    ap.add_argument("--job", choices=JOB_CHOICES, default=DEFAULT_JOB, help="세부 능력 검색어를 고를 직무(기본: 클라우드)")
+    args = ap.parse_args()
+    asyncio.run(run(args.limit, args.job))

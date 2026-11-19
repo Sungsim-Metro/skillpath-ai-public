@@ -84,7 +84,7 @@ def subskills_for(skill: str, job_category: str = DEFAULT_JOB) -> list[str] | st
     if job_category == DEFAULT_JOB:
         from pipeline.search import subskills_of
 
-        linked = subskills_of(skill)
+        linked = subskills_of(skill, DEFAULT_JOB)  # AI 세부 능력(A*) 별칭은 클라우드 진단에 섞지 않는다
         if linked:
             return linked
     table = {k.lower(): v for k, v in job_guide(job_category)["skill_subskills"].items() if not k.startswith("_")}

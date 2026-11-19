@@ -176,7 +176,23 @@ def hybrid():
     assert all(_usable(courses[i["course_id"]]) for i in data["items"])
 
 
+def jobs():
+    """AI 세부 능력 검색어(2026-11-19): 클라우드와 별칭이 겹치지 않고, AI 기술은 A* 로, 클라우드 진단은 C* 만 본다."""
+    from pipeline.aliases import _key
+
+    by_job = {job: {_key(a) for r in S._read(path) for a in r["aliases"].split("|") if a.strip()}
+              for job, path in S.QUERY_FILES.items()}
+    overlap = by_job["cloud_engineer"] & by_job["ai_engineer"]
+    assert not overlap, f"클라우드와 AI 검색어 별칭이 겹친다(겹치면 클라우드 추천이 바뀐다): {overlap}"
+    assert S.subskills_of("RAG") == ["A1-2"], S.subskills_of("RAG")
+    assert S.subskills_of("SageMaker") == ["A2-3"], S.subskills_of("SageMaker")
+    assert S.subskills_of("Python", "cloud_engineer") == [], S.subskills_of("Python", "cloud_engineer")
+    assert S.subskills_of("Docker") == S.subskills_of("Docker", "cloud_engineer") == ["C1-4"]
+    print("직무별 검색어: 별칭 겹침 없음, AI 기술 → A* 연결 확인")
+
+
 if __name__ == "__main__":
     demo()
     hybrid()
+    jobs()
     print("통과")

@@ -4,6 +4,12 @@
 출력:  data/courses/courses.csv          과정 1개당 1행 (설명, 학습 목표, 소요 시간 등)
        data/courses/course_subskill.csv  과정 ↔ 세부 능력 연결과 근거 문장
 
+직무(--job):
+- 클라우드(기본)는 두 표를 새로 만든다.
+- 다른 직무(예: ai_engineer)는 queries_<직무>.csv, search_hits_<직무>.csv 로 만든 결과를 기존 표에 덧붙인다.
+  courses.csv 에 없는 과정만 더하고(이미 있는 과정의 행은 그대로 둔다), course_subskill.csv 는 그 직무의 세부 능력 행만 바꾼다.
+  클라우드 원문(data/raw/courses/ 의 11/13 수집분)이 없는 PC에서도 AI 과정만 더할 수 있게 하려는 것이다.
+
 연결 규칙 (전부 코드로 판단, LLM 없음):
 1. 세부 능력 검색어로 검색했을 때 상위에 나온 과정만 그 세부 능력 후보가 된다.
 2. 학습 목표 → 과정 제목 → 설명 순서로, 세부 능력 별칭이 처음 나오는 문장을 근거로 붙인다.
@@ -13,19 +19,24 @@
    (설명에는 "Windows or Linux desktops"처럼 지나가며 언급한 단어가 많아서, 그것만으로는 그 능력을 가르친다고 보지 않는다.)
 """
 
+import argparse
 import csv
 import re
 from pathlib import Path
 
+from collect_courses import DEFAULT_JOB, JOB_CHOICES, RAW_DIR, hits_file, queries_file
+
 ROOT = Path(__file__).resolve().parents[2]
-RAW_DIR = ROOT / "data" / "raw" / "courses"
-QUERIES_FILE = Path(__file__).with_name("queries.csv")
 OUT_DIR = ROOT / "data" / "courses"
+COURSES_FILE = OUT_DIR / "courses.csv"
+LINKS_FILE = OUT_DIR / "course_subskill.csv"
 
 SECTION_HEADS = [
     "Description", "Objectives", "AWS Services", "Intended Audience",
     "Recommended previous knowledge", "Ratings", "Course outline", "Outline",
 ]
+# 과정 제목 위에 뜨는 사이트 안내 줄(두 번째는 2026-11-19 수집 때 새로 생겼다)
+BANNER_PREFIXES = ("Welcome to AWS Skill Builder", "New: Tell Skill Builder")
 LEVEL_KO = {"fundamental": "기초", "intermediate": "중급", "advanced": "고급"}
 
 
@@ -92,22 +103,48 @@ def alias_pattern(aliases: str):
     return re.compile(r"(?<![A-Za-z])(" + "|".join(parts) + ")", re.IGNORECASE)
 
 
-def main():
+def read_table(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def write_table(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def merge_job(old_courses: list[dict], old_links: list[dict], courses: list[dict], links: list[dict],
+              subskill_ids: set[str]) -> tuple[list[dict], list[dict]]:
+    """기존 표에 한 직무의 결과를 덧붙인다. 과정은 없는 것만 더하고, 연결은 그 직무의 세부 능력 행만 바꾼다."""
+    have = {c["course_id"] for c in old_courses}
+    merged_courses = old_courses + [c for c in courses if c["course_id"] not in have]
+    merged_links = [l for l in old_links if l["subskill_id"] not in subskill_ids] + links
+    return merged_courses, merged_links
+
+
+def main(job: str = DEFAULT_JOB):
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    queries = {q["subskill_id"]: q for q in csv.DictReader(QUERIES_FILE.open(encoding="utf-8"))}
-    hits = list(csv.DictReader((RAW_DIR / "search_hits.csv").open(encoding="utf-8")))
+    queries = {q["subskill_id"]: q for q in csv.DictReader(queries_file(job).open(encoding="utf-8"))}
+    hits = list(csv.DictReader(hits_file(job).open(encoding="utf-8")))
 
     levels_by_course = {}
     for h in hits:
         levels_by_course.setdefault(h["course_id"], set()).add(h["level"])
 
     courses, parsed = [], {}
-    for path in sorted(RAW_DIR.glob("*.md")):
+    # 이 직무의 검색에 나온 과정만 읽는다(같은 폴더에 다른 직무 원문이 섞여 있다)
+    for path in sorted(RAW_DIR / f"{cid}.md" for cid in levels_by_course):
+        if not path.exists():
+            continue
         raw = path.read_text(encoding="utf-8")
         meta, body = split_front_matter(raw)
         sec = sections(body)
         head = sec.get("_head", [])
-        title = next((l for l in head if not l.startswith("Welcome to AWS Skill Builder")), "")
+        title = next((l for l in head if not l.startswith(BANNER_PREFIXES)), "")
         duration_text, duration_min = parse_duration(head)
         lang, more = parse_language(head)
         cid = meta.get("course_id", path.stem)
@@ -172,11 +209,19 @@ def main():
             "evidence_field": field if verified else "",
         })
 
-    for name, rows in (("courses.csv", courses), ("course_subskill.csv", links)):
-        with (OUT_DIR / name).open("w", encoding="utf-8-sig", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-            w.writeheader()
-            w.writerows(rows)
+    if not courses:
+        raise SystemExit(f"원문이 없습니다: {RAW_DIR} 에 {hits_file(job).name} 의 과정 파일이 하나도 없습니다")
+    course_fields, link_fields = list(courses[0].keys()), list(links[0].keys()) if links else []
+    if job == DEFAULT_JOB:
+        write_table(COURSES_FILE, courses, course_fields)
+        write_table(LINKS_FILE, links, link_fields)
+    else:
+        old_courses, old_links = read_table(COURSES_FILE), read_table(LINKS_FILE)
+        added = len({c["course_id"] for c in courses} - {c["course_id"] for c in old_courses})
+        all_courses, all_links = merge_job(old_courses, old_links, courses, links, set(queries))
+        write_table(COURSES_FILE, all_courses, list(old_courses[0].keys()) if old_courses else course_fields)
+        write_table(LINKS_FILE, all_links, list(old_links[0].keys()) if old_links else link_fields)
+        print(f"[{job}] 기존 표에 덧붙임: 새 과정 {added}개 (전체 {len(all_courses)}개), 연결 전체 {len(all_links)}건")
 
     certain = [l for l in links if l["match"] == "certain"]
     print(f"과정 {len(courses)}개, 연결 {len(links)}건 (근거 있음 {len(certain)}, 불확실 {len(links) - len(certain)})")
@@ -188,4 +233,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--job", choices=JOB_CHOICES, default=DEFAULT_JOB,
+                    help="직무(기본: 클라우드, 표를 새로 만든다). 다른 직무는 기존 표에 덧붙인다")
+    main(ap.parse_args().job)

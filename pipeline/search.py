@@ -1,7 +1,9 @@
 """기술 → 교육과정 후보 (#14). 규칙(연결표와 과정 본문)이 먼저이고, 자리가 남으면 키워드+임베딩 검색으로 채운다.
 
 순서
-1. 기술 → 세부 능력: pipeline/courses/queries.csv 의 aliases 에 기술 이름이 '그대로' 있는 세부 능력.
+1. 기술 → 세부 능력: pipeline/courses/queries.csv(클라우드 C*)와 queries_ai_engineer.csv(AI A*, 2026-11-19)의
+   aliases 에 기술 이름이 '그대로' 있는 세부 능력. 두 파일의 별칭은 겹치지 않게 둔다(S3·Docker 같은 공통 기술은
+   클라우드 세부 능력으로만 이어져서, AI 를 더해도 클라우드 기술의 추천 결과가 바뀌지 않는다).
    (부분 일치는 쓰지 않는다. 'AWS' 가 'AWS CLI' 에 걸리면 무엇이든 추천하게 된다.)
 2. 이름이 과정의 제목·학습 목표에 나오는 과정을 먼저 준다(match = certain). 기초 → 중급 순, 제목에 나오는 과정 먼저.
    세부 능력만 같은 과정(예: 컨테이너 기초)이 Kubernetes 에 certain 으로 나오던 문제를 막는 단계다.
@@ -37,6 +39,10 @@ from pipeline.aliases import ALIAS_FILE, _key, normalize_skill
 
 ROOT = Path(__file__).resolve().parent.parent
 QUERIES = ROOT / "pipeline" / "courses" / "queries.csv"
+QUERY_FILES = {  # 직무별 세부 능력 검색어
+    "cloud_engineer": QUERIES,
+    "ai_engineer": ROOT / "pipeline" / "courses" / "queries_ai_engineer.csv",
+}
 COURSES = ROOT / "data" / "courses" / "courses.csv"
 LINKS = ROOT / "data" / "courses" / "course_subskill.csv"
 LEVEL_ORDER = {"기초": 0, "중급": 1}  # 신입 대상이라 기초부터
@@ -47,11 +53,12 @@ def _read(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-@lru_cache(maxsize=1)
-def _subskills_by_alias() -> dict[str, list[str]]:
-    """정규화한 별칭 → 세부 능력 id 목록."""
+@lru_cache(maxsize=None)
+def _subskills_by_alias(job_category: str | None = None) -> dict[str, list[str]]:
+    """정규화한 별칭 → 세부 능력 id 목록. job_category 가 None 이면 모든 직무."""
+    paths = QUERY_FILES.values() if job_category is None else [QUERY_FILES[job_category]]
     out: dict[str, list[str]] = {}
-    for row in _read(QUERIES):
+    for row in (r for path in paths for r in _read(path)):
         for alias in row["aliases"].split("|"):
             if alias.strip():
                 out.setdefault(_key(alias), []).append(row["subskill_id"])
@@ -101,12 +108,15 @@ def _mentions(text: str, names: list[str]) -> bool:
     )
 
 
-def subskills_of(skill: str) -> list[str]:
-    """기술(대표명이나 별칭)이 속한 세부 능력 id 목록. 없으면 빈 목록."""
+def subskills_of(skill: str, job_category: str | None = None) -> list[str]:
+    """기술(대표명이나 별칭)이 속한 세부 능력 id 목록. 없으면 빈 목록.
+
+    job_category 를 주면 그 직무의 검색어 파일만 본다(예: 클라우드 수준 진단은 C* 만). 과정 검색은 모든 직무를 본다.
+    """
     names = _names(normalize_skill(skill) or skill)
     out: list[str] = []
     for name in names:
-        for sid in _subskills_by_alias().get(_key(name), []):
+        for sid in _subskills_by_alias(job_category).get(_key(name), []):
             if sid not in out:
                 out.append(sid)
     return out

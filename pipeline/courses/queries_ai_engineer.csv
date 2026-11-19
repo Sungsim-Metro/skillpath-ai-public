@@ -1,0 +1,13 @@
+subskill_id,area_id,area,subskill,search_text,aliases
+A1-1,A1,생성형 AI·프롬프트,LLM 활용·프롬프트 설계,Amazon Bedrock,Bedrock|LLM|large language model|foundation model|generative AI|prompt|Prompt Engineering
+A1-2,A1,생성형 AI·프롬프트,RAG·에이전트 구성,retrieval augmented generation,RAG|retrieval augmented|retrieval-augmented|Knowledge Bases|agent|LangGraph|LangChain|vector|Milvus|embedding
+A1-3,A1,생성형 AI·프롬프트,모델 평가·안전성,responsible AI,Guardrails|responsible AI|evaluat|bias|hallucinat|toxic|safety
+A2-1,A2,ML 모델링·MLOps,ML 모델 학습·평가,machine learning,machine learning|ML model|train|deep learning|neural network|PyTorch|TensorFlow|scikit-learn
+A2-2,A2,ML 모델링·MLOps,데이터 분석·특징 추출,feature engineering,feature|pandas|data analys|exploratory|Data Wrangler|Jupyter|notebook
+A2-3,A2,ML 모델링·MLOps,MLOps·모델 배포,Amazon SageMaker,SageMaker|MLOps|model deploy|deploy model|inference|endpoint|BentoML
+A3-1,A3,AI 데이터 구축·품질,데이터 수집·파이프라인,AWS Glue,Glue|ETL|data pipeline|ingest|Spark|Airflow|Kafka|Kinesis|Hadoop|EMR|Prefect|streaming
+A3-2,A3,AI 데이터 구축·품질,데이터 저장·SQL,data lake,data lake|Lake Formation|Athena|Redshift|data warehouse|MySQL|PostgreSQL|BigQuery|query
+A3-3,A3,AI 데이터 구축·품질,데이터 정제·라벨링·품질,Amazon SageMaker Ground Truth,Ground Truth|label|annotat|data quality|DataBrew|data preparation|clean
+A4-1,A4,AI 서비스 구현·운영,모델 API·서비스 연동,Amazon API Gateway,API Gateway|REST API|API|Django|FastAPI|Flask|integrat
+A4-2,A4,AI 서비스 구현·운영,컨테이너·실행 환경,Amazon ECR,ECR|Elastic Container Registry|container image|GPU|Inferentia|Trainium|accelerat
+A4-3,A4,AI 서비스 구현·운영,배포 자동화·운영 모니터링,SageMaker Model Monitor,Model Monitor|model monitoring|drift|model quality|SageMaker Pipelines
