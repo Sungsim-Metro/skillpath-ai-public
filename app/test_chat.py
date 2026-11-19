@@ -1,6 +1,7 @@
 """학습 상담 화면의 호출 범위와 세션 분리를 확인한다."""
 import json
 import os
+import tempfile
 import unittest
 from dataclasses import asdict
 from pathlib import Path
@@ -133,6 +134,36 @@ class ChatScreenTest(unittest.TestCase):
             self.assertEqual(gap.call_count, count)
             self.assertEqual(recs.call_count, 1)
             self.assertFalse(at.exception)
+
+    def test_answers_take_a_rating_and_two_recommendations_take_a_choice(self):
+        """비교 실험: 답마다 평가를 받고, 추천 구조가 둘이면 A/B 로 나란히 보여 준다(기록에는 내용이 없다)."""
+        from backend import experiments
+
+        off = self.open_screen()
+        off.chat_input[0].set_value("클라우드 엔지니어 기준으로 뭐가 부족해?").run()
+        self.assertFalse(off.get("feedback"))                       # 실험이 꺼져 있으면 평가 위젯이 없다
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "feedback.jsonl"
+            with patch.dict(os.environ, {"AB_STRUCTURES": "single,reviewed", "FEEDBACK_LOG": str(log)}):
+                at = self.open_screen()
+                at.chat_input[0].set_value("클라우드 엔지니어 기준으로 뭐가 부족해?").run()
+                self.assertFalse(at.exception)
+                self.assertEqual(len(at.get("feedback")), 1)        # 답 하나에 평가 위젯 하나
+                self.assertFalse(at.radio(key="view") is None)
+                self.assertFalse([r for r in at.radio if r.key and r.key.startswith("ab_")])
+                at.chat_input[0].set_value("그중 먼저 들을 교육과정을 추천해줘.").run()
+                self.assertFalse(at.exception)
+                choice = [r for r in at.radio if r.key and r.key.startswith("ab_")]
+                self.assertEqual(len(choice), 1)
+                self.assertEqual([m.value for m in at.markdown if m.value in ("**추천 A**", "**추천 B**")],
+                                 ["**추천 A**", "**추천 B**"])
+                choice[0].set_value("A").run()
+                self.assertFalse(at.exception)
+                rows = experiments.load_feedback()
+            self.assertEqual(len(rows), 1)
+            self.assertIn(rows[0]["picked"], ("single", "reviewed"))
+            self.assertEqual({rows[0]["left"], rows[0]["right"]}, {"single", "reviewed"})
+            self.assertNotIn("추천해줘", log.read_text(encoding="utf-8"))
 
     def diagnose(self, at, levels):
         """모달 저장과 같은 상태를 만든다(AppTest 는 모달 안 버튼을 다시 그리지 못한다)."""

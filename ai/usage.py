@@ -54,6 +54,11 @@ def track_session(usage: SessionUsage) -> Iterator[None]:
         _session.reset(previous)
 
 
+def current_session() -> SessionUsage | None:
+    """지금 범위의 세션 사용량(없으면 None)."""
+    return _session.get()
+
+
 def log_path() -> Path:
     return Path(os.getenv("USAGE_LOG") or DEFAULT_LOG)
 

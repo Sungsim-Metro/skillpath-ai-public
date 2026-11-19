@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from ai import chat as intake
-from ai.bedrock import BedrockJSONError
-from ai.usage import SessionUsage, track_session
-from backend import api, chat_profiles
+from ai.bedrock import BedrockJSONError, current_model, use_model
+from ai.usage import SessionUsage, current_session, track_session
+from backend import api, chat_profiles, experiments
 from backend.jobs import JOBS
 from pipeline.aliases import normalize_skill
 
@@ -31,8 +32,19 @@ class Conversation:
 
 @dataclass
 class Reply:
+    """한 턴의 답. turn_id 아래는 비교 실험(backend/experiments.py) 기록용이다.
+
+    alternatives 가 둘이면 화면이 A/B 로 나란히 보여 준다: [{"structure", "courses", "tokens"}] 왼쪽, 오른쪽 순서.
+    failed 는 모델 응답이 검사를 통과하지 못해 답을 만들지 못한 턴이다.
+    """
+
     text: str
     courses: list[dict] = field(default_factory=list)
+    turn_id: str = field(default_factory=lambda: uuid4().hex)
+    model: str = ""
+    action: str = ""
+    alternatives: list[dict] = field(default_factory=list)
+    failed: bool = False
 
 
 def _skill(name: str) -> str:
@@ -140,6 +152,35 @@ def _verified_courses(recommendations: list[dict], missing: list[dict]) -> list[
     return courses
 
 
+def _compare_structures(pair: tuple[str, str], job: str, requested: list[str],
+                        missing: list[dict]) -> tuple[list[dict], list[dict]]:
+    """추천 구조 두 개로 각각 추천을 만들고 같은 검사를 한다. (나란히 보여 줄 두 결과, 기본으로 보여 줄 과정)을 돌려준다.
+
+    둘 다 과정을 냈을 때만 A/B 로 보여 준다. 그렇지 않으면 기본 구조(검토를 거친 쪽)의 결과만 보여 준다.
+    검토를 거치지 않은 구조의 추천은 A/B 밖에서 혼자 나가지 않는다. 기본 구조가 검사에 실패했으면 그 오류를 낸다.
+    구조별 토큰은 세션 사용량의 앞뒤 차이로 잰다.
+    """
+    usage = current_session()
+    results, error = [], None
+    for name in pair:
+        before = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
+        try:
+            found = _verified_courses(experiments.recommend_with(name, job, requested), missing)
+        except (BedrockJSONError, KeyError, TypeError, ValueError) as exc:
+            found, error = [], exc
+        after = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
+        results.append({"structure": name, "courses": found,
+                        "tokens": {"input": after[0] - before[0], "output": after[1] - before[1]}})
+    default = next((r for r in results if r["structure"] == experiments.DEFAULT_STRUCTURE), None)
+    if all(r["courses"] for r in results):
+        return results, (default or results[0])["courses"]
+    if default is None:  # 기본 구조가 비교 대상에 없으면 A/B 가 성립할 때만 보여 준다
+        default = {"courses": []}
+    if not default["courses"] and error is not None:
+        raise error
+    return [], default["courses"]
+
+
 def _analyze(facts: dict, *, courses: bool) -> Reply:
     job = facts["job"]
     try:
@@ -159,12 +200,20 @@ def _analyze(facts: dict, *, courses: bool) -> Reply:
     if courses:
         try:
             requested = [r["skill"] for r in missing][:api.RECOMMEND_TOP_N]
-            recs = api.get_recommendations(job, requested, review=True)
-            reply.courses = _verified_courses(recs, missing[:len(requested)])
+            pair = experiments.pick_pair()
+            if pair:
+                reply.alternatives, reply.courses = _compare_structures(pair, job, requested, missing[:len(requested)])
+            else:
+                recs = api.get_recommendations(job, requested, review=True)
+                reply.courses = _verified_courses(recs, missing[:len(requested)])
             detail = ("부족 기술과 연결된 과정입니다. 과정별 추천 이유와 매칭 상태를 확인해 주세요." if reply.courses
                       else "상위 부족 기술에 연결할 교육과정을 찾지 못했습니다.")
+            if reply.alternatives:
+                detail = ("부족 기술과 연결된 과정을 두 가지 방식으로 추천했습니다. "
+                          "과정별 추천 이유를 읽고 더 도움이 되는 쪽을 골라 주세요.")
         except (BedrockJSONError, KeyError, TypeError, ValueError):
             detail = "추천 결과가 검증을 통과하지 못해 과정을 표시할 수 없습니다."
+            reply.failed = True
         except Exception:
             detail = "교육과정 추천을 불러오지 못했습니다."
         reply.text += "\n\n" + detail
@@ -220,8 +269,29 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     if state.nickname and nickname != state.nickname:
         state.__init__()
     state.nickname = nickname
-    with track_session(state.usage):
-        return _handle_turn(state, message, job, sidebar_skills)
+    model = experiments.pick_model()  # 실험이 꺼져 있으면 None: 기본 모델 그대로
+    turn_id = uuid4().hex
+    with track_session(state.usage), use_model(model):
+        used = "" if api.is_mock() else current_model()
+        try:
+            reply = _handle_turn(state, message, job, sidebar_skills)
+        except Exception:
+            _record_failure(state, turn_id, job, used)
+            raise
+    reply.turn_id, reply.model = turn_id, used
+    if reply.failed:
+        _record_failure(state, turn_id, job, used, reply.action)
+    return reply
+
+
+def _record_failure(state: Conversation, turn_id: str, job: str, model: str, action: str = "") -> None:
+    """모델 응답이 검사를 통과하지 못한 턴을 실험 기록에 남긴다(모델별 실패 수). 기록 실패는 상담을 막지 않는다."""
+    if not experiments.models():
+        return
+    try:
+        experiments.save_feedback(state.usage.session_id, turn_id, job=job, model=model, action=action or None, failed=True)
+    except Exception:
+        pass
 
 
 def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: list[str]) -> Reply:
@@ -243,7 +313,7 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
         context = _context(state, job, sidebar_skills)
         turn = intake.interpret(message, context, screened=True)
     except intake.ChatIntakeError:
-        return Reply("메시지를 해석하지 못했습니다. 요청을 다시 말씀해 주세요.")
+        return Reply("메시지를 해석하지 못했습니다. 요청을 다시 말씀해 주세요.", action="intake", failed=True)
     if (state.offered_gap and turn.status == "ok" and turn.action == "note"
             and message.strip().rstrip(".!").strip() in {"네", "예", "응", "좋아요", "비교해줘", "비교해 주세요"}):
         turn.action = "gap"
@@ -251,6 +321,7 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
         state.pending_save = False
         state.offered_gap = False
     reply = _answer(state, turn, job, sidebar_skills)
+    reply.action = turn.action if turn.status == "ok" else turn.status
     if turn.status == "ok" and turn.action == "summary" and "상태" in message and not any(
         word in message for word in ("정리", "요약", "만")
     ):

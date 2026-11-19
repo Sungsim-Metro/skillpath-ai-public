@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
@@ -28,6 +30,23 @@ RETRY_MESSAGE = (
 )
 
 logger = logging.getLogger(__name__)
+# 이 범위 안의 호출에만 쓰는 모델 ID. 없으면 BEDROCK_MODEL_ID 를 쓴다(상담 실험의 모델 무작위 배정, 2026-11-19 회의)
+_model_override: ContextVar[Optional[str]] = ContextVar("bedrock_model", default=None)
+
+
+@contextmanager
+def use_model(model_id: Optional[str]):
+    """이 범위 안의 Bedrock 호출을 model_id 로 보낸다. 빈 값이면 아무것도 바꾸지 않는다."""
+    token = _model_override.set(model_id or None)
+    try:
+        yield
+    finally:
+        _model_override.reset(token)
+
+
+def current_model() -> str:
+    """지금 호출에 쓰일 모델 ID(없으면 빈 문자열). 가짜 모드 여부는 보지 않는다."""
+    return _model_override.get() or os.getenv("BEDROCK_MODEL_ID", "")
 
 
 class BedrockJSONError(RuntimeError):
@@ -96,7 +115,7 @@ def converse_json(
             system, messages, max_tokens, temperature, mock_file, mock_key, attempt
         )
         add_usage(usage, call_usage)
-        record_usage(usage_stage or mock_file, attempt, call_usage, is_mock())
+        record_usage(usage_stage or mock_file, attempt, call_usage, is_mock(), model_id=current_model() or None)
         calls.append({"attempt": attempt, **{k: call_usage.get(k, 0) for k in USAGE_KEYS}})
         logger.info(
             "Bedrock 호출 key=%s 시도=%d 입력=%d 출력=%d 토큰 (stopReason=%s)",
@@ -143,7 +162,7 @@ def _client():
 
 
 def _model_id() -> str:
-    model_id = os.getenv("BEDROCK_MODEL_ID")
+    model_id = current_model()
     if not model_id:
         raise RuntimeError("BEDROCK_MODEL_ID 가 비어 있습니다. .env 에 모델 ID 를 적어 주세요.")
     return model_id
@@ -196,7 +215,7 @@ def converse_tools(
             system, messages, tools, max_tokens, temperature, mock_file, mock_key, mock_turn_start + turn
         )
         add_usage(usage, call_usage)
-        record_usage(mock_file, attempt, call_usage, is_mock())
+        record_usage(mock_file, attempt, call_usage, is_mock(), model_id=current_model() or None)
         logger.info(
             "Bedrock 도구 호출 key=%s 회차=%d 입력=%d 출력=%d 토큰 (stopReason=%s)",
             mock_key, turn + 1, call_usage.get("inputTokens", 0), call_usage.get("outputTokens", 0), stop_reason,

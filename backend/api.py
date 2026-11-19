@@ -230,6 +230,21 @@ def get_market_gap(job_category: str = DEFAULT_JOB) -> dict:
     return dashboard_gap(DATA_DIR.parent, job_category, allow_example=is_mock())
 
 
+def demand_pairs(job_category: str, gap_skills: list[str]) -> list[tuple[str, dict]]:
+    """추천에 넘기는 (기술, 수요 숫자) 목록. 숫자는 수요 집계에서 코드로 만든다."""
+    demand_all = get_demand(job_category)
+    by_demand = {s["skill"]: s for s in demand_all["skills"]}
+    pairs = []
+    for skill in gap_skills:
+        d = by_demand.get(skill, {"postings": 0, "required": 0})  # 수요에 없는 기술은 0 으로 넘긴다
+        pairs.append((skill, {
+            "postings": d["postings"],
+            "of": demand_all["total_postings"],
+            "required_ratio": round(d["required"] / d["postings"], 2) if d["postings"] else 0,
+        }))
+    return pairs
+
+
 def get_recommendations(job_category: str, gap_skills: list[str], *, review: bool = False,
                         levels: dict[str, float] | None = None) -> list[dict]:
     """부족 기술마다 추천(③)을 돌려준다. 찾은 과정이 없으면 courses 가 빈 목록이다.
@@ -245,26 +260,20 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
     채팅에서 review=True이면 과정 목표로 사유를 검증한다. 모의 모드에서도 로컬 과정 목록을 쓴다.
     """
     mock = is_mock()
-    demand_all = get_demand(job_category)
-    by_demand = {s["skill"]: s for s in demand_all["skills"]}
     if not mock or review:
         gap_skills = gap_skills[:RECOMMEND_TOP_N]  # 기술별 모델 호출 비용과 화면 길이를 제한한다
-    pairs = []
-    for skill in gap_skills:
-        d = by_demand.get(skill, {"postings": 0, "required": 0})  # 수요에 없는 기술은 0 으로 넘긴다
-        pairs.append((skill, {
-            "postings": d["postings"],
-            "of": demand_all["total_postings"],
-            "required_ratio": round(d["required"] / d["postings"], 2) if d["postings"] else 0,
-        }))
+    pairs = demand_pairs(job_category, gap_skills)
     if mock and not review:
         by_skill = {r["gap_skill"]: r for r in _load("recommendations.json", job_category)}
         return [_with_level(by_skill[skill] if skill in by_skill else {"gap_skill": skill, "demand": demand, "courses": []},
                             levels)
                 for skill, demand in pairs]
 
+    from ai.bedrock import current_model
+
     kb_scope = None if mock else (os.getenv("AWS_REGION", "ap-northeast-2"), os.getenv("BEDROCK_KB_ID", ""))
-    key = (job_category, review, mock, kb_scope,
+    # 모델도 키에 넣는다. 상담 실험은 메시지마다 모델이 달라서, 다른 모델이 쓴 이유가 섞여 나오면 안 된다
+    key = (job_category, review, mock, kb_scope, None if mock else current_model(),
            tuple((skill, d["postings"], d["of"], d["required_ratio"]) for skill, d in pairs))
     with _recommend_cache_lock:
         cached = _recommend_cache.get(key)
