@@ -532,10 +532,12 @@ class ChatScreenTest(unittest.TestCase):
         self.assertFalse(any(plain_text in block.value for block in at.markdown))
         self.assertFalse(at.exception)
         self.assertEqual([item.proto.url for item in at.get("link_button")], [course["url"], course["url"]])
-        details = " ".join(item.value for item in at.chat_message[-1].text)
-        for expected in (course["title"], course["reason"], "불확실"):
+        answer = at.chat_message[-1]
+        details = " ".join(item.value for item in [*answer.text, *answer.markdown, *answer.caption]).replace("\\", "")
+        for expected in (course["title"], course["reason"], "유사 과정"):
             self.assertIn(expected, details)
         self.assertNotIn("★", details)  # 평점이 없는 과정은 평점 줄이 없다
+        self.assertFalse([b for b in answer.get("link_button") if b.proto.label.startswith("★")])
 
     def test_cards_show_rank_and_rating_and_shortcuts_open_the_matching_screen(self):
         at = self.open_screen()
@@ -548,7 +550,9 @@ class ChatScreenTest(unittest.TestCase):
             at.chat_input[0].set_value("과정 추천해줘").run()
         self.assertFalse(at.exception)
         answer = at.chat_message[-1]
-        self.assertEqual([t.value for t in answer.text if t.value.startswith("★")], ["★ 4.6 · 평가 1,280개"])
+        self.assertEqual([b.proto.label for b in answer.get("link_button") if b.proto.label.startswith("★")],
+                         ["★ 4.6 · 평가 1,280개"])
+        self.assertEqual([tab.label for tab in answer.tabs], ["Docker", "Linux"])  # 기술이 여럿이면 탭으로 나눈다
         badges = [m.value for m in answer.markdown if "위]" in m.value]
         self.assertEqual([b.split("]")[0] for b in badges], [":blue-badge[1위", ":blue-badge[2위", ":blue-badge[1위"])
         self.assertEqual([b.label for b in answer.button], ["추천 과정 보기"])

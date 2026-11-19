@@ -1,10 +1,10 @@
 """학습 추천 화면 (Q3 왜 이 교육과정을 추천했나).
 
-부족한 기술마다 추천 과정을 카드로 보여 주고 순위를 적는다(2026-11-20). 카드는 app/course_card.py 가 그린다.
+부족한 기술마다 탭을 두고 추천 과정을 카드로 보여 주며 순위를 적는다(2026-11-20). 카드는 app/course_card.py 가 그린다.
 """
 import streamlit as st
 
-from app.common import COMMON_AREA, PENDING, Ctx, load, notice
+from app.common import COMMON_AREA, PENDING, Ctx, load, md_escape, notice
 from app.course_card import RATING_NOTE, render_course_list
 from backend import api
 from backend.plan import study_order
@@ -37,10 +37,12 @@ def _render_recommendations(ctx: Ctx):
         return
     _render_order(recs)
     area_of = {r["skill"]: r["area"] for r in missing}
-    for priority, rec in enumerate(recs, start=1):
+    # 길게 늘어놓지 않고 기술마다 탭으로 넘겨 본다. 탭 순서는 공고 수요가 높은 순서다
+    labels = [f"{priority}. {md_escape(rec['gap_skill'])}" for priority, rec in enumerate(recs, start=1)]
+    for tab, rec in zip(st.tabs(labels), recs):
         d = rec["demand"]
-        with st.container(border=True):
-            st.subheader(f"{priority}. {rec['gap_skill']}")
+        with tab:
+            st.subheader(rec["gap_skill"], anchor=False)
             level = f" · 내 단계 {rec['user_level']}" if "user_level" in rec else ""
             st.caption(f"공고 {d['of']}건 중 {d['postings']}건이 요구 · 그중 필수 {d['required_ratio']:.0%}{level}")
             if not rec["courses"] and area_of.get(rec["gap_skill"]) == COMMON_AREA:
@@ -49,8 +51,9 @@ def _render_recommendations(ctx: Ctx):
             elif not rec["courses"]:
                 st.write("이 기술을 다루는 교육과정을 찾지 못했습니다.")
             render_course_list(rec["courses"], columns=CARDS_PER_ROW)
-    st.caption("기술은 공고 수요가 높은 순서입니다. 카드의 순위는 그 기술 안에서의 추천 순서입니다(직접 다루는 과정이 먼저, "
-               "그다음 내 단계에 맞는 난이도). " + RATING_NOTE)
+    st.caption("탭은 공고 수요가 높은 기술 순서입니다. 카드의 순위는 그 기술 안에서의 추천 순서입니다(직접 다루는 과정이 먼저, "
+               "그다음 내 단계에 맞는 난이도). 'AWS Skill Builder'는 그 기술을 직접 다루는 과정, '유사 과정'은 직접 다루는지 "
+               "확인하지 못한 관련 과정입니다. " + RATING_NOTE)
 
 
 def render(ctx: Ctx):

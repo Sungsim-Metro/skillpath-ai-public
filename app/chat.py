@@ -124,8 +124,9 @@ def profile_access() -> chat_profiles.ProfileSession | None:
 SHORTCUTS = {"gap": ("gap", "부족 역량 자세히 보기"), "courses": ("recommend", "추천 과정 보기")}
 
 
-# 상담 화면 아래에 늘 보여 주는 추천 질문. 누르면 그 글이 그대로 메시지로 들어간다
-SUGGESTIONS = ("내 경험을 정리해줘", "지금 뭐가 부족해?", "먼저 들을 교육과정을 추천해줘", "AI 엔지니어 기준으로 다시 봐줘")
+# 상담 화면 아래에 늘 보여 주는 추천 질문 (버튼 글자, 보낼 메시지). 좁은 화면에서도 잘리지 않게 버튼 글자는 짧게 둔다
+SUGGESTIONS = (("내 경험 정리", "내 경험을 정리해줘"), ("부족한 기술", "지금 뭐가 부족해?"),
+               ("교육과정 추천", "먼저 들을 교육과정을 추천해줘"), ("AI 직무로 보기", "AI 엔지니어 기준으로 다시 봐줘"))
 THANKS = "의견 주셔서 감사합니다!"
 
 
@@ -309,5 +310,5 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
     _assessment_panel(conversation, job, session, sidebar_levels, reply)
 
     st.caption("이렇게 물어보세요")
-    for column, text in zip(st.columns(len(SUGGESTIONS)), SUGGESTIONS):
-        column.button(text, key=f"suggest_{SUGGESTIONS.index(text)}", on_click=_suggest, args=(text,), width="stretch")
+    for number, (column, (label, text)) in enumerate(zip(st.columns(len(SUGGESTIONS)), SUGGESTIONS)):
+        column.button(label, key=f"suggest_{number}", on_click=_suggest, args=(text,), width="stretch", help=text)

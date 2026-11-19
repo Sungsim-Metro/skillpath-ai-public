@@ -27,7 +27,7 @@ class AppSmokeTest(unittest.TestCase):
         for view, label in MENU.items():
             at = open_app(view)
             self.assertFalse(at.exception, view)
-            self.assertFalse(at.tabs, view)
+            self.assertEqual(bool(at.tabs), view == "recommend", view)  # 학습 추천만 기술별 탭이 있다
             self.assertEqual(at.title[0].value, label)
 
     def test_recommend_screen_shows_study_order_ranked_cards_and_ratings(self):
@@ -45,12 +45,20 @@ class AppSmokeTest(unittest.TestCase):
         with mock.patch("backend.api.get_recommendations", get_recommendations):
             at = open_app("recommend")
         self.assertFalse(at.exception)
+        self.assertEqual([tab.label for tab in at.tabs][:2], [f"1. {at.subheader[1].value}", f"2. {at.subheader[2].value}"])
         self.assertIn("먼저 들을 순서", [h.value for h in at.subheader])
         self.assertTrue(any(t.value.startswith("1. 평점 있는 과정") for t in at.text))  # 불확실 과정은 순서에 넣지 않는다
         self.assertFalse(any("평점 없는 과정 (" in t.value for t in at.text))
         badges = [m.value.split("]")[0] for m in at.markdown if m.value.startswith(":blue-badge[")]
         self.assertEqual(badges, [":blue-badge[1위", ":blue-badge[2위", ":blue-badge[1위"])
-        self.assertEqual([t.value for t in at.text if t.value.startswith("★")], ["★ 4.6 · 평가 1,280개"] * 2)
+        ratings = [b for b in at.get("link_button") if b.proto.label.startswith("★")]
+        self.assertEqual([b.proto.label for b in ratings], ["★ 4.6 · 평가 1,280개"] * 2)  # 평점을 누르면 과정 페이지가 열린다
+        self.assertEqual({b.proto.url for b in ratings}, {"https://example.com/a"})
+        marks = " ".join(m.value for m in at.markdown)
+        self.assertIn("AWS Skill Builder", marks)   # 직접 다루는 과정
+        self.assertIn("유사 과정", marks)            # 직접 다루는지 확인하지 못한 과정
+        self.assertNotIn("불확실", marks)
+        self.assertEqual([box.label for box in at.main.expander], ["추천 이유 더보기"] * 3)  # 추천 이유는 카드마다 접어 둔다
 
     def test_extract_button_shows_result(self):
         """공고 직접 분석은 메뉴에서 뺐지만 화면 코드는 남아 있다."""
