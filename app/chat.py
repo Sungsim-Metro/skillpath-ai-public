@@ -2,15 +2,16 @@
 
 답마다 좋아요·별로예요 평가를 받고, 과정 추천이 두 가지 방식으로 왔으면 A/B 로 나란히 보여 주고 선택을 받는다
 (비교 실험, backend/experiments.py). 어떤 모델·구조인지는 화면에 보여 주지 않는다. 기록에는 내용을 넣지 않는다.
+부족 역량이나 과정 추천을 답하면 답 아래에 해당 화면으로 가는 버튼을 둔다(2026-11-20). 과정 카드는 app/course_card.py 가 그린다.
 """
 from __future__ import annotations
 
 from functools import lru_cache
-from urllib.parse import urlsplit
 
 import streamlit as st
 
 from ai.usage import SessionUsage
+from app.course_card import render_course_list
 from backend import chat_profiles
 from pipeline.aliases import skill_aliases
 
@@ -67,25 +68,13 @@ def profile_access() -> chat_profiles.ProfileSession | None:
     return None
 
 
-def _render_course(course: dict) -> None:
-    with st.container(border=True):
-        st.text(course["title"])
-        details = [course["gap_skill"]] if course.get("gap_skill") else []
-        details.append("매칭 불확실" if course["match"] == "uncertain" else "매칭 확실")
-        if course.get("level"):
-            details.append(f"난이도 {course['level']}")
-        if course.get("prerequisites"):
-            details.append(f"선수지식 {course['prerequisites']}")
-        st.text(" · ".join(details))
-        if course.get("reason"):
-            st.text(course["reason"])
-        url = course.get("url") or ""
-        try:
-            target = urlsplit(url)
-            if target.scheme == "https" and target.hostname:
-                st.link_button("교육과정 열기", url)
-        except ValueError:
-            pass
+# 답의 요청 종류(backend.chat.Reply.action) → (옮겨 갈 화면, 버튼 글자). 화면 값은 app/main.py 의 VIEWS 와 같다
+SHORTCUTS = {"gap": ("gap", "부족 역량 자세히 보기"), "courses": ("recommend", "추천 과정 보기")}
+
+
+def _go(view: str) -> None:
+    """사이드바 메뉴의 화면을 바꾼다. 메뉴가 이미 그려진 뒤에는 값을 바꿀 수 없어 버튼의 on_click 으로만 부른다."""
+    st.session_state.view = view
 
 
 def _save(entry: dict, **fields) -> None:
@@ -116,7 +105,7 @@ def _on_pick(entry: dict) -> None:
               tokens={side["structure"]: side["tokens"] for side in (left, right)})
 
 
-def _render_answer(entry: dict) -> None:
+def _render_answer(entry: dict, index: int) -> None:
     from backend import experiments
 
     st.text(entry["answer"])
@@ -124,13 +113,16 @@ def _render_answer(entry: dict) -> None:
         for column, label, side in zip(st.columns(2), ("추천 A", "추천 B"), entry["alternatives"]):
             with column:
                 st.markdown(f"**{label}**")
-                for course in side["courses"]:
-                    _render_course(course)
+                render_course_list(side["courses"])
         st.radio("어느 쪽 추천이 더 도움이 되나요?", ["A", "B", "비슷해요"], index=None, horizontal=True,
                  key=f"ab_{entry['turn_id']}", on_change=_on_pick, args=(entry,))
     else:
-        for course in entry["courses"]:
-            _render_course(course)
+        render_course_list(entry["courses"])
+    action = entry.get("action")  # 평가 기능 이전의 열린 세션 기록에는 요청 종류가 없다
+    shortcut = SHORTCUTS.get(action)
+    if shortcut and (action == "gap" or entry["courses"] or entry["alternatives"]):
+        view, label = shortcut
+        st.button(label, key=f"go_{index}", on_click=_go, args=(view,), icon=":material/arrow_forward:")
     if entry["turn_id"] and experiments.active():  # 실험이 꺼져 있으면 평가를 받지 않는다(화면이 전과 같다)
         st.feedback("thumbs", key=f"fb_{entry['turn_id']}", on_change=_on_rating, args=(entry,))
 
@@ -169,11 +161,11 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
               help="기록을 시작한 뒤 모델이 보고한 사용량입니다. 재시도를 포함하며 모의 호출은 0토큰입니다.")
     st.caption(f"입력 {usage.input_tokens:,} · 출력 {usage.output_tokens:,} · 세션 ID `{usage.session_id}`")
 
-    for entry in history:
+    for index, entry in enumerate(history):
         if isinstance(entry, tuple):  # 평가 기능 이전의 열린 세션에는 턴 ID가 없다.
             prompt, answer, courses = entry
             entry = {"prompt": prompt, "answer": answer, "courses": courses, "alternatives": [], "turn_id": ""}
         with st.chat_message("user"):
             st.text(entry["prompt"])
         with st.chat_message("assistant"):
-            _render_answer(entry)
+            _render_answer(entry, index)

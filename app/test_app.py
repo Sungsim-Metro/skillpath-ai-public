@@ -30,6 +30,28 @@ class AppSmokeTest(unittest.TestCase):
             self.assertFalse(at.tabs, view)
             self.assertEqual(at.title[0].value, label)
 
+    def test_recommend_screen_shows_study_order_ranked_cards_and_ratings(self):
+        """학습 추천 화면: 먼저 들을 순서, 기술마다 1위부터 붙는 카드, 평점 줄(있는 과정만)."""
+        rated = {"title": "평점 있는 과정", "url": "https://example.com/a", "level": "기초", "prerequisites": "없음",
+                 "reason": "예시 이유", "match": "certain", "rating_avg": 4.6, "rating_count": 1280}
+        plain = {**{k: v for k, v in rated.items() if not k.startswith("rating_")}, "title": "평점 없는 과정",
+                 "url": "https://example.com/b", "match": "uncertain"}
+
+        def get_recommendations(job, skills, **kwargs):  # load() 가 함수 이름을 로그에 남기므로 Mock 이 아닌 함수로 바꾼다
+            demand = {"postings": 20, "of": 40, "required_ratio": 0.5}
+            return [{"gap_skill": skills[0], "demand": demand, "courses": [rated, plain]},
+                    {"gap_skill": skills[1], "demand": demand, "courses": [rated]}]
+
+        with mock.patch("backend.api.get_recommendations", get_recommendations):
+            at = open_app("recommend")
+        self.assertFalse(at.exception)
+        self.assertIn("먼저 들을 순서", [h.value for h in at.subheader])
+        self.assertTrue(any(t.value.startswith("1. 평점 있는 과정") for t in at.text))  # 불확실 과정은 순서에 넣지 않는다
+        self.assertFalse(any("평점 없는 과정 (" in t.value for t in at.text))
+        badges = [m.value.split("]")[0] for m in at.markdown if m.value.startswith(":blue-badge[")]
+        self.assertEqual(badges, [":blue-badge[1위", ":blue-badge[2위", ":blue-badge[1위"])
+        self.assertEqual([t.value for t in at.text if t.value.startswith("★")], ["★ 4.6 · 평가 1,280개"] * 2)
+
     def test_extract_button_shows_result(self):
         """공고 직접 분석은 메뉴에서 뺐지만 화면 코드는 남아 있다."""
         at = AppTest.from_function(_extract_screen).run()

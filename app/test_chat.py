@@ -337,6 +337,39 @@ class ChatScreenTest(unittest.TestCase):
         details = " ".join(item.value for item in at.chat_message[-1].text)
         for expected in (course["title"], course["reason"], "불확실"):
             self.assertIn(expected, details)
+        self.assertNotIn("★", details)  # 평점이 없는 과정은 평점 줄이 없다
+
+    def test_cards_show_rank_and_rating_and_shortcuts_open_the_matching_screen(self):
+        at = self.open_screen()
+        course = {"title": "예시 과정", "url": "https://example.com/course", "match": "certain", "level": "기초",
+                  "prerequisites": "없음", "reason": "배포 실습을 다룹니다.", "gap_skill": "Docker"}
+        rated = {**course, "title": "평점 있는 과정", "rating_avg": 4.6, "rating_count": 1280}
+        other = {**course, "title": "다른 기술 과정", "gap_skill": "Linux"}
+        reply = SimpleNamespace(text="추천입니다.", courses=[rated, course, other], action="courses")
+        with patch("backend.chat.handle_message", return_value=reply):
+            at.chat_input[0].set_value("과정 추천해줘").run()
+        self.assertFalse(at.exception)
+        answer = at.chat_message[-1]
+        self.assertEqual([t.value for t in answer.text if t.value.startswith("★")], ["★ 4.6 · 평가 1,280개"])
+        badges = [m.value for m in answer.markdown if "위]" in m.value]
+        self.assertEqual([b.split("]")[0] for b in badges], [":blue-badge[1위", ":blue-badge[2위", ":blue-badge[1위"])
+        self.assertEqual([b.label for b in answer.button], ["추천 과정 보기"])
+        answer.button[0].click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["view"], "recommend")
+        self.assertEqual(at.title[0].value, "학습 추천")
+
+        at = self.open_screen()
+        at.chat_input[0].set_value("제가 Docker로 API를 배포했어요.").run()
+        self.assertFalse([b for b in at.button if b.key and b.key.startswith("go_")])  # 경험 입력에는 바로가기가 없다
+        at.chat_input[0].set_value("클라우드 엔지니어 기준으로 뭐가 부족해?").run()
+        shortcut = [b for b in at.button if b.key and b.key.startswith("go_")]
+        self.assertEqual([b.label for b in shortcut], ["부족 역량 자세히 보기"])
+        shortcut[0].click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["view"], "gap")
+        at.radio(key="view").set_value("chat").run()
+        self.assertEqual(len(at.chat_message), 4)  # 다녀와도 대화가 남아 있다
 
 
 if __name__ == "__main__":
