@@ -8,13 +8,20 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 import streamlit as st
 
 from ai.usage import SessionUsage
+from app import levels as levels_screen
 from app.course_card import render_course_list
 from backend import chat_profiles
+from backend.jobs import JOBS
+from backend.levels import assessment_questions, validate_levels
 from pipeline.aliases import skill_aliases
+
+if TYPE_CHECKING:
+    from backend.chat import Conversation, Reply
 
 
 @lru_cache(maxsize=1)
@@ -47,6 +54,8 @@ def _authenticate(register: bool) -> None:
         st.session_state.auth_error = "프로필에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요."
     else:
         st.session_state.pop("auth_error", None)
+        st.session_state.pop("chat_assessment", None)
+        st.session_state.pop("chat_level_notice", None)
         st.session_state.profile_session = session
 
 
@@ -169,7 +178,40 @@ def _render_answer(entry: dict, index: int) -> None:
         st.feedback("thumbs", key=f"fb_{entry['turn_id']}", on_change=_on_rating, args=(entry,))
 
 
-def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSession | None) -> None:
+def _assessment_panel(conversation: Conversation, sidebar_job: str, session: chat_profiles.ProfileSession | None,
+                      levels: dict[str, int] | None, reply: Reply | None) -> None:
+    """새 사용 진술은 기응답 문항도 다시 열고, 화면 재표시는 진행 중인 문항만 유지한다."""
+    if notice := st.session_state.pop("chat_level_notice", None):
+        st.success(notice)
+    profile = conversation.profile or {}
+    job = conversation.job or profile.get("job") or sidebar_job
+    pending = st.session_state.get("chat_assessment", ())
+    same_job = bool(pending and pending[0] == job)
+    previous = pending[1] if same_job else []
+    # 예전 세션에는 직무와 기술 목록만 들어 있다.
+    closed = set(pending[2]) if same_job and len(pending) > 2 else set()
+    mentioned = reply.assessment_skills if getattr(reply, "assessment_job", "") == job else []
+    skills = list(dict.fromkeys(name for name in [*previous, *mentioned] if conversation.skills.get(name)))
+    answers = validate_levels(levels if levels is not None else profile.get("levels", {}))
+    questions = {}
+    if skills and job in JOBS and not conversation.needs_role:
+        if closed and mentioned:
+            closed.difference_update(assessment_questions(mentioned, job, answers))
+        questions = {key: names for key, names in assessment_questions(skills, job, answers).items()
+                     if key not in closed}
+    if not same_job or not questions:
+        levels_screen.clear_chat_level_drafts()
+    if not questions:
+        st.session_state.pop("chat_assessment", None)
+        return
+    finished = levels_screen.chat_questions(job, questions, answers, session)
+    st.session_state.chat_assessment = (job, skills, closed | finished)
+    if finished:
+        st.rerun()
+
+
+def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSession | None,
+           sidebar_levels: dict[str, int] | None = None) -> None:
     from backend import chat
 
     st.title("학습 상담")
@@ -182,11 +224,12 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
         conversation.usage = SessionUsage()
     history = st.session_state.chat_history
     message = st.chat_input("경험을 적거나 궁금한 점을 물어보세요.", key="chat_message")
+    reply = None
     if message and message.strip():
         try:
             reply = chat.handle_message(
                 conversation, message,
-                job=job, sidebar_skills=sidebar_skills, session=session,
+                job=job, sidebar_skills=sidebar_skills, session=session, sidebar_levels=sidebar_levels,
             )
             # 실험용 항목은 없을 수도 있다(없으면 평가 위젯을 붙이지 않는다)
             entry = {"answer": reply.text, "courses": reply.courses, "turn_id": getattr(reply, "turn_id", ""),
@@ -211,3 +254,4 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
             st.text(entry["prompt"])
         with st.chat_message("assistant"):
             _render_answer(entry, index)
+    _assessment_panel(conversation, job, session, sidebar_levels, reply)

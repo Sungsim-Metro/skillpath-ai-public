@@ -92,8 +92,8 @@ with st.sidebar:
 
 label, render, need = VIEWS[view]
 if view == "chat":
-    # 상담 채팅은 기술 이름 목록을 받는다. 진단한 단계로 기준을 넘은 기술만 보유로 넘긴다
-    chat_screen.render(job, levels_screen.chat_skills(job, levels), session)
+    confirmed_levels = None if st.session_state.levels_example else levels
+    chat_screen.render(job, levels_screen.chat_skills(job, levels), session, confirmed_levels)
     st.stop()
 
 ctx = build_ctx(job, levels, need)  # 화면에 필요한 데이터만 불러온다(상담은 수요를 부르지 않는다)

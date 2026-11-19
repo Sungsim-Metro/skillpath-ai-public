@@ -2,7 +2,7 @@
 
 화면 코드만 둔다. 단계 예시는 backend.levels.level_guide(), 저장은 backend.chat_profiles 가 맡는다.
 세션 값:
-- levels: {세부 능력 id 또는 custom:기술명: 0~5}. 화면에 표시하고 프로필에 저장한다
+- levels: {세부 능력 id 또는 custom:기술명: 0~5}. 대시보드 Gap 과 상담 채팅의 보유 판정에 쓴다
 - levels_example: True 면 아직 진단 전이라 예시 값이다(상담 채팅에는 넘기지 않는다)
 - levels_owner: levels 를 불러온 닉네임
 """
@@ -13,8 +13,9 @@ import logging
 import streamlit as st
 
 from backend import api, chat_profiles
-from backend.levels import (CUSTOM_PREFIX, LEVELS, MAX_CUSTOM_NAME_LENGTH, job_subskills, level_guide, merge_levels,
-                            named_levels)
+from backend.jobs import JOBS
+from backend.levels import (CUSTOM_PREFIX, LEVELS, MAX_CUSTOM_NAME_LENGTH, chat_owned_skill_names, job_guide,
+                            job_subskills, level_guide, merge_levels, named_levels)
 
 # 진단 전에 보여줄 예시: 예전 기본 보유 기술 Python·Linux·Git 에 해당하는 세부 능력 3단계
 # 클라우드(C*)는 스크립트·자동화, Linux, Git. AI(A*)는 데이터 분석(Python), 배포 자동화(Git)
@@ -164,6 +165,66 @@ def _question(sid: str, row: dict, names: dict) -> None:
                    type="primary" if level == chosen else "secondary", width="stretch")
 
 
+def clear_chat_level_drafts(keep: set[str] | None = None) -> None:
+    """닫힌 문항의 임시 선택이 다음 진단에 다시 나타나지 않게 한다."""
+    for key in list(st.session_state):
+        if key.startswith("chat_level_") and key != "chat_level_notice" and (not keep or key not in keep):
+            del st.session_state[key]
+
+
+def chat_questions(job: str, questions: dict[str, list[str]], answers: dict[str, int],
+                   session: chat_profiles.ProfileSession | None) -> set[str]:
+    """기존 수준을 표시하고 변경된 값만 저장한다. 이번 제안에서 닫을 문항 ID를 반환한다."""
+    guide = job_guide(job)
+    with st.container(border=True):
+        st.subheader("관련 역량 진단")
+        st.caption(f"{JOBS[job]} 진단에서 지금 할 수 있는 일을 골라 주세요. "
+                   "답한 문항의 단계는 공고와 비교할 때 연결된 기술의 수준을 추정하는 데 쓰입니다.")
+        changes = {}
+        titles = {}
+        widgets = {}
+        for sid, names in questions.items():
+            if sid.startswith(CUSTOM_PREFIX):
+                title = f"{names[0]} 직접 입력"
+                examples = guide["level_names"]
+                help_text = f"공고의 {names[0]} 요구 수준과 비교할 때 이 기술의 직접 입력값을 우선합니다."
+            else:
+                row = guide["subskills"][sid]
+                title = f"{row['name']} ({', '.join(names)})"
+                examples = {"0": guide["level_names"]["0"], **row["levels"]}
+                help_text = None
+            titles[sid] = title
+            current = answers.get(sid)
+            label = title if current is None else f"{title} · 현재 {current}단계"
+            widget_key = f"chat_level_{sid}" if current is None else f"chat_level_{sid}_from_{current}"
+            widgets[sid] = widget_key
+            labels = {n: f"{n}단계 · {examples[str(n)]}" for n in LEVELS}
+            level = st.radio(label, LEVELS, index=current, format_func=labels.__getitem__,
+                             key=widget_key, help=help_text)
+            if level is not None and level != current:
+                changes[sid] = level
+        apply, skip = st.columns(2)
+        label = "선택한 단계 프로필에 저장" if session else "선택한 단계 이번 세션에 적용"
+        if apply.button(label, key="apply_chat_levels", disabled=not changes):
+            save_levels(session, changes)
+            if (baseline := st.session_state.get(f"lv_initial_{job}")) is not None:
+                for sid, value in changes.items():
+                    if sid in baseline:
+                        baseline[sid] = value
+                        st.session_state[f"lv_{sid}"] = value
+            if not st.session_state.get("levels_pending"):
+                where = "프로필에 저장했습니다." if session else "이번 세션에 반영했습니다."
+                confirmed = ", ".join(f"{titles[sid]} {n}단계" for sid, n in changes.items())
+                st.session_state.chat_level_notice = f"{confirmed} · {where}"
+            finished = changes.keys() | (questions.keys() & answers.keys())
+        elif skip.button("건너뛰기", key="skip_chat_levels"):
+            finished = set(questions)
+        else:
+            finished = set()
+        clear_chat_level_drafts({key for sid, key in widgets.items() if sid not in finished})
+        return finished
+
+
 def save_levels(session: chat_profiles.ProfileSession | None, chosen: dict[str, int]) -> None:
     """사용자 입력만 세션에 반영하고 바뀐 응답만 계정에 저장한다."""
     current = {} if st.session_state.get("levels_example") else st.session_state.get("levels", {})
@@ -242,6 +303,9 @@ def sidebar_summary(session: chat_profiles.ProfileSession | None, job: str) -> d
     notice = st.session_state.pop("levels_notice", None)
     if notice:
         st.warning(notice)
+    if session and st.session_state.get("levels_pending") and st.button("프로필 저장 다시 시도", key="retry_levels"):
+        _persist_levels(session, {})
+        st.rerun()
     return dict(levels)
 
 
@@ -250,6 +314,5 @@ def chat_skills(job: str, levels: dict[str, int]) -> list[str]:
     if st.session_state.get("levels_example") or not levels:
         return []
     from app.common import load
-
-    names, _ = load(api.owned_skill_names, job, levels)
-    return names or []
+    market_owned, _ = load(api.owned_skill_names, job, levels)
+    return chat_owned_skill_names(job, levels, market_owned or [])

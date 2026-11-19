@@ -24,6 +24,16 @@ class MockIntakeTest(unittest.TestCase):
         self.assertEqual(turn.action, "note")
         self.assertFalse(turn.save)
 
+    def test_known_skill_is_repeated_only_for_a_new_personal_use_statement(self):
+        context = {"skills": ["Docker"], "experiences": ["전에 제가 Docker로 API를 배포했어요"]}
+        repeated = chat.interpret("이번에도 제가 도커를 사용했어요.", context)
+        self.assertEqual(repeated.add_skills, ["Docker"])
+        self.assertFalse(repeated.save)
+        for message in ["Docker만 프로필에 저장해줘", "내 Docker 경험을 정리해줘",
+                        "Docker를 더 배우고 싶어요", "팀원이 Docker를 사용했어요"]:
+            with self.subTest(message=message):
+                self.assertEqual(chat.interpret(message, context).add_skills, [])
+
     def test_negative_experience_is_removed_from_confirmed_state(self):
         experience = "제가 Docker로 API를 배포했어요"
         turn = chat.interpret("정정할게요. Docker는 제가 쓴 게 아니에요.", {
@@ -238,6 +248,22 @@ class MockIntakeTest(unittest.TestCase):
 
 
 class RealBoundaryTest(unittest.TestCase):
+    @patch("ai.bedrock._client")
+    def test_model_receives_the_restatement_rule_and_retains_distinct_turns(self, client):
+        context = {"skills": ["Docker"], "experiences": ["제가 Docker로 API를 배포했어요"]}
+        converse = client.return_value.converse
+        for text, expected in [
+            ("이번에도 제가 도커를 사용했어요", chat.Turn(add_skills=["Docker"])),
+            ("Docker만 저장해줘", chat.Turn(save=True, save_skills=["Docker"])),
+            ("내 Docker 경험을 정리해줘", chat.Turn(action="summary", experience_skills=["Docker"])),
+        ]:
+            with self.subTest(text=text), patch.dict(os.environ, BEDROCK_MODEL_ID="test"):
+                converse.return_value = {"output": {"message": {"content": [{"text": json.dumps(asdict(expected))}]}}}
+                self.assertEqual(chat.interpret(text, context, screened=True), expected)
+        request = converse.call_args.kwargs
+        self.assertIn("이미 있어도 add_skills에 포함", request["system"][0]["text"])
+        self.assertEqual(json.loads(request["messages"][0]["content"][0]["text"])["context"], context)
+
     def test_tool_trial_has_skill_evidence_and_no_evidence_of_specific_work(self):
         result = asdict(chat.Turn(add_skills=["Podman"]))
         for text in ["Podman을 이용해 이것저것 해봤다", "제가 Podman으로 이것저것 해봤어요"]:

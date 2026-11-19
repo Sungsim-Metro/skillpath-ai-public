@@ -1,7 +1,7 @@
 """보유 수준 5단계 진단과 Gap 반영 (2026-11-19, #90).
 
 - 사용자는 세부 능력(pipeline/courses/queries.csv 의 C1-1 등)마다 0~5단계를 고른다. 예시 문장은 data/skill_levels.json.
-- 직접 입력한 기술은 custom:기술명으로 저장한다.
+- 직접 입력한 기술은 custom:기술명으로 저장한다. 같은 기술의 단계는 설문으로 추정한 값보다 우선한다.
 - 공고 기술(Python, Docker …)의 내 단계 = 그 기술이 걸린 세부 능력 단계 중 가장 높은 값.
   연결은 세부 능력 별칭(pipeline.search.subskills_of)을 먼저 보고, 없으면 skill_levels.json 의 skill_subskills 표를 본다.
   표가 "ALL"(AWS 같은 공통 기술)이면 1단계 이상으로 고른 세부 능력 단계의 평균이다.
@@ -86,6 +86,7 @@ def subskills_for(skill: str, job_category: str = DEFAULT_JOB) -> list[str] | st
     다른 직무: 그 직무 진단표의 skill_subskills 에 클라우드 연결을 더한다. 같은 기술(Docker, Python 등)을
     클라우드에서 진단했으면 그 값도 함께 본다(높은 쪽, skill_level).
     """
+    skill = normalize_skill(skill) or skill.strip()
     if job_category == DEFAULT_JOB:
         from pipeline.search import subskills_of
 
@@ -102,7 +103,11 @@ def subskills_for(skill: str, job_category: str = DEFAULT_JOB) -> list[str] | st
 
 def required_level(skill: str, job_category: str = DEFAULT_JOB) -> tuple[int, str]:
     """(기준 단계, "certain" | "uncertain")."""
-    row = required_levels(job_category).get(skill)
+    thresholds = required_levels(job_category)
+    row = thresholds.get(skill)
+    if row is None and thresholds:
+        name_key = (normalize_skill(skill) or skill).casefold()
+        row = next((v for name, v in thresholds.items() if name.casefold() == name_key), None)
     if not row:
         return DEFAULT_REQUIRED_LEVEL, "uncertain"
     return int(row["required_level"]), row["confidence"]
@@ -138,7 +143,59 @@ def validate_levels(levels: dict) -> dict[str, int]:
     return merge_levels({}, levels)
 
 
-def skill_level(levels: dict[str, int], skill: str, job_category: str = DEFAULT_JOB) -> float:
+def chat_owned_skill_names(job: str, levels: dict[str, int], market_owned: list[str]) -> list[str]:
+    """시장에서 보유로 판정된 기술 뒤에 직무 기준을 충족한 직접 입력 기술을 덧붙인다."""
+    direct = named_levels(validate_levels(levels))
+    qualified = (name for name, level in direct.items() if level >= required_level(name, job)[0])
+    owned: dict[str, str] = {}
+    for name in chain(market_owned, qualified):
+        canonical = normalize_skill(name) or name
+        owned.setdefault(canonical.casefold(), canonical)
+    return list(owned.values())
+
+
+def _direct_ratings(levels: dict[str, int]) -> dict[str, int]:
+    """검증된 수준 표에서 기술 이름의 대소문자를 구분하지 않고 직접 입력을 찾는다."""
+    return {name.casefold(): value for name, value in named_levels(levels).items()}
+
+
+def assessment_questions(skills: list[str], job: str, levels: dict[str, int]) -> dict[str, list[str]]:
+    """직무 설문 문항과 이미 직접 평가한 기술을 순서대로 반환한다. 답한 문항도 다시 고를 수 있다."""
+    saved_names = {name.casefold(): name for name in named_levels(validate_levels(levels))}
+    questions = job_subskills(job)
+    seen: set[str] = set()
+    suggested: dict[str, list[str]] = {}
+    direct: dict[str, list[str]] = {}
+    for raw in skills:
+        name = normalize_skill(raw) or raw.strip()
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        name = saved_names.get(key, name)
+        linked = subskills_for(name, job)
+        if linked == ALL:
+            continue
+        local = [sid for sid in linked if sid in questions]
+        for sid in local:
+            suggested.setdefault(sid, []).append(name)
+        if local and key in saved_names:
+            direct[CUSTOM_PREFIX + name] = [name]
+    return {sid: suggested[sid] for sid in questions if sid in suggested} | direct
+
+
+def has_skill_rating(levels: dict[str, int], skill: str, job: str) -> bool:
+    """직접 입력이나 기술 단계 계산에 쓰이는 설문 응답이 있는지 확인한다. 0도 응답이다."""
+    answers = validate_levels(levels)
+    name = normalize_skill(skill) or skill.strip()
+    if name.casefold() in _direct_ratings(answers):
+        return True
+    linked = subskills_for(name, job)
+    relevant = job_subskills(job) if linked == ALL else linked
+    return any(sid in answers for sid in relevant)
+
+
+def _survey_level(levels: dict[str, int], skill: str, job_category: str) -> float:
     """세부 능력 단계로 기술 하나의 내 단계를 계산한다. 공통 기술(ALL)은 그 직무 세부 능력 중 진단한 값의 평균."""
     linked = subskills_for(skill, job_category)
     if linked == ALL:
@@ -148,18 +205,28 @@ def skill_level(levels: dict[str, int], skill: str, job_category: str = DEFAULT_
     return max((levels.get(sid, 0) for sid in linked), default=0)
 
 
+def skill_level(levels: dict[str, int], skill: str, job_category: str = DEFAULT_JOB) -> float:
+    """기술 이름으로 기록한 수준을 우선하고, 없으면 설문 응답을 기준으로 계산한다."""
+    return skill_levels(levels, [skill], job_category)[skill]
+
+
 def skill_levels(owned, skills: list[str], job_category: str = DEFAULT_JOB) -> dict[str, float]:
     """보유 입력을 {기술: 내 단계} 로 바꾼다.
 
-    - {세부 능력 id: 단계}(새 형식): 기술마다 skill_level 로 계산한다.
-    - 기술 이름 목록(예전 형식, 상담 채팅도 이 형식): 목록에 있는 기술은 5단계(완전 보유), 없는 기술은 0.
+    - {세부 능력 id 또는 custom:기술명: 단계}: 직접 입력한 이름이 일치하면 그 값을 사용한다.
+    - 기술 이름 목록(예전 형식): 목록에 있는 기술은 5단계(완전 보유), 없는 기술은 0.
       그래서 예전 호출의 보유 판정과 영역 몫은 전과 같다.
     """
     if owned is None:
         owned = []
     if isinstance(owned, dict):
         levels = validate_levels(owned)
-        return {skill: skill_level(levels, skill, job_category) for skill in skills}
+        direct = _direct_ratings(levels)
+        result = {}
+        for skill in skills:
+            key = (normalize_skill(skill) or skill).casefold() if direct else ""
+            result[skill] = direct[key] if key in direct else _survey_level(levels, skill, job_category)
+        return result
     names = {s.lower() for s in owned}
     return {skill: (MAX_LEVEL if skill.lower() in names else 0) for skill in skills}
 

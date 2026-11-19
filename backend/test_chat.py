@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from ai.chat import Turn
 from backend import chat, chat_profiles
+from backend.api import get_gap as dashboard_gap
 
 
 class ChatTest(unittest.TestCase):
@@ -36,10 +37,10 @@ class ChatTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         return patcher.start()
 
-    def send(self, turn, text="현재 상태", session=None, skills=()):
+    def send(self, turn, text="현재 상태", session=None, skills=(), levels=None):
         self.intake.return_value = turn
         return chat.handle_message(self.state, text, job="cloud_engineer",
-                                   sidebar_skills=list(skills), session=session)
+                                   sidebar_skills=list(skills), session=session, sidebar_levels=levels)
 
     def test_blocked_input_never_reaches_context_or_tools(self):
         self.guard.return_value = False
@@ -69,7 +70,7 @@ class ChatTest(unittest.TestCase):
         self.gap.return_value = [{"skill": "Docker", "owned": True}]
         self.send(Turn(action="gap", job="ai_engineer", experience_skills=["OPENTOFU"],
                        save=True, save_skills=["openTOFU"]), session=self.first)
-        self.gap.assert_called_once_with("ai_engineer", ["OpenTofu"])
+        self.gap.assert_called_once_with("ai_engineer", {})
         self.write.assert_called_once_with(self.first, add_skills=["OpenTofu"])
         self.send(Turn(action="summary", remove_skills=["OPENTOFU"], remove_experiences=["배포 api"],
                        save=True, save_skills=["opENTOfu"], save_experiences=["배포 api"]),
@@ -135,10 +136,67 @@ class ChatTest(unittest.TestCase):
         self.read.return_value = {"job": None, "skills": [], "experiences": ["제가 Docker로 API를 배포했어요"]}
         self.gap.return_value = [{"skill": "Docker", "owned": True}]
         self.send(Turn(action="gap", experience_skills=["Docker"]), session=self.first)
-        self.gap.assert_called_with("cloud_engineer", ["Docker"])
+        self.gap.assert_called_with("cloud_engineer", {})
         self.send(Turn(action="gap", remove_skills=["Docker"], experience_skills=["Docker"]), session=self.first)
-        self.gap.assert_called_with("cloud_engineer", [])
+        self.gap.assert_called_with("cloud_engineer", {})
         self.write.assert_not_called()
+
+    def test_mentioned_but_unrated_skill_is_not_a_deficit_or_a_recommendation(self):
+        docker = {"skill": "Docker", "owned": False, "postings": 3, "of": 4, "required_ratio": 0.5}
+        self.gap.return_value = [docker, {**docker, "skill": "Git"}]
+        self.recs.return_value = []
+        reply = self.send(Turn(action="courses", experience_skills=["Docker"]))
+        self.assertIn("수준 미입력", reply.text)
+        self.assertIn("Docker", reply.text)
+        self.assertNotIn("Docker · 공고", reply.text)
+        self.recs.assert_called_once_with("cloud_engineer", ["Git"], review=True)
+        self.gap.return_value = [docker]
+        self.recs.reset_mock()
+        reply = self.send(Turn(action="courses", add_skills=["Docker"]))
+        self.assertIn("수준 미입력", reply.text)
+        self.assertNotIn("모두 포함", reply.text)
+        self.recs.assert_not_called()
+
+    def test_profile_and_sidebar_scores_match_dashboard_even_with_a_saved_skill(self):
+        saved = {"custom:Docker": 4}
+        self.read.return_value = {"skills": ["Docker"], "levels": saved}
+        self.gap.side_effect = lambda job, data: [r for r in dashboard_gap(job, data) if r["skill"] == "Docker"]
+        self.recs.return_value = []
+        for ui, missing in [(None, False), ({}, None), ({"custom:Docker": 0}, True), ({"custom:Docker": 2}, True),
+                            ({"custom:Docker": 4}, False), ({"C1-4": 4}, False),
+                            ({"C1-4": 4, "custom:Docker": 2}, True)]:
+            with self.subTest(sidebar=ui):
+                self.recs.reset_mock()
+                reply = self.send(Turn(action="courses"), session=self.first, levels=ui)
+                self.gap.assert_called_with("cloud_engineer", saved if ui is None else ui)
+                self.assertEqual("수준 미입력" in reply.text, missing is None)
+                self.assertEqual("Docker · 공고" in reply.text, missing is True)
+                self.assertEqual(self.recs.called, missing is True)
+
+    def test_denied_skill_with_a_positive_score_is_deferred_only_in_this_chat(self):
+        saved = {"custom:Docker": 4}
+        self.read.return_value = {"skills": ["Docker"], "levels": saved}
+        self.gap.side_effect = lambda job, data: [r for r in dashboard_gap(job, data) if r["skill"] == "Docker"]
+        reply = self.send(Turn(action="courses", remove_skills=["Docker"]), session=self.first)
+        self.assertIn("비교 보류", reply.text)
+        self.assertNotIn("수준 미입력", reply.text)
+        self.assertNotIn("모두 포함", reply.text)
+        self.recs.assert_not_called()
+        self.write.assert_not_called()
+        self.assertEqual(self.state.profile["levels"], saved)
+        reply = self.send(Turn(action="gap"), session=self.first, levels={"custom:Docker": 0})
+        self.assertIn("Docker · 공고", reply.text)
+        self.assertNotIn("비교 보류", reply.text)
+
+    def test_assessment_candidates_only_include_a_positive_statement_with_an_active_role(self):
+        reply = self.send(Turn(add_skills=["도커", "Git"], remove_skills=["Git"], experience_skills=["Python"]))
+        self.assertEqual((reply.assessment_job, reply.assessment_skills), ("cloud_engineer", ["Docker"]))
+        self.assertEqual(self.send(Turn(action="summary", experience_skills=["Python"])).assessment_skills, [])
+        self.send(Turn(status="unsupported"))
+        reply = self.send(Turn(add_skills=["OpenTofu"]))
+        self.assertEqual((reply.assessment_job, reply.assessment_skills), ("", []))
+        reply = self.send(Turn(job="ai_engineer", add_skills=["OpenTofu"]))
+        self.assertEqual((reply.assessment_job, reply.assessment_skills), ("ai_engineer", ["OpenTofu"]))
 
     def test_gap_then_explicit_course_request(self):
         row = {"skill": "Docker", "postings": 20, "of": 40, "owned": False,

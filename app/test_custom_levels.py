@@ -19,7 +19,8 @@ def sidebar():
     from app import levels
 
     with st.sidebar:
-        levels.sidebar_summary(st.session_state.get("test_session"), "cloud_engineer")
+        mine = levels.sidebar_summary(st.session_state.get("test_session"), "cloud_engineer")
+    st.text(str(levels.chat_skills("cloud_engineer", mine)))
 
 
 def save_survey():
@@ -43,11 +44,44 @@ class CustomLevelTest(unittest.TestCase):
         at.button(key="save_custom_level").click().run()
         self.assertFalse(at.exception)
         self.assertEqual(at.session_state["levels"], {"custom:Compiler Design": 4})
+        self.assertIn("Compiler Design", at.main.text[-1].value)
         at.text_input(key="custom_level_name").set_value("compiler design")
         at.selectbox(key="custom_level_value").set_value(0)
         at.button(key="save_custom_level").click().run()
         self.assertEqual(at.session_state["levels"], {"custom:Compiler Design": 0})
+        self.assertNotIn("Compiler Design", at.main.text[-1].value)
         self.assertTrue(any("Compiler Design" in t.value for t in at.sidebar.text))
+
+    def test_chat_lists_one_canonical_name_and_drops_zero_even_with_a_survey_level(self):
+        at = AppTest.from_function(sidebar).run()
+        at.session_state["levels"] = {"custom:도커": 5, "C1-4": 4}
+        at.session_state["levels_example"] = False
+        at.run()
+        self.assertIn("'Docker'", at.main.text[-1].value)
+        self.assertNotIn("'도커'", at.main.text[-1].value)
+        at.session_state["levels"] = {"custom:도커": 0, "C1-4": 4}
+        at.run()
+        self.assertNotIn("'Docker'", at.main.text[-1].value)
+        self.assertNotIn("'도커'", at.main.text[-1].value)
+
+    def test_chat_merges_a_market_alias_with_its_direct_rating(self):
+        at = AppTest.from_function(sidebar).run()
+        at.session_state["levels"] = {"custom:Docker": 4}
+        at.session_state["levels_example"] = False
+        demand = {"total_postings": 1, "skills": [{"skill": "도커", "postings": 1, "required": 1, "preferred": 0}]}
+        with patch("backend.api.get_demand", return_value=demand):
+            at.run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.main.text[-1].value, "['Docker']")
+
+    def test_chat_keeps_only_qualifying_direct_ratings_when_demand_is_unavailable(self):
+        at = AppTest.from_function(sidebar).run()
+        at.session_state["levels"] = {"custom:Compiler Design": 3, "custom:OpenTofu": 2, "C1-4": 5}
+        at.session_state["levels_example"] = False
+        with patch("backend.api.get_demand", side_effect=LookupError("no market snapshot")):
+            at.run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.main.text[-1].value, "['Compiler Design']")
 
     def test_account_change_restores_only_its_levels_and_clears_drafts(self):
         session = SimpleNamespace(nickname="test-owner")

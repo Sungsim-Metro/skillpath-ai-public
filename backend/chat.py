@@ -10,6 +10,7 @@ from ai.bedrock import BedrockJSONError, current_model, use_model
 from ai.usage import SessionUsage, current_session, track_session
 from backend import api, chat_profiles, experiments
 from backend.jobs import JOBS
+from backend.levels import has_skill_rating
 from pipeline.aliases import normalize_skill
 
 
@@ -45,6 +46,8 @@ class Reply:
     action: str = ""
     alternatives: list[dict] = field(default_factory=list)
     failed: bool = False
+    assessment_skills: list[str] = field(default_factory=list)
+    assessment_job: str = ""
 
 
 def _skill(name: str) -> str:
@@ -192,21 +195,39 @@ def _compare_structures(pair: tuple[str, str], job: str, requested: list[str],
     return [], default["courses"]
 
 
-def _analyze(facts: dict, *, courses: bool) -> Reply:
+def _analyze(facts: dict, levels: dict[str, int], *, courses: bool) -> Reply:
     job = facts["job"]
     try:
-        rows = api.get_gap(job, facts["skills"])
+        rows = api.get_gap(job, levels)
+        unrated = [name for name in facts["skills"] if not has_skill_rating(levels, name, job)]
+        notes = ["수준 미입력 · " + ", ".join(unrated) + " (수준 입력 후 비교합니다.)"] if unrated else []
         if not rows:
-            if not api.get_demand(job)["total_postings"]:
-                return Reply("수요 데이터가 없어 현재 역량과 비교할 수 없습니다.")
-            return Reply("현재 수요 기준을 충족하는 비교 대상 기술이 없습니다.")
+            message = ("현재 수요 기준을 충족하는 비교 대상 기술이 없습니다." if api.get_demand(job)["total_postings"]
+                       else "수요 데이터가 없어 현재 역량과 비교할 수 없습니다.")
+            return Reply("\n".join([message, *notes]))
     except Exception:
         return Reply("채용공고 수요를 불러오지 못해 부족 역량을 비교할 수 없습니다.")
-    missing = [row for row in rows if not row["owned"]]
+    excluded = {name.casefold() for name in facts["excluded_skills"]}
+    conflicts = [r["skill"] for r in rows if _skill(r["skill"]).casefold() in excluded and r.get("user_level", 0) > 0]
+    if conflicts:
+        notes.append("비교 보류 · " + ", ".join(conflicts)
+                     + " (입력한 수준과 이번 상담의 정정 내용이 다릅니다. 보유 수준을 수정해 주세요.)")
+    deferred = {_skill(name).casefold() for name in [*unrated, *conflicts]}
+    comparable = [row for row in rows if _skill(row["skill"]).casefold() not in deferred]
+    if not comparable:
+        return Reply("\n".join(notes))
+    missing = [row for row in comparable if not row["owned"]]
     if not missing:
-        return Reply("입력한 보유 기술이 현재 공고 수요 기준의 기술을 모두 포함합니다.")
-    lines = [f"입력한 보유 기술을 기준으로 {JOBS[job]} 공고에서 추가로 요구하는 기술입니다."]
-    lines.extend(f"• {r['skill']} · 공고 {r['of']}건 중 {r['postings']}건" for r in missing)
+        if not notes:
+            return Reply("입력한 보유 수준이 현재 공고의 기술 기준을 모두 충족합니다.")
+        return Reply("\n".join(["현재 비교한 항목 중 기준에 미달한 기술은 없습니다.", *notes]))
+    lines = [f"{JOBS[job]} 공고의 기준 단계에 미달한 기술입니다."]
+    for row in missing:
+        line = f"• {row['skill']} · 공고 {row['of']}건 중 {row['postings']}건"
+        if "user_level" in row and "required_level" in row and has_skill_rating(levels, row["skill"], job):
+            line += f" · 내 수준 {row['user_level']}단계 / 기준 {row['required_level']}단계"
+        lines.append(line)
+    lines.extend(notes)
     reply = Reply("\n".join(lines))
     if courses:
         try:
@@ -231,7 +252,7 @@ def _analyze(facts: dict, *, courses: bool) -> Reply:
     return reply
 
 
-def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[str]) -> Reply:
+def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[str], levels: dict[str, int]) -> Reply:
     supported = ", ".join(JOBS.values())
     if turn.status == "unsupported" or (turn.job and turn.job not in JOBS):
         state.needs_role = True
@@ -253,7 +274,7 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
         if not facts["job"]:
             reply = Reply(f"{supported} 직무 기준으로 비교할까요?")
         else:
-            reply = _analyze(facts, courses=turn.action == "courses")
+            reply = _analyze(facts, levels, courses=turn.action == "courses")
     elif turn.action == "summary":
         reply = Reply(_summary(facts))
     else:
@@ -270,11 +291,16 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
     if turn.save:
         saved = _save(state, turn, facts)
         reply.text = saved if turn.action == "note" else reply.text + "\n\n" + saved
+    if facts["job"]:
+        reply.assessment_skills = [name for name in turn.add_skills if name not in turn.remove_skills]
+        if reply.assessment_skills:
+            reply.assessment_job = facts["job"]
     return reply
 
 
 def handle_message(state: Conversation, message: str, *, job: str, sidebar_skills: list[str],
-                   session: chat_profiles.ProfileSession | None = None) -> Reply:
+                   session: chat_profiles.ProfileSession | None = None,
+                   sidebar_levels: dict[str, int] | None = None) -> Reply:
     """새 메시지 한 건을 처리한다. 화면 재표시는 이 진입점을 호출하지 않는다."""
     previous = getattr(state, "session", None)
     # Open connections may still hold the pre-authentication Conversation type.
@@ -288,7 +314,7 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     with track_session(state.usage), use_model(model):
         used = "" if api.is_mock() else current_model()
         try:
-            reply = _handle_turn(state, message, job, sidebar_skills)
+            reply = _handle_turn(state, message, job, sidebar_skills, sidebar_levels)
         except Exception:
             _record_turn(state, turn_id, job, used, before, failed=True)
             raise
@@ -313,7 +339,8 @@ def _record_turn(state: Conversation, turn_id: str, job: str, model: str, before
         pass
 
 
-def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: list[str]) -> Reply:
+def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: list[str],
+                 sidebar_levels: dict[str, int] | None) -> Reply:
     if not message.strip():
         return Reply("이어서 말씀해 주세요.")
     try:
@@ -354,7 +381,8 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
     if turn.status not in {"blocked", "out_of_scope"}:
         state.pending_save = False
         state.offered_gap = False
-    reply = _answer(state, turn, job, base_skills)
+    levels = (state.profile or {}).get("levels", {}) if sidebar_levels is None else sidebar_levels
+    reply = _answer(state, turn, job, base_skills, levels)
     reply.action = turn.action if turn.status == "ok" else turn.status
     if turn.status == "ok" and turn.action == "summary" and "상태" in message and not any(
         word in message for word in ("정리", "요약", "만")

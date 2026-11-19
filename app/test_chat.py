@@ -190,10 +190,12 @@ class ChatScreenTest(unittest.TestCase):
         with patch("backend.chat.handle_message", return_value=SimpleNamespace(text="확인", courses=[])) as handle:
             at.chat_input[0].set_value("내 상태를 정리해줘").run()
             self.assertEqual(handle.call_args.kwargs["sidebar_skills"], [])  # 진단 전 예시 값은 넘기지 않는다
+            self.assertIsNone(handle.call_args.kwargs["sidebar_levels"])
             self.diagnose(at, {"C1-4": 3, "C5-2": 2})
             at.chat_input[0].set_value("다시 정리해줘").run()
             # 컨테이너 3단계는 기준(3)을 넘어 Docker·Kubernetes 보유, 스크립트 2단계는 Python 미보유
             self.assertEqual(handle.call_args.kwargs["sidebar_skills"], ["Docker", "Kubernetes"])
+            self.assertEqual(handle.call_args.kwargs["sidebar_levels"], {"C1-4": 3, "C5-2": 2})
         at.radio(key="view").set_value("gap").run()
         self.assertEqual(at.session_state["levels"], {"C1-4": 3, "C5-2": 2})
         self.assertEqual(at.title[0].value, "부족 역량")
@@ -218,6 +220,136 @@ class ChatScreenTest(unittest.TestCase):
         self.assertTrue(at.button(key="open_report").disabled)
         self.assertEqual(at.text_input(key="auth_password").value, "")
         self.assertFalse(at.exception)
+
+    def test_chat_question_applies_only_selected_level_and_restores_it_on_login(self):
+        at = self.open_screen()
+        self.authenticate(at, "문항 응답", register=True)
+        session = at.session_state["profile_session"]
+        at.chat_input[0].set_value("제가 Docker로 API를 배포했어요.").run()
+        choice = at.radio(key="chat_level_C1-4")
+        self.assertIsNone(choice.value)
+        self.assertTrue(any("Dockerfile" in label for label in choice.options))
+        self.assertTrue(at.button(key="apply_chat_levels").disabled)
+        # 닫아 둔 설문의 다른 임시 응답을 유지하면서 채팅에서 답한 문항을 동기화한다.
+        at.session_state["lv_initial_cloud_engineer"] = {"C1-4": None, "C1-5": None}
+        at.session_state["lv_C1-5"] = 1
+        choice.set_value(2).run()
+        self.assertEqual(chat_profiles.load_profile(session)["levels"], {})
+        at.button(key="apply_chat_levels").click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(chat_profiles.load_profile(session)["levels"], {"C1-4": 2})
+        self.assertEqual(at.session_state["levels"], {"C1-4": 2})
+        self.assertEqual(at.session_state["lv_initial_cloud_engineer"]["C1-4"], 2)
+        self.assertEqual(at.session_state["lv_C1-5"], 1)
+        self.assertFalse([r for r in at.radio if r.key == "chat_level_C1-4"])
+        with patch.object(api, "get_gap", wraps=api.get_gap) as gap:
+            at.chat_input[0].set_value("내 경험 기준으로 뭐가 부족해?").run()
+            gap.assert_called_once_with("cloud_engineer", {"C1-4": 2})
+        at.button(key="auth_logout").click().run()
+        self.authenticate(at, "문항 응답")
+        self.assertEqual(at.session_state["levels"], {"C1-4": 2})
+
+    def test_guest_can_skip_then_explicitly_apply_zero_without_persisting(self):
+        at = self.open_screen()
+        at.chat_input[0].set_value("제가 Docker로 API를 배포했어요.").run()
+        at.button(key="skip_chat_levels").click().run()
+        self.assertTrue(at.session_state["levels_example"])
+        at.chat_input[0].set_value("제가 Kubernetes로 서비스를 배포했어요.").run()
+        at.radio(key="chat_level_C1-4").set_value(0).run()
+        at.button(key="apply_chat_levels").click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["levels"], {"C1-4": 0})
+        self.assertFalse(self.profile_db.exists())
+
+    def test_saved_survey_can_be_reopened_skipped_and_revised_in_chat(self):
+        session = chat_profiles.create_profile("기존 진단", self.password)
+        chat_profiles.update_profile(session, levels={"C1-4": 3, "C5-2": 1})
+        at = self.open_screen()
+        self.authenticate(at, "기존 진단")
+        message = "제가 Docker로 API를 배포했어요."
+        with patch.object(chat_profiles, "update_profile", wraps=chat_profiles.update_profile) as write:
+            at.chat_input[0].set_value(message).run()
+            prompt = next(r for r in at.radio if "컨테이너" in r.label)
+            self.assertEqual(prompt.value, 3)
+            self.assertTrue(at.button(key="apply_chat_levels").disabled)
+            prompt.set_value(1).run()
+            at.button(key="skip_chat_levels").click().run()
+            self.assertFalse(any("컨테이너" in r.label for r in at.radio))
+            at.chat_input[0].set_value(message).run()
+            prompt = next(r for r in at.radio if "컨테이너" in r.label)
+            self.assertEqual(prompt.value, 3)
+            prompt.set_value(0).run()
+            write.assert_not_called()
+            at.button(key="apply_chat_levels").click().run()
+            at.chat_input[0].set_value("내 경험을 요약해줘.").run()
+            self.assertFalse(any("컨테이너" in r.label for r in at.radio))
+            self.assertEqual(write.call_count, 1)
+            self.assertEqual(write.call_args.kwargs["levels"], {"C1-4": 0})
+        self.assertEqual(chat_profiles.load_profile(session)["levels"], {"C1-4": 0, "C5-2": 1})
+        at.chat_input[0].set_value(message).run()
+        self.assertEqual(next(r.value for r in at.radio if "컨테이너" in r.label), 0)
+
+    def test_existing_direct_rating_can_be_updated_independently_of_survey(self):
+        session = chat_profiles.create_profile("직접 입력 진단", self.password)
+        chat_profiles.update_profile(session, levels={"C1-4": 2, "custom:Docker": 0})
+        at = self.open_screen()
+        self.authenticate(at, "직접 입력 진단")
+        at.chat_input[0].set_value("제가 도커를 사용했어요.").run()
+        self.assertEqual(next(r.value for r in at.radio if "컨테이너" in r.label), 2)
+        direct = next(r for r in at.radio if "직접" in r.label and "Docker" in r.label)
+        self.assertEqual(direct.value, 0)
+        direct.set_value(4).run()
+        with patch.object(chat_profiles, "update_profile", wraps=chat_profiles.update_profile) as write:
+            at.button(key="apply_chat_levels").click().run()
+            self.assertEqual(write.call_args.kwargs["levels"], {"custom:Docker": 4})
+        self.assertFalse(at.exception)
+        saved = chat_profiles.load_profile(session)["levels"]
+        self.assertEqual(saved, {"C1-4": 2, "custom:Docker": 4})
+        gap = {r["skill"]: r["user_level"] for r in api.get_gap("cloud_engineer", saved)}
+        self.assertEqual((gap["Docker"], gap["Kubernetes"]), (4, 2))
+
+    def test_leaving_the_assessment_role_discards_an_unapplied_edit(self):
+        at = self.open_screen()
+        self.diagnose(at, {"C1-4": 3})
+        message = "제가 Docker로 API를 배포했어요."
+        at.chat_input[0].set_value(message).run()
+        next(r for r in at.radio if "컨테이너" in r.label).set_value(1).run()
+        at.selectbox(key="job").set_value("ai_engineer").run()
+        at.selectbox(key="job").set_value("cloud_engineer").run()
+        at.chat_input[0].set_value(message).run()
+        self.assertEqual(next(r.value for r in at.radio if "컨테이너" in r.label), 3)
+        self.assertTrue(at.button(key="apply_chat_levels").disabled)
+
+    def test_chat_assessment_retries_failed_profile_save_without_resending_chat(self):
+        at = self.open_screen()
+        self.authenticate(at, "재시도", register=True)
+        session = at.session_state["profile_session"]
+        at.chat_input[0].set_value("제가 Docker로 API를 배포했어요.").run()
+        at.radio(key="chat_level_C1-4").set_value(4).run()
+        with patch.object(chat_profiles, "update_profile", side_effect=OSError):
+            at.button(key="apply_chat_levels").click().run()
+        self.assertEqual(chat_profiles.load_profile(session)["levels"], {})
+        self.assertEqual(at.session_state["levels"], {"C1-4": 4})
+        at.button(key="retry_levels").click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(chat_profiles.load_profile(session)["levels"], {"C1-4": 4})
+        self.assertEqual(len(at.session_state["chat_history"]), 1)
+
+    def test_only_current_role_questions_are_shown_and_partial_answers_are_kept(self):
+        at = self.open_screen()
+        at.chat_input[0].set_value("제가 Docker와 Kubernetes를 사용했어요.").run()
+        question = at.radio(key="chat_level_C1-4")
+        self.assertIn("Docker", question.label)
+        self.assertIn("Kubernetes", question.label)
+        question.set_value(4).run()
+        at.selectbox(key="job").set_value("ai_engineer").run()
+        self.assertFalse([r for r in at.radio if r.key.startswith("chat_level_")])
+        at.chat_input[0].set_value("제가 Python을 사용했어요.").run()
+        at.radio(key="chat_level_A2-2").set_value(1).run()
+        at.button(key="apply_chat_levels").click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["levels"], {"A2-2": 1})
+        self.assertIsNone(at.radio(key="chat_level_A2-1").value)
 
     def test_logout_and_failed_sign_in_clear_previous_private_state(self):
         at = self.open_screen()
@@ -301,13 +433,15 @@ class ChatScreenTest(unittest.TestCase):
         self.assertFalse(reopened.chat_message)
         with patch.object(api, "get_gap", wraps=api.get_gap) as gap:
             reopened.chat_input[0].set_value("내 경험 기준으로 뭐가 부족해?").run()
-            gap.assert_called_once_with("cloud_engineer", ["Docker"])
+            gap.assert_called_once_with("cloud_engineer", {})
+            self.assertIn("Docker", reopened.chat_message[-1].text[0].value)
         self.assertEqual(chat_profiles.load_profile(session), profile)
 
     def test_chat_reuses_one_unlisted_skill_across_jobs_and_sign_ins(self):
         first = self.open_screen()
         self.authenticate(first, "역량 예시", register=True, password="x")
         first.chat_input[0].set_value("제가 Acme.Flow를 사용했어요. Acme.Flow만 프로필에 저장해줘.").run()
+        self.assertFalse([r for r in first.radio if r.key.startswith("chat_level_")])
         session = first.session_state["profile_session"]
         self.assertEqual(chat_profiles.load_profile(session)["skills"], ["Acme.Flow"])
         first.button(key="auth_logout").click().run()

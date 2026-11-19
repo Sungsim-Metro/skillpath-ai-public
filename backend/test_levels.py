@@ -77,12 +77,73 @@ class LevelTest(unittest.TestCase):
         original = {"C1-4": 4, "A1-1": 1, "custom:Docker": 3, "custom:C++": 5}
         result = levels.merge_levels(original, {"custom: docker ": 0, "custom:C#": 2})
         self.assertEqual(result, {**original, "custom:Docker": 0, "custom:C#": 2})
+        for job in ("cloud_engineer", "ai_engineer"):
+            self.assertEqual(levels.skill_levels(result, ["Docker", "C++", "C#"], job),
+                             {"Docker": 0, "C++": 5, "C#": 2})
+        self.assertEqual(levels.skill_levels(result, ["AWS"], "cloud_engineer"), {"AWS": 4})
+        self.assertEqual(levels.skill_levels(result, ["AWS"], "ai_engineer"), {"AWS": 1})
+
+    def test_named_level_in_gap_and_ownership(self):
+        mine = {"custom:도커": 4}
+        row = next(row for row in api.get_gap(JOB, mine) if row["skill"] == "Docker")
+        self.assertEqual(row["user_level"], 4)
+        self.assertTrue(row["owned"])
+        self.assertIn("Docker", api.owned_skill_names(JOB, mine))
+        lowered = levels.merge_levels(mine, {"custom:docker": 0, "C1-4": 5})
+        self.assertEqual(lowered, {"custom:Docker": 0, "C1-4": 5})
+        self.assertNotIn("Docker", api.owned_skill_names(JOB, lowered))
 
     def test_invalid_named_level(self):
         for key, value in (("custom:  ", 2), ("custom:two\nlines", 3), ("custom:" + "가" * 121, 2), ("custom:C++", True),
                            ("custom:SQL", 6)):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 levels.validate_levels({key: value})
+
+    def test_assessment_questions_group_confirmed_skills_in_survey_order(self):
+        skills = ["도커", "Podman", "docker", "Kubernetes", "파이썬", "AWS", "OpenTofu", "Jenkins"]
+        questions = levels.assessment_questions(skills, "ai_engineer", {})
+        self.assertEqual(list(questions.items()), [
+            ("A2-1", ["Python"]), ("A2-2", ["Python"]), ("A4-2", ["Docker", "Kubernetes"]),
+        ])
+        self.assertEqual(levels.assessment_questions(["도커", "AWS", "Podman"], JOB, {}), {"C1-4": ["Docker"]})
+
+    def test_assessment_questions_keep_answered_items_and_append_direct_ratings_in_input_order(self):
+        answers = {"A2-1": 0, "A4-2": 4, "custom:Python": 3, "custom:도커": 0,
+                   "custom:Jenkins": 2, "custom:Podman": 4, "custom:AWS": 5}
+        skills = ["도커", "Podman", "Jenkins", "파이썬", "Kubernetes", "Docker", "AWS"]
+        questions = levels.assessment_questions(skills, "ai_engineer", answers)
+        self.assertEqual(list(questions.items()), [
+            ("A2-1", ["Python"]), ("A2-2", ["Python"]), ("A4-2", ["Docker", "Kubernetes"]),
+            ("custom:Docker", ["Docker"]), ("custom:Python", ["Python"]),
+        ])
+        validated = levels.validate_levels(answers)
+        self.assertEqual([validated[key] for key in questions if key.startswith("custom:")], [0, 3])
+
+    def test_assessment_question_preserves_stored_spelling_for_mapped_names_outside_alias_dictionary(self):
+        questions = levels.assessment_questions(["virtual server", "VIRTUAL SERVER"], JOB, {"custom:Virtual Server": 0})
+        self.assertEqual(list(questions.items()), [
+            ("C1-1", ["Virtual Server"]), ("custom:Virtual Server", ["Virtual Server"]),
+        ])
+
+    def test_skill_rating_requires_a_direct_or_contributing_answer_even_at_zero(self):
+        cases = [
+            ({"custom:OpenTofu": 0}, "opentofu", JOB, True),
+            ({"custom:도커": 0}, "docker", "ai_engineer", True),
+            ({"custom:Docker": 4}, "Podman", JOB, False),
+            ({"C1-4": 0}, "Docker", "ai_engineer", True),
+            ({"A4-2": 0}, "도커", "ai_engineer", True),
+            ({"A4-2": 5}, "Docker", JOB, False),
+            ({"A2-2": 0}, "Python", "ai_engineer", True),
+            ({"C1-4": 5}, "OpenTofu", JOB, False),
+            ({"C1-4": 0}, "AWS", JOB, True),
+            ({"A2-2": 5, "custom:Podman": 2}, "AWS", JOB, False),
+        ]
+        for answers, skill, job, expected in cases:
+            with self.subTest(answers=answers, skill=skill, job=job):
+                self.assertEqual(levels.has_skill_rating(answers, skill, job), expected)
+
+    def test_ai_diagnosis_uses_the_same_survey_level_for_an_explicit_alias(self):
+        self.assertEqual(levels.skill_level({"A4-2": 3}, "도커", "ai_engineer"), 3)
 
     def test_recommendation_order_follows_level(self):
         missing = [r["skill"] for r in api.get_gap(JOB, NEW) if not r["owned"]]
