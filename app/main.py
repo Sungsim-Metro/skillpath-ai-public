@@ -72,9 +72,9 @@ with st.sidebar:
     view = st.radio("화면", list(VIEWS), format_func=VIEWS.get, key="view")
     if view != st.query_params.get("view", "dashboard"):
         st.query_params["view"] = view
+    session = chat_screen.profile_access()
     job = st.selectbox("목표 직무", options=list(JOBS), format_func=JOBS.get, key="job")
-    nickname = chat_screen.nickname_input()
-    levels = levels_screen.sidebar_summary(nickname, job)
+    levels = levels_screen.sidebar_summary(session, job)
     report_dialog.sidebar_button(job, levels)
     demand, demand_err = (None, None) if view == "chat" else load(api.get_demand, job)
     skill_options = [s["skill"] for s in demand["skills"]] if demand else []
@@ -86,7 +86,7 @@ with st.sidebar:
 
 if view == "chat":
     # 상담 채팅은 기술 이름 목록을 받는다. 진단한 단계로 기준을 넘은 기술만 보유로 넘긴다
-    chat_screen.render(job, levels_screen.chat_skills(job, levels), nickname)
+    chat_screen.render(job, levels_screen.chat_skills(job, levels), session)
     st.stop()
 
 if demand:

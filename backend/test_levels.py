@@ -73,6 +73,17 @@ class LevelTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 api.get_gap(JOB, bad)
 
+    def test_named_levels_update_by_exact_name_across_both_diagnoses(self):
+        original = {"C1-4": 4, "A1-1": 1, "custom:Docker": 3, "custom:C++": 5}
+        result = levels.merge_levels(original, {"custom: docker ": 0, "custom:C#": 2})
+        self.assertEqual(result, {**original, "custom:Docker": 0, "custom:C#": 2})
+
+    def test_invalid_named_level(self):
+        for key, value in (("custom:  ", 2), ("custom:two\nlines", 3), ("custom:" + "가" * 121, 2), ("custom:C++", True),
+                           ("custom:SQL", 6)):
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                levels.validate_levels({key: value})
+
     def test_recommendation_order_follows_level(self):
         missing = [r["skill"] for r in api.get_gap(JOB, NEW) if not r["owned"]]
         plain = api.get_recommendations(JOB, missing)

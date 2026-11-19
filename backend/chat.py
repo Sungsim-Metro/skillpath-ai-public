@@ -1,7 +1,7 @@
 """학습 상담 상태를 합치고, 사용자가 요청한 범위의 도구만 실행한다."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -17,7 +17,7 @@ from pipeline.aliases import normalize_skill
 class Conversation:
     """접속 중인 한 이용자의 대화 상태. False인 수정값은 이전 보유 진술을 취소한다."""
 
-    nickname: str = ""
+    session: chat_profiles.ProfileSession | None = field(default=None, repr=False)
     profile: dict | None = None
     job: str | None = None
     needs_role: bool = False
@@ -57,15 +57,14 @@ def _effective(base: list[str], edits: dict[str, bool]) -> list[str]:
     return [name for name, present in merged.items() if present]
 
 
-def _context(state: Conversation, sidebar_job: str, sidebar_skills: list[str]) -> dict:
+def _context(state: Conversation, sidebar_job: str, base_skills: list[str]) -> dict:
     profile = state.profile or {}
-    skills = [_skill(s) for s in [*profile.get("skills", []), *sidebar_skills]]
     job = state.job or profile.get("job") or sidebar_job
     return {
         "job": job if job in JOBS and not state.needs_role else None,
         "needs_role": state.needs_role,
         "pending_save": state.pending_save,
-        "skills": _effective(skills, state.skills),
+        "skills": _effective(base_skills, state.skills),
         "excluded_skills": [skill for skill, present in state.skills.items() if not present],
         "experiences": _effective(profile.get("experiences", []), state.experiences),
         "history": state.history,
@@ -74,8 +73,8 @@ def _context(state: Conversation, sidebar_job: str, sidebar_skills: list[str]) -
 
 
 def _apply_turn(state: Conversation, turn: intake.Turn) -> None:
-    added = [_skill(x) for x in turn.add_skills]
-    removed = [_skill(x) for x in turn.remove_skills]
+    added = turn.add_skills
+    removed = turn.remove_skills
     state.skills.update(dict.fromkeys(added, True))
     state.skills.update(dict.fromkeys(removed, False))
     state.experiences.update(dict.fromkeys(turn.add_experiences, True))
@@ -99,7 +98,7 @@ def _save(state: Conversation, turn: intake.Turn, facts: dict) -> str:
         changes["job"] = facts["job"]
         labels.append(JOBS[facts["job"]])
     for key, selected, edits in (
-        ("skills", [_skill(s) for s in turn.save_skills], state.skills),
+        ("skills", turn.save_skills, state.skills),
         ("experiences", turn.save_experiences, state.experiences),
     ):
         for item in dict.fromkeys(selected):
@@ -110,15 +109,21 @@ def _save(state: Conversation, turn: intake.Turn, facts: dict) -> str:
             else:
                 state.pending_save = True
                 return "프로필에 반영할 기술이나 직접 맡은 일을 구체적으로 알려 주세요."
-            changes.setdefault(f"{op}_{key}", []).append(item)
+            stored_names = []
+            if key == "skills":
+                # 예전 프로필의 별칭도 실제 저장 표기로 수정한다.
+                stored_names = [s for s in (state.profile or {}).get("skills", [])
+                                if _skill(s).casefold() == item.casefold()]
+            values = stored_names if op == "remove" else stored_names[:1]
+            changes.setdefault(f"{op}_{key}", []).extend(values or [item])
             labels.append(item if op == "add" else f"{item} (삭제)")
     if not changes:
         state.pending_save = True
         return "프로필에 저장할 항목을 지정해 주세요."
-    if not state.nickname:
-        return "프로필을 저장하려면 닉네임을 입력한 뒤 저장할 항목을 다시 말씀해 주세요."
+    if state.session is None:
+        return "프로필을 저장하려면 사이드바에서 로그인한 뒤 저장할 항목을 다시 말씀해 주세요."
     try:
-        state.profile = chat_profiles.update_profile(state.nickname, **changes)
+        state.profile = chat_profiles.update_profile(state.session, **changes)
     except Exception:
         return "프로필 저장에 실패했습니다. 이번 상담 내용은 유지됩니다."
     return "프로필에 저장했습니다. " + ", ".join(labels)
@@ -220,7 +225,7 @@ def _analyze(facts: dict, *, courses: bool) -> Reply:
     return reply
 
 
-def _answer(state: Conversation, turn: intake.Turn, job: str, sidebar_skills: list[str]) -> Reply:
+def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[str]) -> Reply:
     supported = ", ".join(JOBS.values())
     if turn.status == "unsupported" or (turn.job and turn.job not in JOBS):
         state.needs_role = True
@@ -235,9 +240,9 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, sidebar_skills: li
     if turn.status != "ok":
         return Reply(f"{supported} 직무 준비와 본인의 역량에 관한 질문을 도와드릴 수 있습니다.")
     _apply_turn(state, turn)
-    facts = _context(state, job, sidebar_skills)
+    facts = _context(state, job, base_skills)
     # 저장한 경험 자체에서 확인한 기술은 이번 답변의 비교에만 쓴다.
-    facts["skills"] = _effective([*facts["skills"], *map(_skill, turn.experience_skills)], state.skills)
+    facts["skills"] = _effective([*facts["skills"], *turn.experience_skills], state.skills)
     if turn.action in {"gap", "courses"}:
         if not facts["job"]:
             reply = Reply(f"{supported} 직무 기준으로 비교할까요?")
@@ -263,12 +268,14 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, sidebar_skills: li
 
 
 def handle_message(state: Conversation, message: str, *, job: str, sidebar_skills: list[str],
-                   nickname: str = "") -> Reply:
+                   session: chat_profiles.ProfileSession | None = None) -> Reply:
     """새 메시지 한 건을 처리한다. 화면 재표시는 이 진입점을 호출하지 않는다."""
-    nickname = nickname.strip()
-    if state.nickname and nickname != state.nickname:
-        state.__init__()
-    state.nickname = nickname
+    previous = getattr(state, "session", None)
+    # Open connections may still hold the pre-authentication Conversation type.
+    legacy_nickname = vars(state).pop("nickname", "")
+    if legacy_nickname or (previous is not None and session is not previous):
+        Conversation.__init__(state)
+    state.session = session
     model = experiments.pick_model()  # 실험이 꺼져 있으면 None: 기본 모델 그대로
     turn_id = uuid4().hex
     before = (state.usage.input_tokens, state.usage.output_tokens)
@@ -310,14 +317,29 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
     if not allowed:
         return Reply("이 요청은 학습 상담 범위에서 처리할 수 없습니다.")
     read_failed = False
-    if state.nickname and state.profile is None:
+    if state.session is not None and state.profile is None:
         try:
-            state.profile = chat_profiles.load_profile(state.nickname)
+            state.profile = chat_profiles.load_profile(state.session)
         except Exception:
             read_failed = True
+    # 기술 하나에는 프로필 또는 세션에서 처음 사용한 표기를 쓴다. 경험 문구는 원문을 유지한다.
+    spellings: dict[str, str] = {}
+
+    def display_name(raw: str) -> str:
+        name = _skill(raw)
+        return spellings.setdefault(name.casefold(), name)
+
+    def names(raws: list[str]) -> list[str]:
+        return list(dict.fromkeys(map(display_name, raws)))
+
+    base_skills = names((state.profile or {}).get("skills", []))
+    state.skills = {display_name(raw): present for raw, present in state.skills.items()}
+    base_skills.extend(names(sidebar_skills))
     try:
-        context = _context(state, job, sidebar_skills)
+        context = _context(state, job, base_skills)
         turn = intake.interpret(message, context, screened=True)
+        turn = replace(turn, add_skills=names(turn.add_skills), remove_skills=names(turn.remove_skills),
+                       experience_skills=names(turn.experience_skills), save_skills=names(turn.save_skills))
     except intake.ChatIntakeError:
         return Reply("메시지를 해석하지 못했습니다. 요청을 다시 말씀해 주세요.", action="intake", failed=True)
     if (state.offered_gap and turn.status == "ok" and turn.action == "note"
@@ -326,7 +348,7 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
     if turn.status not in {"blocked", "out_of_scope"}:
         state.pending_save = False
         state.offered_gap = False
-    reply = _answer(state, turn, job, sidebar_skills)
+    reply = _answer(state, turn, job, base_skills)
     reply.action = turn.action if turn.status == "ok" else turn.status
     if turn.status == "ok" and turn.action == "summary" and "상태" in message and not any(
         word in message for word in ("정리", "요약", "만")

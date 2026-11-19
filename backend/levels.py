@@ -1,6 +1,7 @@
 """보유 수준 5단계 진단과 Gap 반영 (2026-11-19, #90).
 
 - 사용자는 세부 능력(pipeline/courses/queries.csv 의 C1-1 등)마다 0~5단계를 고른다. 예시 문장은 data/skill_levels.json.
+- 직접 입력한 기술은 custom:기술명으로 저장한다.
 - 공고 기술(Python, Docker …)의 내 단계 = 그 기술이 걸린 세부 능력 단계 중 가장 높은 값.
   연결은 세부 능력 별칭(pipeline.search.subskills_of)을 먼저 보고, 없으면 skill_levels.json 의 skill_subskills 표를 본다.
   표가 "ALL"(AWS 같은 공통 기술)이면 1단계 이상으로 고른 세부 능력 단계의 평균이다.
@@ -18,15 +19,19 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
+from itertools import chain
 from pathlib import Path
 
 from backend.jobs import ANALYSIS_JOBS, DEFAULT_JOB, job_file
+from pipeline.aliases import normalize_skill
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 LEVELS = tuple(range(6))  # 0 해 본 적 없음, 1~5
 MAX_LEVEL = 5
 DEFAULT_REQUIRED_LEVEL = 3  # 공고 비교로 정하지 못한 기술의 기준 단계(팀 결정값, 근거 자료 없음)
 ALL = "ALL"
+CUSTOM_PREFIX = "custom:"
+MAX_CUSTOM_NAME_LENGTH = 120
 # 부족 기술의 내 단계 → 먼저 보여줄 과정 난이도(data/courses/courses.csv 의 level 값)
 INTERMEDIATE_FROM = 3
 
@@ -103,20 +108,34 @@ def required_level(skill: str, job_category: str = DEFAULT_JOB) -> tuple[int, st
     return int(row["required_level"]), row["confidence"]
 
 
-def validate_levels(levels: dict) -> dict[str, int]:
-    """{세부 능력 id: 0~5} 를 검사한다. 모르는 id 나 범위 밖 값은 오류(조용히 0 으로 치지 않는다).
+def named_levels(levels: dict[str, int]) -> dict[str, int]:
+    """직접 입력한 항목의 표시 이름과 단계를 가져온다."""
+    return {key.removeprefix(CUSTOM_PREFIX): level for key, level in levels.items() if key.startswith(CUSTOM_PREFIX)}
 
-    모든 직무의 세부 능력 id 를 받는다. 직무를 바꿔도 다른 직무에서 진단한 값을 지우지 않는다.
-    """
+
+def merge_levels(existing: dict[str, int], changes: dict[str, int]) -> dict[str, int]:
+    """기술 별칭은 대표명, 사전 밖 기술은 첫 표기로 합치며 가장 최근 단계를 적용한다."""
     known = level_guide()["subskills"]
-    out = {}
-    for sid, value in levels.items():
-        if sid not in known:
-            raise ValueError(f"모르는 세부 능력 id 입니다: {sid!r}")
+    out: dict[str, int] = {}
+    custom_keys: dict[str, str] = {}
+    for sid, value in chain(existing.items(), changes.items()):
+        if isinstance(sid, str) and sid.startswith(CUSTOM_PREFIX):
+            name = sid.removeprefix(CUSTOM_PREFIX).strip()
+            if not name or len(name) > MAX_CUSTOM_NAME_LENGTH or not name.isprintable():
+                raise ValueError(f"기술 이름은 1~{MAX_CUSTOM_NAME_LENGTH}자로 한 줄에 입력하세요.")
+            name = normalize_skill(name) or name
+            sid = custom_keys.setdefault(name.casefold(), CUSTOM_PREFIX + name)
+        elif not isinstance(sid, str) or sid not in known:
+            raise ValueError("알 수 없는 세부 능력 ID입니다.")
         if isinstance(value, bool) or not isinstance(value, int) or value not in LEVELS:
-            raise ValueError(f"{sid} 의 단계가 {value!r} 입니다. 0~{MAX_LEVEL} 정수여야 합니다")
+            raise ValueError(f"단계는 0~{MAX_LEVEL} 사이의 정수여야 합니다.")
         out[sid] = value
     return out
+
+
+def validate_levels(levels: dict) -> dict[str, int]:
+    """모든 직무의 세부 능력 ID와 직접 입력한 기술의 0~5단계 값을 검사한다."""
+    return merge_levels({}, levels)
 
 
 def skill_level(levels: dict[str, int], skill: str, job_category: str = DEFAULT_JOB) -> float:

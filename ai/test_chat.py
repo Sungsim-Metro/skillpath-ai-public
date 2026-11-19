@@ -60,12 +60,81 @@ class MockIntakeTest(unittest.TestCase):
         corrected = dict(context, excluded_skills=["Docker"])
         self.assertEqual(chat.interpret("내 상태 정리해줘", corrected).experience_skills, [])
 
+    def test_unlisted_skills_require_direct_use_or_a_marked_label(self):
+        for text, expected in [
+            ("제가 OpenTofu를 사용했어요", ["OpenTofu"]),
+            ("제가 OpenTofu와 AtlasFlux를 사용했어요", ["OpenTofu", "AtlasFlux"]),
+            ("제가 GitHub Actions를 사용했어요", ["GitHub Actions"]),
+            ("제가 Atlas.Flow를 사용했어요", ["Atlas.Flow"]),
+            ("저는 `데이터 품질 검사`를 사용했어요", ["데이터 품질 검사"]),
+            ("저는 ‘데이터 품질 검사’를 사용했어요", ["데이터 품질 검사"]),
+            ("제가 `도커`를 사용했어요", ["Docker"]),
+            ("팀원이 OpenTofu를 사용했고 저는 API를 배포했어요", []),
+            ("OpenTofu를 써 보고 싶어요", []),
+            ("OpenTofu를 사용하지 않았어요", []),
+            ("저는 문서를 사용했어요", []),
+            ("OpenTofu 프로젝트를 개발했어요", []),
+            ("OpenTofu 강의를 추천하는 앱을 만들었어요", []),
+            ("OpenTofu를 사용하지 않았지만 저는 AtlasFlux를 사용했어요", ["AtlasFlux"]),
+        ]:
+            with self.subTest(text=text):
+                turn = chat.interpret(text, {})
+                self.assertEqual(turn.add_skills, expected)
+                self.assertFalse(turn.save)
+        explicit = chat.interpret("제가 OpenTofu를 사용했어요. OpenTofu만 프로필에 저장해줘", {})
+        self.assertEqual(explicit.save_skills, ["OpenTofu"])
+        self.assertFalse(explicit.save_experiences)
+
+    def test_named_unlisted_experiences_and_corrections_keep_their_scope(self):
+        experience = "제가 OpenTofu로 인프라를 구축했어요"
+        other = "제가 Docker로 앱을 배포했어요"
+        context = {"experiences": [experience, other], "last_changes": {"add_experiences": [other]}}
+        self.assertEqual(chat.interpret("내 상태를 정리해줘", context).experience_skills, ["OpenTofu", "Docker"])
+        selected = chat.interpret("OpenTofu 경험만 프로필에 저장해줘", context)
+        self.assertEqual(selected.save_experiences, [experience])
+        self.assertFalse(selected.save_skills)
+        self.assertEqual(chat.interpret("opentofu 기술만 저장해줘", context).save_skills, ["OpenTofu"])
+        unknown = chat.interpret("방금 말한 AtlasFlux 경험만 프로필에 저장해줘", context)
+        self.assertFalse(unknown.save_experiences)
+        self.assertFalse(unknown.save_skills)
+        corrected = chat.interpret("OpenTofu는 제가 쓴 게 아니에요", context)
+        self.assertEqual(corrected.remove_skills, ["OpenTofu"])
+        self.assertEqual(corrected.remove_experiences, [experience])
+        removed = {"excluded_skills": ["OpenTofu"], "last_changes": {"remove_skills": ["OpenTofu"]}}
+        self.assertEqual(chat.interpret("정정한 OpenTofu만 저장해줘", removed).save_skills, ["OpenTofu"])
+
+    def test_tool_use_with_a_multiword_object_needs_a_concrete_action(self):
+        experience = "제가 Podman으로 컨테이너 이미지를 배포했어요"
+        for text in [experience, "제가 Podman으로 서비스 컨테이너 이미지를 직접 배포했어요",
+                     "제가 Podman을 이용해 컨테이너 이미지를 배포했어요"]:
+            with self.subTest(text=text):
+                turn = chat.interpret(text + ".", {})
+                self.assertEqual(turn.add_skills, ["Podman"])
+                self.assertEqual(turn.add_experiences, [text])
+                self.assertFalse(turn.save)
+        self.assertEqual(chat.interpret("내 경험 요약해줘", {"experiences": [experience]}).experience_skills, ["Podman"])
+        for text in ["Podman으로 유명한 프로젝트를 분석했어요.",
+                     "Podman으로 컨테이너 이미지를 배포하고 싶어요.", "팀원이 Podman으로 컨테이너 이미지를 배포했어요."]:
+            with self.subTest(text=text):
+                self.assertFalse(chat.interpret(text, {}).add_skills)
+
+    def test_trying_a_named_tool_records_only_its_name(self):
+        for text in ["Podman을 이용해 이것저것 해봤다", "제가 Podman으로 이것저것 해봤어요", "제가 Podman을 이용했어요"]:
+            with self.subTest(text=text):
+                self.assertEqual(chat.interpret(text, {}), chat.Turn(add_skills=["Podman"]))
+        for text in ["Podman으로 이것저것 해보지 않았어요", "Podman을 이용해 이것저것 해보고 싶어요",
+                     "팀원이 Podman으로 이것저것 해봤어요", "이것저것 해봤어요"]:
+            with self.subTest(text=text):
+                self.assertEqual(chat.interpret(text, {}), chat.Turn())
+
     def test_incomplete_across_turns(self):
         original = "그리고 배포할 때는 제가…"
         self.assertEqual(chat.interpret(original, {}).status, "incomplete")
         self.assertFalse(chat.interpret("Docker를…", {}).add_skills)
         self.assertEqual(chat.interpret("Docker로 배포했어요", {
             "history": [{"role": "user", "content": original}]}).add_skills, ["Docker"])
+        self.assertEqual(chat.interpret("사용했어요", {
+            "history": [{"role": "user", "content": "제가 OpenTofu를…"}]}).add_skills, ["OpenTofu"])
 
     def test_requests_and_deferrals(self):
         for text, action in [
@@ -169,6 +238,42 @@ class MockIntakeTest(unittest.TestCase):
 
 
 class RealBoundaryTest(unittest.TestCase):
+    def test_tool_trial_has_skill_evidence_and_no_evidence_of_specific_work(self):
+        result = asdict(chat.Turn(add_skills=["Podman"]))
+        for text in ["Podman을 이용해 이것저것 해봤다", "제가 Podman으로 이것저것 해봤어요"]:
+            with self.subTest(text=text):
+                chat._validate(result, text, {})
+                with self.assertRaises(ValueError):
+                    chat._validate(dict(result, add_experiences=["Podman으로 이미지를 배포했어요"]), text, {})
+        for text in ["Podman으로 이것저것 해보지 않았어요", "Podman을 이용해 이것저것 해보고 싶어요",
+                     "팀원이 Podman으로 이것저것 해봤어요"]:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                chat._validate(result, text, {})
+
+    def test_unlisted_skill_must_be_grounded_in_the_speakers_usage(self):
+        label = "Acme.Flow"
+        addition = asdict(chat.Turn(add_skills=[label]))
+        chat._validate(addition, "제가 Acme.Flow를 사용했습니다.", {})
+        for message in ["팀원이 Acme.Flow를 사용했습니다.", "Acme.Flow를 배우고 싶어요.",
+                        "제가 Acme.Flow를 사용한 적은 없어요.", "제가 Acme.FlowPlus를 사용했어요."]:
+            with self.subTest(message=message), self.assertRaises(ValueError):
+                chat._validate(addition, message, {})
+
+    def test_unlisted_target_does_not_select_a_different_saved_experience(self):
+        right = "제가 Acme.Flow로 배포했어요"
+        wrong = "제가 Docker로 배포했어요"
+        context = {"experiences": [right, wrong]}
+        message = "Acme.Flow 경험만 프로필에 저장해줘"
+        for target in [message, message.replace("경험만", "경험을")]:
+            chat._validate(asdict(chat.Turn(save=True, save_experiences=[right])), target, context)
+            with self.assertRaises(ValueError):
+                chat._validate(asdict(chat.Turn(save=True, save_experiences=[wrong])), target, context)
+        chat._validate(asdict(chat.Turn(save=True, save_skills=["ACME.FLOW"])),
+                       "acme.flow만 저장해줘", {"skills": ["Acme.Flow"]})
+        with self.assertRaises(ValueError):
+            chat._validate(asdict(chat.Turn(save=True, save_experiences=[wrong])),
+                           "PolarisFlow와 Docker 경험만 저장해줘", context)
+
     def setUp(self):
         self.config = patch.dict(os.environ, USAGE_LOG="off", BEDROCK_MOCK="0", BEDROCK_GUARDRAIL_ID="test",
                                  BEDROCK_GUARDRAIL_VERSION="1")

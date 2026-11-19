@@ -5,15 +5,31 @@ import re
 
 from ai.chat import (
     COURSE, FRAGMENT, NEGATION, SELF, THIRD_PARTY, WISH, Turn, active_experiences, mentioned_skills,
-    owned_clauses, request_clauses, save_scope, skill_source, target_skills,
+    owned_clauses, request_clauses, save_scope, save_target_names, skill_source, target_skills,
 )
 from backend.jobs import JOBS
+from pipeline.aliases import normalize_skill
 
 _DONE = re.compile(r"했|했어|했다|했고|했습니다|썼|써\s*(?:봤|왔)|사용해\s*(?:봤|왔)|"
                    r"해\s*(?:봤|왔|본)|맡았|만들었|다뤘|구축한|개발한|배포한|경험이?\s*있|"
                    r"(?:사용|운영|개발|배포|관리|구현|담당|구축|설계|작업|다룹|다룰\s*수)\s*(?:해요|합니다|중|있)")
 _WORK = re.compile(r"개발|배포|구축|구현|설계|운영|자동화|수집|모니터링|관리|분석|"
                    r"구성|만들|작성|담당|프로젝트|실습|수강|테스트|마이그레이션")
+# A new name needs a direct use statement. Quotes distinguish Korean skill names from ordinary nouns.
+_LATIN_WORD = r"[A-Za-z][A-Za-z0-9.+/#_-]*"
+_QUOTED_LABEL = r"""`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|“[^”\n]+”|‘[^’\n]+’"""
+_LABEL = re.compile(rf"(?:{_QUOTED_LABEL}|{_LATIN_WORD}(?:[ \t]+{_LATIN_WORD})*)")
+# Match up to three object words. A relative clause such as "유명한 프로젝트" does not establish tool use.
+_OBJECT = r"(?:(?![\w./-]*(?:한|된|던|는|알려진)\s)[\w./-]+\s+){0,2}[\w./-]+(?:을|를)"
+_TRIED = r"(?:(?:이것저것|여러\s*가지)(?:을|를)?\s*)?해\s*봤(?:어요|습니다|다|어|고)?(?=\s|$|[,!.])"
+_PERFORMED = (rf"(?:{_OBJECT}\s+)?(?:직접\s*)?(?:개발|배포|구축|구현|설계|운영|자동화|수집|분석|구성|작성|테스트)"
+              r"(?:했|해요|합니다|한)")
+_USED_NAME = re.compile(
+    rf"(?<![\w.+/#-])(?P<labels>{_LABEL.pattern}(?:\s*(?:와|과|및|,)\s*{_LABEL.pattern})*)"
+    r"\s*(?:(?:을|를)\s*(?:직접\s*)?(?:(?:사용|이용|활용|도입|운영)(?:했|해요|합니다|해\s*봤)|썼|써\s*봤|다뤘)"
+    rf"|(?:으로|로|(?:을|를)\s*(?:이용|사용|활용)해(?:서)?)\s+(?:{_PERFORMED}|{_TRIED}))"
+)
+_GENERIC_TERMS = {"api", "app", "db", "sdk", "url", "ui", "ux", "ai"}
 _DEFER = re.compile(r"나중|보류|말아|말자|말고|하지\s*마|하지\s*말|안\s*(?:해|할)|필요\s*없|됐어")
 
 _GAP = re.compile(r"부족|보완|우선순위|우선\s*순위|격차|[Gg][Aa][Pp]|"
@@ -82,7 +98,23 @@ def _action(text: str) -> str:
 
 
 def _used_skills(clause: str) -> list[str]:
-    return mentioned_skills(skill_source(clause)) if _DONE.search(clause) else []
+    if not _DONE.search(clause):
+        return []
+    source = skill_source(clause)
+    skills = []
+    position = 0
+    for match in _USED_NAME.finditer(source):
+        skills.extend(mentioned_skills(source[position:match.start()]))
+        for label in _LABEL.finditer(match["labels"]):
+            raw = label.group()
+            if raw[0] in "`'\"“‘":
+                raw = raw[1:-1].strip()
+            name = normalize_skill(raw) or raw
+            if name and name.casefold() not in _GENERIC_TERMS:
+                skills.append(name)
+        position = match.end("labels")
+    skills.extend(mentioned_skills(source[position:]))
+    return list(dict.fromkeys(skills))
 
 
 def _facts(turn: Turn, message: str, context: dict) -> None:
@@ -92,10 +124,15 @@ def _facts(turn: Turn, message: str, context: dict) -> None:
         if NEGATION.search(clause):
             if re.search(r"(?:저장|기억|추천|분석|수강)\s*(?:은|는)?\s*(?:하지|안)", clause):
                 continue
-            for skill in mentioned_skills(clause):
+            experience_skills = {
+                fact: [s for part in owned_clauses(fact) for s in _used_skills(part)]
+                for fact in context.get("experiences", [])
+            }
+            known = [*context.get("skills", []), *(s for names in experience_skills.values() for s in names)]
+            for skill in target_skills(clause, known):
                 had_skill = skill in context.get("skills", [])
-                for fact in context.get("experiences", []):
-                    if any(skill in _used_skills(part) for part in owned_clauses(fact)):
+                for fact, names in experience_skills.items():
+                    if skill in names:
                         had_skill = True
                         if fact not in turn.remove_experiences:
                             turn.remove_experiences.append(fact)
@@ -115,7 +152,9 @@ def _save_targets(turn: Turn, message: str, context: dict) -> None:
         return
     turn.save = True
     last = context.get("last_changes") or {}
-    named = target_skills(scoped, context.get("skills", []))
+    known = [*context.get("skills", []), *turn.add_skills, *turn.remove_skills, *turn.experience_skills,
+             *last.get("add_skills", []), *last.get("remove_skills", [])]
+    named = save_target_names(scoped, known)
     experience_only = bool(re.search(r"경험|작업|프로젝트|맡은\s*일", scoped))
     turn.save_job = bool(re.search(r"(?:목표|직무)(?:도|를|만|는|\s|$)", scoped))
     for group in ("skills", "experiences"):
@@ -128,7 +167,7 @@ def _save_targets(turn: Turn, message: str, context: dict) -> None:
         if group == "skills" and named:
             selected = [s for s in named if s in available]
         elif group == "experiences" and experience_only and named:
-            selected = [e for e in available if set(named) <= set(mentioned_skills(e))]
+            selected = [e for e in available if set(named) <= set(target_skills(e, named))]
             operations = _WORK.findall(scoped)
             if operations:
                 selected = [e for e in selected if any(op in e for op in operations)]
@@ -136,8 +175,8 @@ def _save_targets(turn: Turn, message: str, context: dict) -> None:
                 selected = []
         elif re.search(r"전부|모두|전체", scoped) and not named:
             selected = available
-        elif not named and not turn.save_job and (experience_only or re.search(
-            r"이\s*(?:내용|기술)|방금|정정한|그거|이거", scoped
+        elif not named and not turn.save_job and (re.search(
+            r"(?:이|그)\s*(?:내용|기술|경험|작업)|방금|정정한|그거|이거", scoped
         ) or getattr(turn, f"add_{group}") or getattr(turn, f"remove_{group}")):
             selected = recent
         else:
@@ -176,8 +215,9 @@ def mock_turn(message: str, context: dict) -> Turn:
         turn.action = "courses"
     if FRAGMENT.search(user) and _DONE.search(message):
         fragment = user.rstrip(".… ").strip()
-        if fragment and mentioned_skills(fragment) and not WISH.search(fragment):
-            message = fragment + " " + message
+        continued = fragment + " " + message
+        if fragment and not WISH.search(fragment) and _used_skills(continued):
+            message = continued
     _facts(turn, message, context)
     confirmed = Turn()
     for experience in active_experiences(context, turn.add_experiences, turn.remove_experiences):

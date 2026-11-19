@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from botocore.exceptions import ClientError
 
 from backend import api
-from backend.dynamodb import DynamoDBStore, create_tables, json_numbers
+from backend.dynamodb import DynamoDBStore, create_profile_table, create_tables, json_numbers
 
 
 def client_error(code: str) -> ClientError:
@@ -109,6 +109,27 @@ class DynamoDBStoreTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 create_tables(resource=resource)
         resource.meta.client.create_table.assert_not_called()
+
+    def test_profile_table_needs_only_its_own_setting(self) -> None:
+        resource = Mock()
+        client = resource.meta.client
+        keys = [{"AttributeName": "nickname", "KeyType": "HASH"}]
+        active = description()
+        active["Table"]["KeySchema"] = keys
+        active["Table"]["AttributeDefinitions"] = [{"AttributeName": "nickname", "AttributeType": "S"}]
+        client.describe_table.side_effect = [client_error("ResourceNotFoundException"), active, active]
+        with patch.dict(os.environ, {"DYNAMODB_PROFILE_TABLE": "profiles"}, clear=True):
+            self.assertEqual(create_profile_table(resource=resource), "profiles")
+            self.assertEqual(create_profile_table(resource=resource), "profiles")
+        self.assertEqual(client.create_table.call_count, 1)
+        self.assertEqual(client.create_table.call_args.kwargs["KeySchema"], keys)
+
+    def test_profile_table_rejects_a_reserved_pipeline_table_name_before_creation(self) -> None:
+        resource = Mock()
+        with patch.dict(os.environ, {"DYNAMODB_PROFILE_TABLE": "demand", "DYNAMODB_DEMAND_TABLE": "demand"}):
+            with self.assertRaisesRegex(ValueError, "다른 테이블"):
+                create_profile_table(resource=resource)
+        resource.meta.client.describe_table.assert_not_called()
 
     def test_generated_extraction_and_snapshot_use_sdk_serializable_types(self) -> None:
         from pathlib import Path

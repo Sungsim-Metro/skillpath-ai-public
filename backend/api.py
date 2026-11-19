@@ -120,7 +120,7 @@ def _area_of(skill: str, job_category: str = DEFAULT_JOB) -> tuple[str, str]:
 def get_gap(job_category: str, owned_skills, min_ratio: float = 0.2) -> list[dict]:
     """공고 비율이 min_ratio 이상인 기술을 수요 높은 순으로 돌려주고, 내 단계와 보유 여부를 표시한다.
 
-    owned_skills 는 {세부 능력 id: 0~5}(보유 수준 진단) 또는 기술 이름 목록(예전 형식, 상담 채팅)이다.
+    owned_skills 는 {세부 능력 ID 또는 custom:기술명: 0~5} 또는 기술 이름 목록(상담 채팅)이다.
     단계·기준 단계·충족도 계산은 backend/levels.py 에 있다. 계산은 전부 코드로 한다. LLM 을 쓰지 않는다.
     """
     demand = get_demand(job_category)

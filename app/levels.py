@@ -2,17 +2,19 @@
 
 화면 코드만 둔다. 단계 예시는 backend.levels.level_guide(), 저장은 backend.chat_profiles 가 맡는다.
 세션 값:
-- levels: {세부 능력 id: 0~5}. 대시보드 Gap 과 상담 채팅의 보유 판정에 쓴다
+- levels: {세부 능력 id 또는 custom:기술명: 0~5}. 화면에 표시하고 프로필에 저장한다
 - levels_example: True 면 아직 진단 전이라 예시 값이다(상담 채팅에는 넘기지 않는다)
 - levels_owner: levels 를 불러온 닉네임
 """
+from __future__ import annotations
+
 import logging
 
 import streamlit as st
 
-from backend import chat_profiles
-from backend import api
-from backend.levels import job_subskills, level_guide
+from backend import api, chat_profiles
+from backend.levels import (CUSTOM_PREFIX, LEVELS, MAX_CUSTOM_NAME_LENGTH, job_subskills, level_guide, merge_levels,
+                            named_levels)
 
 # 진단 전에 보여줄 예시: 예전 기본 보유 기술 Python·Linux·Git 에 해당하는 세부 능력 3단계
 # 클라우드(C*)는 스크립트·자동화, Linux, Git. AI(A*)는 데이터 분석(Python), 배포 자동화(Git)
@@ -29,33 +31,38 @@ def _areas(job: str) -> dict[str, str]:
 def _set(levels: dict[str, int], example: bool) -> None:
     st.session_state.levels = dict(levels)
     st.session_state.levels_example = example
-    for key in [k for k in st.session_state if str(k).startswith("lv_")]:  # 진단 창의 작성 중 값은 버린다
+
+
+def _clear_survey() -> None:
+    for key in [k for k in st.session_state if str(k).startswith("lv_")]:
         del st.session_state[key]
 
 
-def sync_with_profile(nickname: str) -> None:
-    """닉네임이 바뀌면 그 닉네임에 저장한 수준을 불러온다.
-
-    저장한 수준이 없으면: 손님 → 닉네임은 지금 고른 값을 이어 쓰고, 다른 닉네임으로 바꾸거나 지우면 예시 값으로 되돌린다.
-    """
-    if "levels" not in st.session_state:
-        _set(EXAMPLE_LEVELS, True)
-        st.session_state.levels_owner = ""
-    previous = st.session_state.get("levels_owner", "")
-    if nickname == previous:
+def sync_with_profile(session: chat_profiles.ProfileSession | None) -> None:
+    """계정 전환 시 저장 수준을 복원하고, 빈 계정에서만 손님의 확정 응답을 임시로 이어 쓴다."""
+    owner = session.nickname if session else None
+    if "levels" in st.session_state and st.session_state.get("levels_owner") == owner:
         return
-    st.session_state.levels_owner = nickname
+    guest = {}
+    if session and st.session_state.get("levels_owner") is None and not st.session_state.get("levels_example"):
+        guest = dict(st.session_state.get("levels", {}))
+    st.session_state.levels_owner = owner
+    _clear_survey()
+    for key in ("custom_level_name", "custom_level_value", "levels_notice", "levels_pending", "guest_levels"):
+        st.session_state.pop(key, None)
     saved = {}
-    if nickname:
+    if session:
         try:
-            saved = chat_profiles.load_profile(nickname)["levels"]
-        except Exception:  # noqa: BLE001 - 저장소 오류로 화면 전체가 멈추지 않게. 닉네임은 로그에 남기지 않는다
-            logger.exception("프로필 수준을 불러오지 못했습니다")
+            saved = chat_profiles.load_profile(session)["levels"]
+        except Exception:  # noqa: BLE001 - 화면과 로그에 계정 정보를 표시하지 않는다
+            logger.warning("프로필 수준을 불러오지 못했습니다")
             st.session_state.levels_notice = "저장한 수준을 불러오지 못했습니다."
-    if saved:
-        _set(saved, False)
-    elif previous:
-        _set(EXAMPLE_LEVELS, True)
+        else:
+            if not saved and guest:
+                st.session_state.guest_levels = guest
+                _set(guest, False)
+                return
+    _set(saved or EXAMPLE_LEVELS, not saved)
 
 
 SECONDS_PER_QUESTION = 10  # 예상 응답 시간 계산용 어림값(측정한 값이 아님)
@@ -92,15 +99,16 @@ def _move(step: int) -> None:
 
 
 @st.dialog("보유 수준 진단", width="large")
-def diagnose_dialog(nickname: str, job: str) -> None:
+def diagnose_dialog(session: chat_profiles.ProfileSession | None, job: str) -> None:
     """영역 하나씩 페이지로 넘기며 세부 능력마다 0~5단계 카드를 눌러 고른다. 질문은 고른 직무의 진단표에서 온다."""
     names = level_guide()["level_names"]
     subskills = job_subskills(job)
     areas = list(_areas(job).items())
     # 예시 값은 사용자가 고른 것이 아니므로 빈 설문에서 시작한다
     current = {} if st.session_state.get("levels_example") else st.session_state.get("levels", {})
+    baseline = st.session_state.setdefault(f"lv_initial_{job}", {sid: current.get(sid) for sid in subskills})
     for sid in subskills:  # 처음 열 때만 지금 값으로 채운다. 저장하거나 닉네임이 바뀌면 지운다
-        st.session_state.setdefault(f"lv_{sid}", current.get(sid))
+        st.session_state.setdefault(f"lv_{sid}", baseline[sid])
     st.session_state.setdefault("lv_page", 0)
     page = min(max(st.session_state.lv_page, 0), len(areas) - 1)
     st.markdown(CARD_CSS, unsafe_allow_html=True)
@@ -136,12 +144,12 @@ def diagnose_dialog(nickname: str, job: str) -> None:
         forward.button("다음 영역", key="lvnav_next", type="primary", on_click=_move, args=(1,), width="stretch")
         return
     status.caption(("모든 질문에 답하면 저장할 수 있습니다. " if left else "")
-                   + ("닉네임 프로필에도 저장합니다." if nickname else "닉네임을 넣으면 다음에도 불러옵니다."))
+                   + ("내 프로필에도 저장합니다." if session else "이번 세션에 저장합니다."))
     label = f"저장 (남은 질문 {left}개)" if left else "저장"
     if forward.button(label, type="primary", width="stretch", disabled=bool(left), key="save_levels"):
-        # 다른 직무에서 진단한 값은 그대로 두고 이 직무의 답만 덮어쓴다
-        kept = {} if st.session_state.get("levels_example") else dict(st.session_state.get("levels", {}))
-        save_levels(nickname, {**kept, **{sid: st.session_state[f"lv_{sid}"] for sid in subskills}})
+        answers = {sid: st.session_state[f"lv_{sid}"] for sid in subskills}
+        save_levels(session, {sid: value for sid, value in answers.items() if value != baseline[sid]})
+        _clear_survey()
         st.rerun()
 
 
@@ -156,26 +164,68 @@ def _question(sid: str, row: dict, names: dict) -> None:
                    type="primary" if level == chosen else "secondary", width="stretch")
 
 
-def save_levels(nickname: str, chosen: dict[str, int]) -> None:
-    """진단 결과를 세션에 두고, 닉네임이 있으면 프로필에도 저장한다."""
-    # 0(해 본 적 없음)도 답한 값이라 남긴다. 계산에서는 0과 진단하지 않은 것이 같다
-    _set({sid: v for sid, v in chosen.items() if v is not None}, False)
-    if not nickname:
+def save_levels(session: chat_profiles.ProfileSession | None, chosen: dict[str, int]) -> None:
+    """사용자 입력만 세션에 반영하고 바뀐 응답만 계정에 저장한다."""
+    current = {} if st.session_state.get("levels_example") else st.session_state.get("levels", {})
+    updated = merge_levels(current, chosen)
+    _set(updated, False)
+    if not session:
+        return
+    changes = {key: value for key, value in updated.items() if current.get(key) != value}
+    _persist_levels(session, changes)
+
+
+def _persist_levels(session: chat_profiles.ProfileSession, changes: dict[str, int]) -> None:
+    """요청된 값만 프로필에 반영하고 손님으로 남겨둔 입력은 화면에 유지한다."""
+    pending = {**st.session_state.get("levels_pending", {}), **changes}
+    if not pending:
         return
     try:
-        # 0으로 바꾼 세부 능력도 덮어쓰게 고른 값 전체를 넘긴다
-        chat_profiles.update_profile(nickname, levels=dict(chosen))
+        saved = chat_profiles.update_profile(session, levels=pending)
     except Exception:  # noqa: BLE001
-        logger.exception("프로필 수준을 저장하지 못했습니다")
-        st.session_state.levels_notice = "수준을 프로필에 저장하지 못했습니다. 이번 화면에서만 사용합니다."
+        logger.warning("프로필 수준을 저장하지 못했습니다")
+        st.session_state.levels_pending = pending
+        st.session_state.levels_notice = "이번 세션에 반영했습니다. 프로필에 저장하려면 저장을 다시 눌러 주세요."
+    else:
+        st.session_state.pop("levels_pending", None)
+        stored = saved["levels"]
+        stored_keys = {key.casefold() for key in stored}
+        guest = {key: value for key, value in st.session_state.get("guest_levels", {}).items()
+                 if key.casefold() not in stored_keys}
+        st.session_state.guest_levels = guest
+        _set(merge_levels(guest, stored), False)
 
 
-def sidebar_summary(nickname: str, job: str) -> dict[str, int]:
+def _custom_levels(session: chat_profiles.ProfileSession | None) -> None:
+    with st.expander("기술 수준 직접 입력"):
+        for name, value in named_levels(st.session_state.levels).items():
+            st.text(f"{name} · {value}단계")
+        with st.form("custom_level_form"):
+            name = st.text_input("기술 이름", key="custom_level_name", placeholder="예: Docker",
+                                 max_chars=MAX_CUSTOM_NAME_LENGTH, help=f"한 줄에 {MAX_CUSTOM_NAME_LENGTH}자까지 입력할 수 있습니다.")
+            level = st.selectbox("보유 단계", LEVELS, key="custom_level_value",
+                                 format_func=lambda n: f"{n} · {level_guide()['level_names'][str(n)]}")
+            if st.form_submit_button("기술 수준 저장", key="save_custom_level"):
+                try:
+                    save_levels(session, {CUSTOM_PREFIX + name: level})
+                except ValueError as exc:
+                    st.warning(str(exc))
+                else:
+                    st.rerun()
+
+
+def sidebar_summary(session: chat_profiles.ProfileSession | None, job: str) -> dict[str, int]:
     """사이드바에 고른 직무의 영역별 내 수준을 보여주고 진단 버튼을 둔다. 지금 쓰는 {세부 능력 id: 단계} 를 돌려준다."""
-    sync_with_profile(nickname)
+    sync_with_profile(session)
     levels = st.session_state.levels
     guide = job_subskills(job)
     st.markdown("**내 보유 수준**")
+    guest = st.session_state.get("guest_levels")
+    if session and guest:
+        st.caption("로그인 전에 입력한 수준을 이번 세션에서 사용하고 있습니다.")
+        if st.button("손님 수준을 내 프로필에 저장", key="save_guest_levels"):
+            _persist_levels(session, {key: levels[key] for key in guest})
+            st.rerun()
     if st.session_state.get("levels_example"):
         st.caption(f"아직 진단 전이라 예시 값({EXAMPLE_TEXT.get(job, '예시')})으로 보여줍니다.")
     elif not any(levels.get(sid) is not None for sid in guide):
@@ -187,7 +237,8 @@ def sidebar_summary(nickname: str, job: str) -> dict[str, int]:
         lines.append(f"{area_name} {avg:.1f}")
     st.caption(" · ".join(lines) + " (영역 평균, 0~5)")
     if st.button("수준 진단하기", key="open_levels", icon=":material/checklist:", width="stretch"):
-        diagnose_dialog(nickname, job)
+        diagnose_dialog(session, job)
+    _custom_levels(session)
     notice = st.session_state.pop("levels_notice", None)
     if notice:
         st.warning(notice)
@@ -199,7 +250,6 @@ def chat_skills(job: str, levels: dict[str, int]) -> list[str]:
     if st.session_state.get("levels_example") or not levels:
         return []
     from app.common import load
-    from backend import api
 
     names, _ = load(api.owned_skill_names, job, levels)
     return names or []

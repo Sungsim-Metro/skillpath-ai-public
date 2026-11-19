@@ -1,0 +1,10 @@
+{
+  "job": "cloud_engineer",
+  "skills": ["Linux"],
+  "experiences": ["예제 서비스의 배포를 담당했습니다."],
+  "levels": {
+    "C1-4": 2,
+    "A1-1": 1,
+    "custom:OpenTelemetry": 4
+  }
+}

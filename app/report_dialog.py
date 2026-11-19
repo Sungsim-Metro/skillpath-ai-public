@@ -60,5 +60,5 @@ def sidebar_button(job: str, levels: dict[str, int]) -> None:
     """마이페이지의 보고서 버튼. 진단 전(예시 값)에는 막는다. 예시 값 보고서가 내 보고서처럼 보이지 않게."""
     example = bool(st.session_state.get("levels_example"))
     if st.button("진단 보고서", key="open_report", icon=":material/description:", width="stretch", disabled=example,
-                 help="수준 진단을 마치면 받을 수 있습니다." if example else "진단 결과를 .md 파일로 받습니다."):
+                 help="수준 진단을 마치거나 기술 수준을 직접 입력하면 받을 수 있습니다." if example else "진단 결과를 .md 파일로 받습니다."):
         report_dialog(job, levels)

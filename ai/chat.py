@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 
@@ -54,7 +54,7 @@ def mentioned_skills(text: str) -> list[str]:
 
 # 완료된 서술과 주체가 바뀌는 지점만 나눠 기술과 그 행동을 함께 둔다.
 _CLAUSES = re.compile(
-    r"[.!?。！？\n]+|(?:고|지만|는데),\s*|,\s*(?=(?:그리고|저는|제가|나는|내가|팀|동료))|"
+    r"\.(?![a-zA-Z0-9])|[!?。！？\n]+|(?:고|지만|는데),\s*|,\s*(?=(?:그리고|저는|제가|나는|내가|팀|동료))|"
     r"(?<=고)\s+(?!(?:있|싶))|(?<=지만)\s+|(?<=는데)\s+|(?<=으며)\s+|"
     r"\s+(?=반면|하지만|그리고)"
 )
@@ -109,11 +109,19 @@ def active_experiences(context: dict, added: list[str], removed: list[str]) -> l
     return [text for text in current if text not in removed]
 
 
+def _literal_skill(name: str) -> re.Pattern:
+    return re.compile(
+        r"(?<![\w+#.-])" + re.escape(name) +
+        r"(?=(?:으로|로|에서|에|처럼|부터|까지|만요?|은|는|이|가|을|를|와|과|도|의)?"
+        r"(?![\w+#-]|\.[a-z0-9]))", re.I
+    )
+
+
 def target_skills(text: str, known: list[str]) -> list[str]:
     """별칭 사전 밖에서 사용자가 직접 적은 기존 기술도 저장 대상으로 지정할 수 있다."""
     named = mentioned_skills(text)
     for item in known:
-        if item not in named and re.search(r"(?<![a-z0-9])" + re.escape(item) + r"(?![a-z0-9])", text, re.I):
+        if item not in named and _literal_skill(item).search(text):
             named.append(item)
     return named
 
@@ -127,11 +135,31 @@ _SAVE_COMMAND = re.compile(
 
 
 # "Docker 말고 Python만"처럼 정정한 대상은 마지막 긍정 요청에만 속한다.
-_REQUEST_BREAK = re.compile(r"(?<=[.!?。！？])\s*|\n+|(?:말고|아니라|빼고|제외하고|"
+_REQUEST_BREAK = re.compile(r"(?<=[!?。！？])\s*|(?<=\.)(?![a-zA-Z0-9])\s*|\n+|(?:말고|아니라|빼고|제외하고|"
                             r"했지만|했는데|었는데|았는데|썼고|했고)\s*")
 _SAVE_REFUSAL = re.compile(r"^\s*(?:은|는|도|을|를)?\s*(?:아직|나중|보류|안|말|해\s*(?:주|두|놓)지|"
                            r"하지|해도\s*되나|해\s*줘야|해야\s*(?:하|해))")
 _EXPERIENCE_TARGET = re.compile(r"경험|작업|프로젝트|맡은\s*일")
+_NAMED_TARGET = re.compile(
+    r"""[`"“‘']([^`"”’'\n]+)[`"”’']|"""
+    r"(?<!\w)([A-Za-z][A-Za-z0-9.+/#_-]*(?:[ \t]+[A-Za-z][A-Za-z0-9.+/#_-]*)*)"
+    r"(?=\s*(?:(?:배포|운영|구축|개발)\s*)?"
+    r"(?:경험|기술|역량|스킬|프로젝트|작업|만|을|를|프로필|와|과|하고|,|$))"
+)
+
+
+def save_target_names(scope: str, known: list[str]) -> list[str]:
+    """Resolve saved names and keep an explicitly named unknown target for scope checks."""
+    named = target_skills(scope, known)
+    remaining = re.sub(r"^\s*(?:my|this|that)\b\s*", "", scope, flags=re.I)
+    for name in sorted(named, key=len, reverse=True):
+        remaining = _literal_skill(name).sub(" ", remaining)
+    remaining = _alias_pattern().sub(" ", remaining)
+    for match in _NAMED_TARGET.finditer(remaining):
+        name = (match[1] or match[2]).strip()
+        if name and name not in named:
+            named.append(name)
+    return named
 
 
 def request_clauses(message: str) -> list[str]:
@@ -144,7 +172,7 @@ def _target_answer(message: str, context: dict) -> bool:
         return False
     remainder = _alias_pattern().sub("", message)
     for name in context.get("skills", []):
-        remainder = remainder.replace(name, "")
+        remainder = re.sub(re.escape(name), "", remainder, flags=re.I)
     for label in JOBS.values():
         remainder = remainder.replace(label, "")
     remainder = re.sub(r"방금\s*(?:말한|정정한)?|말씀드린|앞서\s*말한|"
@@ -213,6 +241,8 @@ add_skills: 본인이 실제 사용한 기술만 원문 표기 또는 그 대표
 과정 제목, 프로젝트 이름으로부터 기술을 추측하지 않는다. add_experiences: 본인이 맡은 작업만
 메시지에서 그대로 인용한 짧은 구절(문장 부호 생략 가능). 팀이 Kubernetes를 썼고 나는 API를 개발했다면
 '나는 API를 개발했다'만. 학습 희망, 행동 없는 기술 이름, 제삼자 진술은 경험이 아니다.
+'Podman을 이용해 이것저것 해봤다'는 Podman을 직접 사용한 진술이다. add_skills에 Podman만 넣고, 구체적 작업이 없으므로 add_experiences는 비워 둔다.
+사전에 없는 기술은 사용자가 말한 이름 그대로 적는다. 비슷한 제품이나 직무별 설문 코드로 치환하지 않는다.
 experience_skills: 상태 요약·비교·과정 추천·저장 대상 확인에 쓰는 읽기 전용 기술 목록이다.
 context.experiences와 이번 add_experiences 중 remove_experiences에 없는 경험을 읽는다. 사용자가 그 작업에
 직접 쓴 기술만 원문 표기 또는 대표명으로 보고한다. excluded_skills와 remove_skills는 제외한다.
@@ -231,8 +261,10 @@ save_job, save_skills, save_experiences: 사용자가 지정한 항목만. 'Dock
 save=true와 빈 대상 목록으로 확인을 요청한다. 저장과 비교를 함께 요청하면 두 의도를 모두 반환한다."""
 
 
-def _items(group: str, values: list[str]) -> set[str]:
-    return {normalize_skill(item) or item for item in values} if group == "skills" else set(values)
+def _items(group: str, values: Iterable[str]) -> set[str]:
+    if group == "skills":
+        return {(normalize_skill(item) or item.strip()).casefold() for item in values}
+    return set(values)
 
 
 def _supported_experience_skills(experiences: list[str], candidates: list[str]) -> set[str]:
@@ -240,7 +272,7 @@ def _supported_experience_skills(experiences: list[str], candidates: list[str]) 
     for text in experiences:
         for clause in owned_clauses(text):
             supported.update(target_skills(skill_source(clause), candidates))
-    return supported
+    return _items("skills", supported)
 
 
 def _validate(data: dict, message: str, context: dict) -> None:
@@ -265,15 +297,22 @@ def _validate(data: dict, message: str, context: dict) -> None:
         scope = save_scope(message, context)
         if scope is None:
             raise ValueError("프로필 쓰기는 현재 사용자의 명시적 요청이 있어야 합니다.")
-        named = set(target_skills(scope, context.get("skills", [])))
+        candidates = [*context.get("skills", []), *data["add_skills"], *data["remove_skills"],
+                      *data["experience_skills"], *data["save_skills"]]
+        names = save_target_names(scope, candidates)
+        named = _items("skills", names)
         if data["save_skills"] and _EXPERIENCE_TARGET.search(scope) and not re.search(r"기술|스킬|역량", scope):
             raise ValueError("경험을 지정한 저장 요청에는 기술을 추가할 수 없습니다.")
+        if named and _EXPERIENCE_TARGET.search(scope):
+            for experience in data["save_experiences"]:
+                if not named.intersection(_items("skills", target_skills(experience, names))):
+                    raise ValueError("지정한 경험만 저장할 수 있습니다.")
         if named and ("만" in scope or re.search(r"말고|빼고|제외하고", message)):
             if not _items("skills", data["save_skills"]) <= named:
                 raise ValueError("사용자가 한정한 저장 대상만 지정해야 합니다.")
             experiences = data["save_experiences"]
             if _EXPERIENCE_TARGET.search(scope):
-                if data["save_skills"] or any(not named <= set(mentioned_skills(e)) for e in experiences):
+                if data["save_skills"] or any(not named <= _items("skills", target_skills(e, names)) for e in experiences):
                     raise ValueError("지정한 경험만 저장할 수 있습니다.")
             elif experiences:
                 raise ValueError("지정한 기술만 저장할 수 있습니다.")
@@ -285,12 +324,9 @@ def _validate(data: dict, message: str, context: dict) -> None:
     previous = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
     if FRAGMENT.search(previous):
         sources.append(previous)
-    named = set(mentioned_skills(" ".join(sources)))
-    for skill in data["add_skills"]:
-        if (normalize_skill(skill) or skill) not in named and not any(
-            skill.casefold() in text.casefold() for text in sources
-        ):
-            raise ValueError("보유 기술은 사용자 발화에서 확인해야 합니다.")
+    supported = _supported_experience_skills(sources, data["add_skills"])
+    if not _items("skills", data["add_skills"]) <= supported:
+        raise ValueError("보유 기술은 사용자 본인의 발화에서 확인해야 합니다.")
     if any(not any(item in text for text in sources) for item in data["add_experiences"]):
         raise ValueError("추가할 경험은 사용자 발화에서 그대로 인용해야 합니다.")
 

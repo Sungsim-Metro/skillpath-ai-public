@@ -146,14 +146,27 @@ def create_tables(*, resource=None) -> tuple[str, str]:
     return extractions, demand
 
 
+def create_profile_table(*, resource=None) -> str:
+    """Create or validate the application's profile table independently of the batch tables."""
+    name = os.getenv("DYNAMODB_PROFILE_TABLE", "").strip()
+    if not name:
+        raise ValueError("DYNAMODB_PROFILE_TABLE을 설정하세요.")
+    if name in (os.getenv("DYNAMODB_EXTRACTIONS_TABLE", "").strip(), os.getenv("DYNAMODB_DEMAND_TABLE", "").strip()):
+        raise ValueError("프로필과 공고 데이터에는 서로 다른 테이블 이름이 필요합니다.")
+    dynamodb = resource if resource is not None else _resource()
+    _ensure_table(dynamodb.meta.client, name, [{"AttributeName": "nickname", "KeyType": "HASH"}])
+    return name
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["create-tables"])
-    parser.parse_args()
+    parser.add_argument("command", choices=["create-tables", "create-profile-table"])
+    args = parser.parse_args()
     from pipeline.rocketpunch import load_env_file
 
     load_env_file()
-    for name in create_tables():
+    names = [create_profile_table()] if args.command == "create-profile-table" else create_tables()
+    for name in names:
         print(f"테이블 준비 완료 {name}")
 
 
