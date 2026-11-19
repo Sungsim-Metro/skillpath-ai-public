@@ -22,14 +22,15 @@
 - unrecognized 표기가 있는데 답에 되묻기가 없으면 코드가 "OO는 XX를 말씀하신 건가요?" 를 덧붙인다.
 - 취업 준비 질문(scope "in")인데 도구를 한 번도 성공적으로 부르지 않았으면 uncertain_reason "no_tool".
 - 도구만 부르다 MAX_TURNS 에 걸리면 정해진 안내와 uncertain_reason "max_turns".
-- 가드레일(#24)은 guard_input 자리만 있다. 지금은 항상 통과한다.
+- 가드레일(#24): 입력은 guard_input, 답은 guard_output 이 ai.guardrail 을 부른다. 입력이 막히면 도구·모델을 부르지 않고
+  고정 문장을 돌려준다. 답이 막히면 답 대신 고정 문장, uncertain_reason "guardrail".
 
 명령 (저장소 루트에서)
   python -m ai.agent --warmup        시연 전 준비. 사전 이름 임베딩 캐시를 만든다(실제 모드). 호출 수와 걸린 시간을 출력
   python -m ai.agent "질문"           한 번 물어보고 결과를 JSON 으로 출력
 
 기록: 대화 1건마다 도구 순서·횟수, 모델 호출 수, 재질문 여부와 이유(number / pair / format), 검사에 걸린 숫자와
-틀린 수요 짝(숫자만), 토큰, 응답 시간을 로그에 남긴다. 불확실 사유는 no_tool / max_turns / number_check / pair_check.
+틀린 수요 짝(숫자만), 토큰, 응답 시간을 로그에 남긴다. 불확실 사유는 no_tool / max_turns / number_check / pair_check / guardrail.
 사용자 메시지와 답 원문, 도구 입력(보유 기술)은 로그에 남기지 않는다(CLAUDE.md 보안: 대화 기록은 로그에 출력하지 않음).
 """
 from __future__ import annotations
@@ -42,8 +43,9 @@ import time
 from typing import Optional
 
 from ai.bedrock import BedrockJSONError, SAMPLE_DIR, USAGE_KEYS, add_usage, converse_tools, is_mock, parse_json_object
+from ai import guardrail
 from ai.prompts import agent_v1 as prompt
-from ai.recommend import candidate_courses
+from ai.recommend import candidate_courses, uncertain_note
 from ai.recommend import extract_numbers as _numbers
 from backend import api
 from pipeline.aliases import _index, _key, normalize_skill, normalize_skills
@@ -162,9 +164,14 @@ def tool_get_skill_demand(skill: str) -> dict:
 def tool_search_courses(skill: str) -> dict:
     canon = normalize_skill(skill) or skill
     courses = candidate_courses(canon)[:TOP_COURSES]
-    return {"skill": canon, "courses": [  # 선수지식(prerequisites)은 길어서 뺀다. 화면의 추천 탭이 보여준다
-        {k: c[k] for k in ("title", "level", "match")} for c in courses
-    ]}
+    out = []
+    for c in courses:  # 선수지식(prerequisites)은 길어서 뺀다. 화면의 추천 탭이 보여준다
+        row = {k: c[k] for k in ("title", "level", "match")}
+        note = uncertain_note(canon, c)  # match 가 uncertain 이면 코드가 정한 안내 문장(#24)
+        if note:
+            row["note"] = note
+        out.append(row)
+    return {"skill": canon, "courses": out}
 
 
 TOOL_FUNCS = {
@@ -176,8 +183,16 @@ TOOL_FUNCS = {
 
 # ── 검사 ────────────────────────────────────────────────────────────
 def guard_input(message: str) -> Optional[str]:
-    """가드레일(#24) 자리. 막아야 하면 사용자에게 보여줄 안내 문장, 통과면 None. 지금은 항상 통과한다."""
-    return None
+    """가드레일(#24). 막아야 하면 사용자에게 보여줄 고정 안내 문장, 통과면 None(ai.guardrail.check_input).
+    Guardrails 호출이 실패해도 막고 "안전 검사를 할 수 없어요" 안내를 보여준다."""
+    result = guardrail.check_input(message)
+    return guardrail.message_for(result, guardrail.BLOCK_MESSAGE) if result.blocked else None
+
+
+def guard_output(answer: str) -> Optional[str]:
+    """답 검사(#24). GUARDRAIL_OUTPUT=1 일 때 Bedrock Guardrails 만(코드 검사는 질문에만). 막히면(호출 실패 포함) 고정 문장."""
+    result = guardrail.check_output(answer)
+    return guardrail.message_for(result, guardrail.OUTPUT_BLOCK_MESSAGE) if result.blocked else None
 
 
 def _walk_numbers(value) -> set[float]:
@@ -409,6 +424,9 @@ def chat(message: str, history: Optional[list] = None) -> dict:
             answer = answer + "\n\n" + " ".join(dict.fromkeys(asks))
         if reason is None and scope == "in" and not any(c["ok"] for c in calls):
             reason = "no_tool"
+        blocked_answer = guard_output(answer)
+        if blocked_answer is not None:  # 답이 가드레일에 걸리면 답 대신 고정 문장
+            answer, reason = blocked_answer, "guardrail"
 
     result = _result(answer, calls, usage, started, reason)
     logger.info(

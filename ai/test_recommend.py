@@ -54,7 +54,9 @@ def demo():
             {"course_id": "KE11JMZA26", "subskill_id": "C5-4", "match": "uncertain"},
         ]
         recommendation, result = rec.build_recommendation("Terraform", {"postings": 14, "of": 40, "required_ratio": 0.36})
-        assert [c["reason"] for c in recommendation["courses"]] == [rec.MOCK_FALLBACK_REASON] * 2
+        # 두 과정 모두 uncertain 이라 LLM 이유 뒤에 코드의 고정 문장(#24)이 붙는다
+        note = rec.UNCERTAIN_NOTE.format(skill="Terraform")
+        assert [c["reason"] for c in recommendation["courses"]] == [f"{rec.MOCK_FALLBACK_REASON} {note}"] * 2
         assert result.attempts == 1 and result.usage["totalTokens"] == 0
     finally:
         rec.search_courses = original
@@ -64,6 +66,42 @@ def demo():
             os.environ["BEDROCK_MOCK"] = mock_before
 
 
+def test_uncertain_note_in_final_reason():
+    """build_recommendation 이 돌려준 최종 reason 에 불확실 안내가 붙는지(도우미 함수가 아니라 실제 반환값, #24 리뷰).
+
+    certain 과정에는 붙지 않고, uncertain 은 일반 안내, 지정 입문 과정은 입문 안내. review=False·True 두 경로 모두.
+    과정 데이터 없이 돈다(후보와 입문 과정 목록을 바꿔 끼움, Bedrock 호출 없음).
+    """
+    def course(cid, match):
+        return {"course_id": cid, "title": f"과정 {cid}", "level": "기초", "url": f"https://example.com/{cid}",
+                "prerequisites": "표기 없음", "objectives": [f"Explain topic {cid}."], "subskill_id": "C1", "match": match}
+
+    courses = [course("C-OK", "certain"), course("C-UN", "uncertain"), course("C-FD", "uncertain")]
+    saved = rec.candidate_courses, rec._foundation_ids, os.environ.get("BEDROCK_MOCK")
+    rec.candidate_courses = lambda skill, rules_only=False: [dict(c) for c in courses]
+    rec._foundation_ids = lambda: {"ZZTest": ["C-FD"]}
+    os.environ["BEDROCK_MOCK"] = "1"
+    try:
+        for review in (False, True):
+            got, _ = rec.build_recommendation("ZZTest", {"postings": 4, "of": 12, "required_ratio": 0.5}, review=review)
+            reasons = {c["url"].rsplit("/", 1)[1]: c["reason"] for c in got["courses"]}
+            assert set(reasons) == {"C-OK", "C-UN", "C-FD"}, (review, reasons)
+            general = rec.UNCERTAIN_NOTE.format(skill="ZZTest")
+            foundation = rec.FOUNDATION_NOTE.format(skill="ZZTest")
+            assert general not in reasons["C-OK"] and foundation not in reasons["C-OK"], (review, reasons["C-OK"])
+            assert reasons["C-UN"].endswith(general) and foundation not in reasons["C-UN"], (review, reasons["C-UN"])
+            assert reasons["C-FD"].endswith(foundation) and general not in reasons["C-FD"], (review, reasons["C-FD"])
+            assert reasons["C-UN"] != general  # 안내만 남지 않고 원래 이유 뒤에 붙는다
+            assert all(set(c) == {"title", "url", "level", "prerequisites", "reason", "match"} for c in got["courses"])
+    finally:
+        rec.candidate_courses, rec._foundation_ids = saved[0], saved[1]
+        if saved[2] is None:
+            os.environ.pop("BEDROCK_MOCK", None)
+        else:
+            os.environ["BEDROCK_MOCK"] = saved[2]
+
+
 if __name__ == "__main__":
     demo()
+    test_uncertain_note_in_final_reason()
     print("통과")

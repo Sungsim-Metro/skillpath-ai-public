@@ -57,7 +57,9 @@ def test_tool_results_are_short():
     assert len(gap["missing_top"]) == agent.TOP_GAP == 3
     assert all(set(m) == {"skill", "postings", "required_pct", "summary"} for m in gap["missing_top"])
     courses = agent.tool_search_courses("Kubernetes")["courses"]
-    assert courses and all(set(c) == {"title", "level", "match"} for c in courses)  # 선수지식은 뺀다
+    # 선수지식은 뺀다. uncertain 과정에만 코드가 정한 안내 문장(note, #24)
+    assert courses and all(set(c) == {"title", "level", "match"} | ({"note"} if c["match"] == "uncertain" else set())
+                           for c in courses)
 
 
 def test_suggest_is_limited_per_call():

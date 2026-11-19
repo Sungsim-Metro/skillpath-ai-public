@@ -184,12 +184,19 @@ class RealBoundaryTest(unittest.TestCase):
 
     @patch("ai.bedrock._client")
     def test_intervention_returns_inert_turn_and_exact_raw_input(self, client):
-        client.return_value.apply_guardrail.return_value = {"action": "GUARDRAIL_INTERVENED"}
+        # 실제 ApplyGuardrail 의 INTERVENED 응답은 무엇이 개입했는지 assessments 에 담는다(차단 주제 BLOCKED 예)
+        client.return_value.apply_guardrail.return_value = {"action": "GUARDRAIL_INTERVENED", "assessments": [
+            {"topicPolicy": {"topics": [{"name": "Personal attribute judgment", "type": "DENY", "action": "BLOCKED"}]}}]}
         raw = "  원문 메시지  "
         self.assertEqual(chat.interpret(raw, {"skills": ["Git"]}), chat.Turn(status="blocked"))
         client.return_value.apply_guardrail.assert_called_once_with(
             guardrailIdentifier="test", guardrailVersion="1", source="INPUT",
             content=[{"text": {"text": raw}}])
+        client.return_value.converse.assert_not_called()
+        # 개입했다는데 판정을 읽을 수 없는 응답은 차단이 아니라 검사 실패다(통과시키지도 않는다, #24 공통 가드레일)
+        client.return_value.apply_guardrail.return_value = {"action": "GUARDRAIL_INTERVENED"}
+        with self.assertRaises(chat.ChatIntakeError):
+            chat.interpret(raw, {"skills": ["Git"]})
         client.return_value.converse.assert_not_called()
 
     @patch("ai.bedrock._client")

@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 
-from ai import bedrock
+from ai import bedrock, guardrail
 from backend.jobs import JOBS
 from pipeline.aliases import normalize_skill, skill_aliases
 
@@ -179,28 +178,17 @@ def save_scope(message: str, context: dict) -> str | None:
 
 
 def guard_input(message: str) -> bool:
-    """원문만 검사한다. 차단은 False, 검사할 수 없으면 오류를 반환한다."""
-    if bedrock.is_mock():
-        from ai.chat_mock import mock_guard
-        return mock_guard(message)
+    """원문 입력 검사. 상담 에이전트와 같은 ai.guardrail.check_input 을 쓴다(#24).
 
-    identifier = os.getenv("BEDROCK_GUARDRAIL_ID", "").strip()
-    version = os.getenv("BEDROCK_GUARDRAIL_VERSION", "").strip()
-    if not identifier or not version:
-        raise ChatIntakeError("입력 가드레일 설정을 확인해 주세요.")
-    try:
-        response = bedrock._client().apply_guardrail(
-            guardrailIdentifier=identifier, guardrailVersion=version, source="INPUT",
-            content=[{"text": {"text": message}}],
-        )
-        action = response["action"]
-    except Exception:
-        raise ChatIntakeError("입력 가드레일을 사용할 수 없습니다.") from None
-    if action == "GUARDRAIL_INTERVENED":
-        return False
-    if action != "NONE":
-        raise ChatIntakeError("입력 가드레일의 판정 결과를 확인할 수 없습니다.")
-    return True
+    통과는 True, 안전상 차단은 False, 검사를 끝내지 못하면(설정 누락·호출 실패·해석 불가) ChatIntakeError.
+    가짜 모드는 AWS 없이 공통 코드 검사만 한다.
+    """
+    result = guardrail.check_input(message)
+    if guardrail.is_check_failure(result):
+        if result.rule in ("설정 누락", "버전 누락"):
+            raise ChatIntakeError("입력 가드레일 설정을 확인해 주세요.")
+        raise ChatIntakeError("입력 가드레일을 사용할 수 없습니다.")
+    return not result.blocked
 
 
 _SYSTEM = """사용자의 클라우드·AI 직무 학습 상담 발화를 읽고 제공된 빈 JSON 형식의 모든 필드를 채운다.

@@ -21,6 +21,7 @@ from typing import Optional
 
 from ai.bedrock import SAMPLE_DIR, USAGE_KEYS, ConverseResult, converse_json, is_mock
 from ai.prompts import recommend_v1 as prompt
+from pipeline.aliases import normalize_skill
 from pipeline.search import search_courses
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +54,28 @@ def _courses() -> dict[str, dict]:
 
 
 MATCHES = ("certain", "uncertain")
+
+# match 가 uncertain 인 과정의 reason 끝에 코드가 붙이는 고정 문장(#24). LLM 이 쓴 reason 이 검사를 통과한 뒤에 붙인다.
+# ③ 형식은 그대로(reason 문자열에 붙임). 화면의 "불확실" 배지가 왜 붙었는지 설명한다
+UNCERTAIN_NOTE = "이 과정이 {skill}을(를) 직접 다루는지는 확실하지 않습니다. 과정 설명에서 {skill}을(를) 직접 다룬다는 내용을 확인하지 못했습니다."
+FOUNDATION_NOTE = "{skill}은(는) 범위가 넓어 입문 과정을 붙였습니다. 이 과정이 {skill} 전체를 다루지는 않습니다."
+FOUNDATION_FILE = ROOT / "data" / "foundation_courses.json"
+
+
+@lru_cache(maxsize=1)
+def _foundation_ids() -> dict[str, list[str]]:
+    """사람이 지정한 넓은 기술의 입문 과정(data/foundation_courses.json)."""
+    return json.loads(FOUNDATION_FILE.read_text(encoding="utf-8"))["courses"]
+
+
+def uncertain_note(skill: str, course: dict) -> Optional[str]:
+    """match 가 uncertain 이면 이유를 설명하는 고정 문장, 아니면 None. 지정 입문 과정(AWS 등)은 따로 쓴다."""
+    if course.get("match") != "uncertain":
+        return None
+    canon = normalize_skill(skill) or skill
+    if course.get("course_id") in _foundation_ids().get(canon, []):
+        return FOUNDATION_NOTE.format(skill=canon)
+    return UNCERTAIN_NOTE.format(skill=canon)
 
 
 def candidate_courses(skill: str, *, rules_only: bool = False) -> list[dict]:
@@ -193,7 +216,7 @@ def build_recommendation(
             "url": c["url"],
             "level": c["level"],
             "prerequisites": c["prerequisites"],
-            "reason": reasons[c["course_id"]],
+            "reason": " ".join(x for x in (reasons[c["course_id"]], uncertain_note(skill, c)) if x),
             "match": c["match"],
         }
         for c in courses if c["course_id"] in reasons

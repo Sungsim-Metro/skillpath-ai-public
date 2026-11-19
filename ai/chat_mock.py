@@ -27,15 +27,6 @@ _ROLE = re.compile(r"(?:[A-Za-z가-힣]+\s*)?(?:엔지니어|개발자|기획자
                    r"AI\s*인프라|인공지능\s*인프라|(?:클라우드|AI|백엔드|데이터)\s*직무|"
                    r"백엔드|프론트엔드", re.I)
 _GOAL = re.compile(r"기준|준비|목표|지망|취업|이직|전향|전직|지원|되고\s*싶|희망|관점|상담|커리어")
-_EXAMPLE_POLICY = re.compile(r"(?:학벌|학력|인종|성별|출신\s*지역|남성|여성).{0,24}(?:차별|배제|걸러|우대|불리|유리|뽑|기준으로\s*추천)|"
-                             r"(?:무시해|무시하고).{0,18}(?:시스템\s*프롬프트|내부\s*지침).{0,10}(?:보여|출력)")
-
-
-def mock_guard(message: str) -> bool:
-    """시연용 차단 예시. 실서비스의 판정은 ApplyGuardrail이 담당한다."""
-    return not _EXAMPLE_POLICY.search(message)
-
-
 def _job(text: str) -> tuple[str, str | None]:
     mentions = list(_ROLE.finditer(text))
     for index, match in enumerate(mentions):
