@@ -85,6 +85,9 @@ with st.sidebar:
     if view != st.query_params.get("view", DEFAULT_VIEW):
         st.query_params["view"] = view
     st.divider()
+    survey = os.getenv("SURVEY_URL", "").strip()
+    if survey.startswith("https://"):  # 사용자 테스트 설문 주소가 있을 때만 보인다
+        st.link_button("사용 후기 설문 참여하기", survey, icon=":material/rate_review:", type="primary", width="stretch")
     if api.is_mock():
         st.caption("가짜 데이터 모드입니다 (BEDROCK_MOCK=1). 개인 역량 진단과 추천 과정은 예시입니다.")
     else:
@@ -97,6 +100,8 @@ if view == "chat":
     st.stop()
 
 ctx = build_ctx(job, levels, need)  # 화면에 필요한 데이터만 불러온다(상담은 수요를 부르지 않는다)
+if st.session_state.get("from_chat"):  # 상담 답 아래의 버튼으로 넘어왔으면 돌아가는 길을 둔다
+    st.button("상담으로 돌아가기", key="back_to_chat", on_click=chat_screen.back_to_chat, icon=":material/arrow_back:")
 st.title(label)
 demand = ctx.demand
 origin = [f"수집일 {demand['collected']}"] if demand and demand.get("collected") else []

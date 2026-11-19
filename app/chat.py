@@ -4,6 +4,7 @@
 (비교 실험, backend/experiments.py). 어떤 모델·구조인지는 화면에 보여 주지 않는다. 기록에는 내용을 넣지 않는다.
 처음 접속하면 로그인·회원가입 화면(entry_gate)을 먼저 보여 주고, 비회원으로 둘러볼 수도 있다(2026-11-20).
 부족 역량이나 과정 추천을 답하면 답 아래에 해당 화면으로 가는 버튼을 둔다(2026-11-20). 과정 카드는 app/course_card.py 가 그린다.
+토큰 수는 상담 화면에 보여 주지 않는다(관리자 화면에서 본다). 평가와 A/B 선택은 한 번 고르면 감사 인사를 띄우고 숨긴다.
 """
 from __future__ import annotations
 
@@ -123,9 +124,33 @@ def profile_access() -> chat_profiles.ProfileSession | None:
 SHORTCUTS = {"gap": ("gap", "부족 역량 자세히 보기"), "courses": ("recommend", "추천 과정 보기")}
 
 
+# 상담 화면 아래에 늘 보여 주는 추천 질문. 누르면 그 글이 그대로 메시지로 들어간다
+SUGGESTIONS = ("내 경험을 정리해줘", "지금 뭐가 부족해?", "먼저 들을 교육과정을 추천해줘", "AI 엔지니어 기준으로 다시 봐줘")
+THANKS = "의견 주셔서 감사합니다!"
+
+
 def _go(view: str) -> None:
-    """사이드바 메뉴의 화면을 바꾼다. 메뉴가 이미 그려진 뒤에는 값을 바꿀 수 없어 버튼의 on_click 으로만 부른다."""
+    """사이드바 메뉴의 화면을 바꾼다. 메뉴가 이미 그려진 뒤에는 값을 바꿀 수 없어 버튼의 on_click 으로만 부른다.
+
+    상담에서 넘어갔다는 표시를 남겨, 넘어간 화면에 상담으로 돌아가는 버튼을 보여 준다(app/main.py).
+    """
     st.session_state.view = view
+    st.session_state.from_chat = view != "chat"
+
+
+def back_to_chat() -> None:
+    _go("chat")
+
+
+def _suggest(text: str) -> None:
+    st.session_state.chat_suggested = text
+
+
+def _reset_chat() -> None:
+    """새 상담: 대화와 진행 중인 수준 문항만 비운다. 로그인, 진단 결과, 프로필은 그대로다."""
+    for key in ("chat_conversation", "chat_history", "chat_assessment", "chat_suggested"):
+        st.session_state.pop(key, None)
+    levels_screen.clear_chat_level_drafts()
 
 
 def _save(entry: dict, **fields) -> None:
@@ -143,17 +168,21 @@ def _on_rating(entry: dict) -> None:
     value = st.session_state.get(f"fb_{entry['turn_id']}")
     if value is not None:  # 썸 업 1, 썸 다운 0
         _save(entry, rating="up" if value == 1 else "down")
+        entry["rated"] = True  # 한 번 고르면 평가 위젯을 숨긴다
+        st.toast(THANKS)
 
 
-def _on_pick(entry: dict) -> None:
+def _on_pick(entry: dict, choice: str) -> None:
+    """A/B 선택. choice 는 "A", "B", "tie"."""
     from backend import experiments
 
-    choice = st.session_state.get(f"ab_{entry['turn_id']}")
     left, right = entry["alternatives"]
-    picked = {"A": left["structure"], "B": right["structure"], "비슷해요": experiments.TIE}.get(choice)
+    picked = {"A": left["structure"], "B": right["structure"], "tie": experiments.TIE}.get(choice)
     if picked:
         _save(entry, left=left["structure"], right=right["structure"], picked=picked,
               tokens={side["structure"]: side["tokens"] for side in (left, right)})
+        entry["picked"] = choice  # 한 번 고르면 선택 버튼을 숨긴다
+        st.toast(THANKS)
 
 
 def _render_answer(entry: dict, index: int) -> None:
@@ -161,12 +190,22 @@ def _render_answer(entry: dict, index: int) -> None:
 
     st.text(entry["answer"])
     if len(entry["alternatives"]) == 2:
-        for column, label, side in zip(st.columns(2), ("추천 A", "추천 B"), entry["alternatives"]):
+        chosen = entry.get("picked")
+        if not chosen:
+            st.caption("두 가지 추천 가운데 더 도움이 되는 쪽을 골라 주세요.")
+        for column, name, side in zip(st.columns(2), ("A", "B"), entry["alternatives"]):
             with column:
-                st.markdown(f"**{label}**")
+                st.markdown(f"**추천 {name}**")
+                if not chosen:  # 카드 묶음 바로 위의 버튼으로 그쪽을 고른다
+                    st.button(f"추천 {name} 고르기", key=f"ab_{entry['turn_id']}_{name}", type="primary",
+                              width="stretch", on_click=_on_pick, args=(entry, name))
+                elif chosen == name:
+                    st.caption(":material/check_circle: 이 추천을 골랐습니다.")
                 render_course_list(side["courses"])
-        st.radio("어느 쪽 추천이 더 도움이 되나요?", ["A", "B", "비슷해요"], index=None, horizontal=True,
-                 key=f"ab_{entry['turn_id']}", on_change=_on_pick, args=(entry,))
+        if not chosen:
+            st.button("둘이 비슷해요", key=f"ab_{entry['turn_id']}_tie", on_click=_on_pick, args=(entry, "tie"))
+        elif chosen == "tie":
+            st.caption(":material/check_circle: 둘이 비슷하다고 골랐습니다.")
     else:
         render_course_list(entry["courses"])
     action = entry.get("action")  # 평가 기능 이전의 열린 세션 기록에는 요청 종류가 없다
@@ -174,7 +213,7 @@ def _render_answer(entry: dict, index: int) -> None:
     if shortcut and (action == "gap" or entry["courses"] or entry["alternatives"]):
         view, label = shortcut
         st.button(label, key=f"go_{index}", on_click=_go, args=(view,), icon=":material/arrow_forward:")
-    if entry["turn_id"] and experiments.active():  # 실험이 꺼져 있으면 평가를 받지 않는다(화면이 전과 같다)
+    if entry["turn_id"] and experiments.active() and not entry.get("rated"):  # 실험이 꺼져 있으면 평가를 받지 않는다
         st.feedback("thumbs", key=f"fb_{entry['turn_id']}", on_change=_on_rating, args=(entry,))
 
 
@@ -214,7 +253,11 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
            sidebar_levels: dict[str, int] | None = None) -> None:
     from backend import chat
 
-    st.title("학습 상담")
+    st.session_state.pop("from_chat", None)  # 상담으로 돌아왔으면 '돌아가기' 표시를 지운다
+    heading, action = st.columns([4, 1], vertical_alignment="bottom")
+    heading.title("학습 상담")
+    action.button("새 상담 시작", key="chat_reset", on_click=_reset_chat, icon=":material/refresh:", width="stretch",
+                  help="대화만 비웁니다. 로그인과 진단 결과는 그대로입니다.")
     st.caption("직접 맡은 일이나 사용한 기술을 알려주세요. 부족한 기술이나 교육과정은 원할 때 물어보세요.")
     if "chat_conversation" not in st.session_state:
         st.session_state.chat_conversation = chat.Conversation()
@@ -223,28 +266,14 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
     if not hasattr(conversation, "usage"):
         conversation.usage = SessionUsage()
     history = st.session_state.chat_history
-    message = st.chat_input("경험을 적거나 궁금한 점을 물어보세요.", key="chat_message")
-    reply = None
-    if message and message.strip():
-        try:
-            reply = chat.handle_message(
-                conversation, message,
-                job=job, sidebar_skills=sidebar_skills, session=session, sidebar_levels=sidebar_levels,
-            )
-            # 실험용 항목은 없을 수도 있다(없으면 평가 위젯을 붙이지 않는다)
-            entry = {"answer": reply.text, "courses": reply.courses, "turn_id": getattr(reply, "turn_id", ""),
-                     "model": getattr(reply, "model", ""), "action": getattr(reply, "action", ""),
-                     "alternatives": getattr(reply, "alternatives", [])}
-        except Exception:
-            # 예외에 닉네임, 프로필 또는 원문이 포함될 수 있다.
-            entry = {"answer": "메시지 처리 결과를 확인할 수 없습니다.", "courses": [], "turn_id": "", "model": "",
-                     "action": "", "alternatives": []}
-        history.append({"prompt": message, "job": job, "session_id": conversation.usage.session_id, **entry})
+    typed = st.chat_input("경험을 적거나 궁금한 점을 물어보세요.", key="chat_message")
+    message = typed or st.session_state.pop("chat_suggested", None)  # 추천 질문 버튼도 같은 길로 들어온다
 
-    usage = conversation.usage
-    st.metric("이 대화의 누적 토큰", f"{usage.total_tokens:,}",
-              help="기록을 시작한 뒤 모델이 보고한 사용량입니다. 재시도를 포함하며 모의 호출은 0토큰입니다.")
-    st.caption(f"입력 {usage.input_tokens:,} · 출력 {usage.output_tokens:,} · 세션 ID `{usage.session_id}`")
+    # 내 상태 한 줄: 목표 직무, 진단으로 확인한 보유 기술, 이번 대화에서 말한 기술
+    target = conversation.job or (conversation.profile or {}).get("job") or job
+    mentioned = sum(1 for used in conversation.skills.values() if used)
+    diagnosed = f"진단으로 확인한 보유 기술 {len(sidebar_skills)}개" if sidebar_levels is not None else "수준 진단 전"
+    st.caption(f":material/flag: 목표 직무 {JOBS.get(target, target)} · {diagnosed} · 대화에서 말한 기술 {mentioned}개")
 
     for index, entry in enumerate(history):
         if isinstance(entry, tuple):  # 평가 기능 이전의 열린 세션에는 턴 ID가 없다.
@@ -254,4 +283,31 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
             st.text(entry["prompt"])
         with st.chat_message("assistant"):
             _render_answer(entry, index)
+
+    reply = None
+    if message and message.strip():
+        with st.chat_message("user"):
+            st.text(message)
+        with st.chat_message("assistant"):
+            with st.spinner("답을 준비하고 있습니다…"):  # 답이 올 때까지 말풍선 안에 진행 표시를 둔다
+                try:
+                    reply = chat.handle_message(
+                        conversation, message,
+                        job=job, sidebar_skills=sidebar_skills, session=session, sidebar_levels=sidebar_levels,
+                    )
+                    # 실험용 항목은 없을 수도 있다(없으면 평가 위젯을 붙이지 않는다)
+                    entry = {"answer": reply.text, "courses": reply.courses,
+                             "turn_id": getattr(reply, "turn_id", ""), "model": getattr(reply, "model", ""),
+                             "action": getattr(reply, "action", ""),
+                             "alternatives": getattr(reply, "alternatives", [])}
+                except Exception:
+                    # 예외에 닉네임, 프로필 또는 원문이 포함될 수 있다.
+                    entry = {"answer": "메시지 처리 결과를 확인할 수 없습니다.", "courses": [], "turn_id": "",
+                             "model": "", "action": "", "alternatives": []}
+            history.append({"prompt": message, "job": job, "session_id": conversation.usage.session_id, **entry})
+            _render_answer(history[-1], len(history) - 1)
     _assessment_panel(conversation, job, session, sidebar_levels, reply)
+
+    st.caption("이렇게 물어보세요")
+    for column, text in zip(st.columns(len(SUGGESTIONS)), SUGGESTIONS):
+        column.button(text, key=f"suggest_{SUGGESTIONS.index(text)}", on_click=_suggest, args=(text,), width="stretch")
