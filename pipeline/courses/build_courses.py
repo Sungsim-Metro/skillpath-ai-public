@@ -1,7 +1,7 @@
 """수집한 교육과정 원문을 전처리해 과정 표와 과정↔세부 능력 연결표를 만든다.
 
 입력:  data/raw/courses/*.md, data/raw/courses/search_hits.csv, pipeline/courses/queries.csv
-출력:  data/courses/courses.csv          과정 1개당 1행 (설명, 학습 목표, 소요 시간 등)
+출력:  data/courses/courses.csv          과정 1개당 1행 (설명, 학습 목표, 소요 시간, 평점 등)
        data/courses/course_subskill.csv  과정 ↔ 세부 능력 연결과 근거 문장
 
 직무(--job):
@@ -87,6 +87,67 @@ def parse_language(head: list[str]):
     return lang, more
 
 
+def parse_rating(sec: dict) -> tuple[str, str]:
+    """상세 페이지의 별점 평균과 평가 수를 (평균, 개수) 글자로 돌려준다. 못 읽으면 둘 다 빈 칸(2026-11-20).
+
+    Ratings 절의 'average rating of 4.6 out of 5', 'total number of reviews 11143 reviews' 를 먼저 읽고,
+    없으면 제목 아래의 '4.6 (11143)' 줄을 읽는다. 'Rated 5 out of 5' 는 반올림한 값이라 쓰지 않는다.
+    평가가 아직 없는 과정은 페이지에 이 줄들이 없다. 그럴듯한 값으로 채우지 않는다(원칙 4).
+    """
+    avg = count = None
+    for line in sec.get("Ratings", []):
+        m = re.fullmatch(r"average rating of (\d(?:\.\d+)?) out of 5", line)
+        if m:
+            avg = m.group(1)
+        m = re.fullmatch(r"total number of reviews ([\d,]+) reviews?", line)
+        if m:
+            count = m.group(1)
+    if avg is None or count is None:
+        for line in sec.get("_head", []):
+            m = re.fullmatch(r"(\d(?:\.\d+)?) \(([\d,]+)\)", line)
+            if m:
+                avg, count = m.groups()
+                break
+    if avg is None or count is None:
+        return "", ""
+    value, total = float(avg), int(count.replace(",", ""))
+    if not (0 < value <= 5 and total > 0):
+        return "", ""
+    return f"{value:.1f}", str(total)
+
+
+RATING_FIELDS = ["rating_avg", "rating_count"]
+
+
+def fill_ratings() -> None:
+    """과정 표(courses.csv)의 평점 두 열만 원문에서 다시 읽어 채운다. 행과 다른 열은 그대로 둔다.
+
+    과정 목록, 과정↔세부 능력 연결표, 임베딩을 건드리지 않고 평점만 갱신하려는 것이다.
+    원문이 없는 과정은 이미 적힌 값을 그대로 둔다.
+    """
+    rows = read_table(COURSES_FILE)
+    if not rows:
+        raise SystemExit(f"과정 표가 없습니다: {COURSES_FILE}")
+    before = [{k: v for k, v in row.items() if k not in RATING_FIELDS} for row in rows]
+    read = rated = 0
+    for row in rows:
+        path = RAW_DIR / f"{row['course_id']}.md"
+        if not path.exists():
+            for name in RATING_FIELDS:
+                row.setdefault(name, "")
+            continue
+        read += 1
+        _, body = split_front_matter(path.read_text(encoding="utf-8"))
+        row["rating_avg"], row["rating_count"] = parse_rating(sections(body))
+        rated += bool(row["rating_avg"])
+    if before != [{k: v for k, v in row.items() if k not in RATING_FIELDS} for row in rows]:
+        raise SystemExit("평점 말고 다른 열이 바뀌었습니다. 저장하지 않습니다")
+    fields = [k for k in rows[0] if k not in RATING_FIELDS] + RATING_FIELDS
+    write_table(COURSES_FILE, rows, fields)
+    have = sum(bool(row["rating_avg"]) for row in rows)
+    print(f"과정 {len(rows)}개 중 원문을 읽은 과정 {read}개, 그중 평점이 있는 과정 {rated}개. 표에 평점이 있는 과정 {have}개")
+
+
 def split_sentences(lines: list[str]) -> list[str]:
     out = []
     for line in lines:
@@ -170,6 +231,7 @@ def main(job: str = DEFAULT_JOB):
             "source": meta.get("source", ""),
             "collected_at": meta.get("collected_at", ""),
         }
+        row["rating_avg"], row["rating_count"] = parse_rating(sec)
         courses.append(row)
         parsed[cid] = {"raw": raw, "title": title, "objectives": sec.get("Objectives", []),
                        "description": sec.get("Description", [])}
@@ -219,7 +281,9 @@ def main(job: str = DEFAULT_JOB):
         old_courses, old_links = read_table(COURSES_FILE), read_table(LINKS_FILE)
         added = len({c["course_id"] for c in courses} - {c["course_id"] for c in old_courses})
         all_courses, all_links = merge_job(old_courses, old_links, courses, links, set(queries))
-        write_table(COURSES_FILE, all_courses, list(old_courses[0].keys()) if old_courses else course_fields)
+        # 예전 표에 없던 열(평점)이 새 과정에 있으면 맨 뒤에 더한다. 예전 행의 그 칸은 비워 둔다
+        old_fields = list(old_courses[0].keys()) if old_courses else []
+        write_table(COURSES_FILE, all_courses, old_fields + [k for k in course_fields if k not in old_fields])
         write_table(LINKS_FILE, all_links, list(old_links[0].keys()) if old_links else link_fields)
         print(f"[{job}] 기존 표에 덧붙임: 새 과정 {added}개 (전체 {len(all_courses)}개), 연결 전체 {len(all_links)}건")
 
@@ -236,4 +300,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--job", choices=JOB_CHOICES, default=DEFAULT_JOB,
                     help="직무(기본: 클라우드, 표를 새로 만든다). 다른 직무는 기존 표에 덧붙인다")
-    main(ap.parse_args().job)
+    ap.add_argument("--ratings-only", action="store_true",
+                    help="과정 표의 평점 두 열만 원문에서 다시 읽어 채운다(행과 다른 열은 그대로)")
+    args = ap.parse_args()
+    if args.ratings_only:
+        fill_ratings()
+    else:
+        main(args.job)

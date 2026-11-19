@@ -4,7 +4,7 @@
     "demand": {"postings": 31, "of": 40, "required_ratio": 0.77},
     "courses": [
       {"title": "(예시) AWS Cloud Practitioner Essentials", "url": "https://example.com/course/aws-essentials", "level": "기초", "prerequisites": "없음",
-       "reason": "목표 직무 공고 40건 중 31건이 AWS를 요구하고, 그중 24건이 필수입니다. 이 과정은 EC2, S3, IAM 등 공고에 자주 나오는 서비스를 처음부터 다룹니다.", "match": "certain"},
+       "reason": "목표 직무 공고 40건 중 31건이 AWS를 요구하고, 그중 24건이 필수입니다. 이 과정은 EC2, S3, IAM 등 공고에 자주 나오는 서비스를 처음부터 다룹니다.", "match": "certain", "rating_avg": 4.7, "rating_count": 2310},
       {"title": "(예시) Architecting on AWS", "url": "https://example.com/course/architecting", "level": "중급", "prerequisites": "AWS 기초 서비스 이해",
        "reason": "공고 근거 \"AWS EC2, S3, IAM 등 주요 서비스 설계 및 운영 경험\"처럼 설계 경험을 묻는 공고가 있어, 기초 과정 다음 단계로 추천합니다.", "match": "certain"}
     ]
@@ -14,7 +14,7 @@
     "demand": {"postings": 20, "of": 40, "required_ratio": 0.45},
     "courses": [
       {"title": "(예시) 컨테이너 기초와 Amazon ECS", "url": "https://example.com/course/ecs", "level": "기초", "prerequisites": "Linux 명령어",
-       "reason": "공고 40건 중 20건이 Docker를 요구합니다. 이 과정은 컨테이너 이미지 작성부터 ECS 배포까지 다룹니다.", "match": "certain"}
+       "reason": "공고 40건 중 20건이 Docker를 요구합니다. 이 과정은 컨테이너 이미지 작성부터 ECS 배포까지 다룹니다.", "match": "certain", "rating_avg": 4.5, "rating_count": 845}
     ]
   },
   {

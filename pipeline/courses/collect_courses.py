@@ -11,6 +11,7 @@
     python pipeline/courses/collect_courses.py            # 검색 + 상세 원문 수집
     python pipeline/courses/collect_courses.py --limit 2  # 시험용: 검색어 2개만
     python pipeline/courses/collect_courses.py --job ai_engineer  # AI 세부 능력(queries_ai_engineer.csv)
+    python pipeline/courses/collect_courses.py --from-catalog --refresh  # 검색 없이 과정 표의 과정 원문만 다시 받기
 
 출력 (data/raw/는 저장소에 올리지 않는다):
     data/raw/courses/search_hits.csv   어떤 검색어·난이도로 어떤 과정이 나왔는지
@@ -29,6 +30,7 @@ from urllib.parse import quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = ROOT / "data" / "raw" / "courses"
+CATALOG_FILE = ROOT / "data" / "courses" / "courses.csv"  # 전처리 결과인 과정 표(build_courses.py)
 DEFAULT_JOB = "cloud_engineer"
 JOB_CHOICES = ("cloud_engineer", "ai_engineer")  # backend/jobs.py 의 ANALYSIS_JOBS 와 같게 둔다
 
@@ -136,28 +138,61 @@ async def run(limit: int | None, job: str = DEFAULT_JOB):
             w.writerows(hits)
 
         # 2) 과정마다 상세 원문 한 번씩
-        courses = {h["course_id"]: h for h in hits}
+        courses = {h["course_id"]: h["url"] for h in hits}
         log.info("검색 결과 %d건, 서로 다른 과정 %d개", len(hits), len(courses))
-        for i, (cid, h) in enumerate(courses.items(), 1):
-            out = RAW_DIR / f"{cid}.md"
-            if out.exists():
-                log.info("[%d/%d] 이미 있음: %s", i, len(courses), cid)
-                continue
-            body = await fetch_detail(page, h["url"])
-            out.write_text(
-                f"---\ncourse_id: {cid}\nsource_url: {h['url']}\ncollected_at: {today}\n"
-                f"source: AWS Skill Builder 과정 상세 페이지\n---\n\n{body}\n",
-                encoding="utf-8",
-            )
-            log.info("[%d/%d] 저장: %s (%d자)", i, len(courses), cid, len(body))
-            await page.wait_for_timeout(REQUEST_GAP_MS)
+        await save_details(page, courses, today)
 
+        await browser.close()
+
+
+async def save_details(page, courses: dict[str, str], today: str, refresh: bool = False):
+    """{과정 ID: 주소} 의 상세 원문을 저장한다. 이미 받은 과정은 건너뛰고, refresh 면 다시 받아 덮어쓴다."""
+    for i, (cid, url) in enumerate(courses.items(), 1):
+        out = RAW_DIR / f"{cid}.md"
+        if out.exists() and not refresh:
+            log.info("[%d/%d] 이미 있음: %s", i, len(courses), cid)
+            continue
+        body = await fetch_detail(page, url)
+        out.write_text(
+            f"---\ncourse_id: {cid}\nsource_url: {url}\ncollected_at: {today}\n"
+            f"source: AWS Skill Builder 과정 상세 페이지\n---\n\n{body}\n",
+            encoding="utf-8",
+        )
+        log.info("[%d/%d] 저장: %s (%d자)", i, len(courses), cid, len(body))
+        await page.wait_for_timeout(REQUEST_GAP_MS)
+
+
+async def run_catalog(limit: int | None, refresh: bool):
+    """검색하지 않고 과정 표(courses.csv)에 있는 과정의 상세 원문만 받는다.
+
+    평점처럼 상세 페이지의 값만 다시 읽을 때 쓴다(2026-11-20). 검색을 다시 하면 과정 목록이 바뀌어
+    과정↔세부 능력 연결표와 임베딩까지 다시 만들어야 하므로, 이미 정한 과정의 주소만 연다.
+    """
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    with CATALOG_FILE.open(encoding="utf-8-sig", newline="") as f:
+        courses = {row["course_id"]: row["url"] for row in csv.DictReader(f)}
+    if limit:
+        courses = dict(list(courses.items())[:limit])
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(locale="en-US", viewport={"width": 1440, "height": 1000})
+        page = await context.new_page()
+        log.info("과정 표의 과정 %d개", len(courses))
+        await save_details(page, courses, date.today().isoformat(), refresh)
         await browser.close()
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, help="시험용: 앞에서부터 검색어 몇 개만")
+    ap.add_argument("--limit", type=int, help="시험용: 앞에서부터 검색어(--from-catalog 이면 과정) 몇 개만")
     ap.add_argument("--job", choices=JOB_CHOICES, default=DEFAULT_JOB, help="세부 능력 검색어를 고를 직무(기본: 클라우드)")
+    ap.add_argument("--from-catalog", action="store_true",
+                    help="검색하지 않고 data/courses/courses.csv 의 과정 상세 원문만 받는다")
+    ap.add_argument("--refresh", action="store_true", help="--from-catalog 에서 이미 받은 원문도 다시 받는다")
     args = ap.parse_args()
-    asyncio.run(run(args.limit, args.job))
+    if args.from_catalog:
+        asyncio.run(run_catalog(args.limit, args.refresh))
+    else:
+        asyncio.run(run(args.limit, args.job))

@@ -22,7 +22,9 @@
         "level": "기초",
         "prerequisites": "없음",
         "reason": "공고 60건 중 33건이 LLM 활용을 요구합니다. 이 과정은 Bedrock으로 모델을 고르고 호출하는 방법을 처음부터 다룹니다.",
-        "match": "certain"
+        "match": "certain",
+        "rating_avg": 4.6,
+        "rating_count": 1120
       }
     ]
   },

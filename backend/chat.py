@@ -153,7 +153,13 @@ def _verified_courses(recommendations: list[dict], missing: list[dict]) -> list[
             url = urlsplit(course["url"])
             if url.scheme != "https" or not url.hostname or course["match"] not in {"certain", "uncertain"}:
                 raise ValueError("과정 링크 또는 매칭 상태 오류")
-            courses.append({**{k: course[k] for k in keys}, "gap_skill": skill})
+            shown = {**{k: course[k] for k in keys}, "gap_skill": skill}
+            avg, count = course.get("rating_avg"), course.get("rating_count")
+            # 평점은 선택 필드다. 숫자가 아니거나 범위를 벗어나면 과정은 보여 주되 평점만 뺀다
+            if (isinstance(avg, (int, float)) and not isinstance(avg, bool) and 0 < avg <= 5
+                    and isinstance(count, int) and not isinstance(count, bool) and count > 0):
+                shown.update(rating_avg=avg, rating_count=count)
+            courses.append(shown)
     return courses
 
 

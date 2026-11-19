@@ -92,7 +92,7 @@ def test_uncertain_note_in_final_reason():
             assert reasons["C-UN"].endswith(general) and foundation not in reasons["C-UN"], (review, reasons["C-UN"])
             assert reasons["C-FD"].endswith(foundation) and general not in reasons["C-FD"], (review, reasons["C-FD"])
             assert reasons["C-UN"] != general  # 안내만 남지 않고 원래 이유 뒤에 붙는다
-            assert all(set(c) == {"title", "url", "level", "prerequisites", "reason", "match"} for c in got["courses"])
+            assert all(set(c) - {"rating_avg", "rating_count"} == {"title", "url", "level", "prerequisites", "reason", "match"} for c in got["courses"])
     finally:
         rec.candidate_courses, rec._foundation_ids = saved[0], saved[1]
         if saved[2] is None:

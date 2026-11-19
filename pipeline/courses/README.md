@@ -16,6 +16,19 @@ python pipeline/courses/build_courses.py               # 전처리 (몇 초)
 
 상세 원문은 이미 받은 과정이면 건너뛰므로, 중간에 끊겨도 다시 실행하면 이어서 받는다.
 
+### 평점만 다시 받기 (2026-11-20)
+
+```bash
+python pipeline/courses/collect_courses.py --from-catalog --refresh   # 검색 없이 과정 표의 과정 원문만 다시 받는다 (약 30분)
+python pipeline/courses/build_courses.py --ratings-only              # 과정 표의 평점 두 열만 채운다
+```
+
+- `--from-catalog`는 `data/courses/courses.csv`에 있는 과정의 주소만 연다. 검색을 다시 하지 않으므로 과정 목록이 바뀌지 않는다.
+  `--refresh`를 빼면 이미 받은 원문은 건너뛴다.
+- `--ratings-only`는 `rating_avg`, `rating_count` 열만 바꾼다. 행 수, 순서, 다른 열이 달라지면 저장하지 않고 멈춘다.
+  `course_subskill.csv`와 임베딩(`course_vectors.json`)은 건드리지 않는다. 원문이 없는 과정은 적혀 있던 값을 그대로 둔다.
+- 평점은 상세 페이지 Ratings 절의 별점 평균과 평가 수다. 평가가 없는 과정은 빈 칸으로 둔다. 글로 쓴 후기는 페이지에 없다.
+
 ### AI 엔지니어 과정 (2026-11-19)
 
 ```bash
@@ -37,7 +50,7 @@ python -X utf8 -m pipeline.build_course_vectors                # 새 과정만 �
 | `queries_ai_engineer.csv` | AI 세부 능력 12개의 검색어와 별칭 | 올림 |
 | `data/raw/courses/<과정ID>.md` | 과정 상세 페이지 원문. 맨 위에 출처 주소와 수집일 | 올리지 않음 |
 | `data/raw/courses/search_hits.csv` | 어떤 검색어·난이도로 어떤 과정이 몇 위로 나왔는지 (AI는 `search_hits_ai_engineer.csv`) | 올리지 않음 |
-| `data/courses/courses.csv` | 과정 1개당 1행: 제목, 링크, 난이도, 소요 시간, 언어, 설명, 학습 목표, 수강 대상, 선수지식 | 올림 |
+| `data/courses/courses.csv` | 과정 1개당 1행: 제목, 링크, 난이도, 소요 시간, 언어, 설명, 학습 목표, 수강 대상, 선수지식, 평점(`rating_avg`, `rating_count`) | 올림 |
 | `data/courses/course_subskill.csv` | 과정 ↔ 세부 능력 연결, 근거 문장, `certain`/`uncertain` | 올림 |
 
 ## 수집 조건
@@ -60,3 +73,4 @@ python -X utf8 -m pipeline.build_course_vectors                # 새 과정만 �
 - 언어는 상세 페이지의 기본 언어와 "+N more"만 기록한다. 한국어 지원 여부는 링크를 열어 확인해야 한다.
 - 난이도는 검색 필터에서 가져온다. 과정 페이지에는 난이도 표기가 없다.
 - 수집일 기준 정보다. 과정은 개편되거나 내려갈 수 있다.
+- 평점은 수집한 날의 값이고 평가 수가 적은 과정도 있다. 화면에는 평가 수를 함께 보여 주고, 추천 순서에는 쓰지 않는다.

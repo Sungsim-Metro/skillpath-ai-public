@@ -43,7 +43,7 @@ def demo():
     # 가짜가 아닌 실제 build_recommendation 이 ③ 형식(courses[] 의 필드와 반환 튜플)을 돌려주는지: 연결이 가짜 모양에만 맞지 않게
     rec, _ = recommend.build_recommendation("Docker", {"postings": 20, "of": 40, "required_ratio": 0.45})
     assert rec["gap_skill"] == "Docker" and rec["courses"]
-    assert all(set(c) == {"title", "url", "level", "prerequisites", "reason", "match"} for c in rec["courses"])
+    assert all(set(c) - {"rating_avg", "rating_count"} == {"title", "url", "level", "prerequisites", "reason", "match"} for c in rec["courses"])
     print("backend.api 확인 통과")
 
 

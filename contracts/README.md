@@ -83,7 +83,12 @@ AWS 운영 경험 우대
 | `courses[].prerequisites` | string | 선수지식 |
 | `courses[].reason` | string | 추천 이유 |
 | `courses[].match` | string | `certain` 또는 `uncertain` |
+| `courses[].rating_avg` | number | (선택, 2026-11-20 추가) AWS Skill Builder 과정 페이지의 별점 평균(0 초과 5 이하). 평가가 없거나 읽지 못한 과정에는 이 필드와 `rating_count`가 없다 |
+| `courses[].rating_count` | number | (선택, 2026-11-20 추가) 그 평균을 낸 평가 수(1 이상 정수). `rating_avg`와 항상 함께 있다 |
 | `user_level` | number | (선택, 2026-11-19 추가) 이 기술의 내 단계 0~5. 화면이 단계를 넘겼을 때만 있다. 0~2단계는 기초, 3단계 이상은 중급 과정을 앞에 놓는다 |
+
+`courses`는 추천 순서대로 놓인다(직접 다루는 과정이 먼저, 그 안에서는 내 단계에 맞는 난이도가 먼저). 화면은 이 순서에 1위, 2위 번호만 붙인다.
+평점은 수집한 날의 값을 코드가 과정 페이지에서 읽은 것이고(`pipeline/courses/build_courses.py`의 `parse_rating`), 화면에 보여 주기만 한다. 추천 순서와 추천 이유에는 쓰지 않고 LLM 입력에도 넣지 않는다.
 
 ## ④ 수요 집계 (`demand`) — backend → app  · 11/10 회의 승인 대기
 

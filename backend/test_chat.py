@@ -215,5 +215,25 @@ class ChatTest(unittest.TestCase):
         self.recs.assert_not_called()
 
 
+class CourseRatingPassThroughTest(unittest.TestCase):
+    """평점은 선택 필드다(2026-11-20). 올바른 값만 화면으로 넘기고, 이상한 값은 과정은 두고 평점만 뺀다."""
+
+    def test_valid_rating_is_kept_and_invalid_rating_is_dropped(self):
+        demand = {"postings": 3, "of": 4, "required_ratio": 0.5}
+        base = {"title": "예시 과정", "url": "https://example.com/course", "level": "기초", "prerequisites": "없음",
+                "reason": "예시 이유", "match": "certain"}
+        ratings = [{"rating_avg": 4.6, "rating_count": 1280}, {}, {"rating_avg": "4.6", "rating_count": 10},
+                   {"rating_avg": 4.6}, {"rating_avg": 6.0, "rating_count": 3}, {"rating_avg": 4.0, "rating_count": 0},
+                   {"rating_avg": True, "rating_count": True}]
+        recs = [{"gap_skill": "Docker", "demand": demand, "courses": [{**base, **r} for r in ratings]}]
+        shown = chat._verified_courses(recs, [{"skill": "Docker", **demand}])
+        self.assertEqual(len(shown), len(ratings))
+        self.assertEqual((shown[0]["rating_avg"], shown[0]["rating_count"]), (4.6, 1280))
+        for course in shown[1:]:
+            self.assertNotIn("rating_avg", course)
+            self.assertNotIn("rating_count", course)
+            self.assertEqual(course["gap_skill"], "Docker")
+
+
 if __name__ == "__main__":
     unittest.main()

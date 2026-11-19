@@ -78,6 +78,21 @@ def uncertain_note(skill: str, course: dict) -> Optional[str]:
     return UNCERTAIN_NOTE.format(skill=canon)
 
 
+RATING_KEYS = ("rating_avg", "rating_count")
+
+
+def course_rating(course: dict) -> dict:
+    """과정 표의 평점 열을 ③ 의 선택 필드로 바꾼다. 열이 없거나 값이 비었으면 빈 dict(2026-11-20).
+
+    화면에 보여 주기만 한다. LLM 입력(llm_input_of)과 추천 순서에는 쓰지 않는다.
+    """
+    try:
+        avg, count = float(course.get("rating_avg") or ""), int(course.get("rating_count") or "")
+    except ValueError:
+        return {}
+    return {"rating_avg": avg, "rating_count": count} if 0 < avg <= 5 and count > 0 else {}
+
+
 def candidate_courses(skill: str, *, rules_only: bool = False) -> list[dict]:
     """search_courses 결과에서 과정 후보를 고른다. 결과가 과정 데이터와 맞지 않으면 오류를 낸다."""
     if rules_only and is_mock() and not COURSES_CSV.exists():
@@ -108,6 +123,7 @@ def candidate_courses(skill: str, *, rules_only: bool = False) -> list[dict]:
             "objectives": objectives,
             "match": match,
             "subskill_id": sid,
+            **course_rating(course),
         })
     return out
 
@@ -218,6 +234,7 @@ def build_recommendation(
             "prerequisites": c["prerequisites"],
             "reason": " ".join(x for x in (reasons[c["course_id"]], uncertain_note(skill, c)) if x),
             "match": c["match"],
+            **{k: c[k] for k in RATING_KEYS if k in c},
         }
         for c in courses if c["course_id"] in reasons
     ]
