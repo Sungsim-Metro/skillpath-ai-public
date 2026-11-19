@@ -90,6 +90,8 @@ def summarize(rows: list[dict] | None = None, pricing: dict | None = None) -> di
         "by_session": by_session,
         "by_stage": [{"stage": s, "label": STAGE_LABEL.get(s, s), **total([r for r in real if r["stage"] == s])} for s in stages],
         "by_day": [{"day": d, **total([r for r in real if r["ts"][:10] == d])} for d in days],
+        "by_model": [{"model": m, **total([r for r in real if (r["model"] if isinstance(r.get("model"), str) else "") == m])}
+                     for m in sorted({r["model"] if isinstance(r.get("model"), str) else "" for r in real})],
         "mock_calls": len(rows) - len(real),
         "models": sorted({r["model"] if isinstance(r.get("model"), str) else "" for r in real}),
         "unpriced_models": sorted({r["model"] if isinstance(r.get("model"), str) else "" for r in real if cost_of(r, pricing) is None}),

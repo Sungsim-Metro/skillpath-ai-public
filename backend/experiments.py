@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOG = ROOT / "outputs" / "feedback" / "feedback.jsonl"
 KST = timezone(timedelta(hours=9))
 # 기록에 넣을 수 있는 항목. 여기에 없는 이름은 저장하지 않는다(내용이 섞여 들어가지 않게)
-FIELDS = ("job", "action", "model", "rating", "left", "right", "picked", "tokens", "failed")
+FIELDS = ("job", "action", "model", "rating", "left", "right", "picked", "tokens", "failed", "turn_tokens")
 RATINGS = ("up", "down")
 TIE = "tie"
 _lock = Lock()
@@ -167,7 +167,136 @@ def load_feedback() -> list[dict]:
     table, rows, start = _table(), [], None
     while True:
         page = table.scan(**({"ExclusiveStartKey": start} if start else {}))
-        rows.extend(json_numbers(item) for item in page.get("Items", []))
+        rows.extend(json_numbers(item) for item in page.get("Items", []) if item.get("session_id") != DECISION_KEY)
         start = page.get("LastEvaluatedKey")
         if not start:
             return rows
+
+
+# ---------- 집계 (전부 코드로 센다) ----------
+
+MIN_RATINGS = 20   # 모델마다 평가가 이만큼 모이기 전의 결론은 참고용으로만 표시한다(팀 결정값)
+TOLERANCE = 0.05   # 좋아요 비율이 가장 높은 모델과 이 차이 안이면 "충분한 모델"로 본다(팀 결정값)
+
+
+def _turn_cost(row: dict, pricing: dict) -> float | None:
+    price = pricing.get("models", {}).get(row.get("model", ""))
+    tokens = row.get("turn_tokens")
+    if not isinstance(price, dict) or not isinstance(tokens, dict):
+        return None
+    return tokens.get("input", 0) / 1000 * price["input_per_1k"] + tokens.get("output", 0) / 1000 * price["output_per_1k"]
+
+
+def summarize_models(rows: list[dict] | None = None, pricing: dict | None = None) -> list[dict]:
+    """모델별 턴 수, 평가, 검사 실패, 턴당 평균 토큰과 추정 비용. 좋아요 비율은 평가한 턴 중의 비율이다."""
+    from backend.usage import load_pricing
+
+    rows = load_feedback() if rows is None else rows
+    pricing = load_pricing() if pricing is None else pricing
+    out = []
+    for model in sorted({r["model"] for r in rows if isinstance(r.get("model"), str) and r["model"]}):
+        group = [r for r in rows if r.get("model") == model]
+        measured = [r for r in group if isinstance(r.get("turn_tokens"), dict)]
+        costs = [c for c in (_turn_cost(r, pricing) for r in measured) if c is not None]
+        up = sum(r.get("rating") == "up" for r in group)
+        down = sum(r.get("rating") == "down" for r in group)
+        failed = sum(bool(r.get("failed")) for r in group)
+        out.append({
+            "model": model, "turns": len(group), "rated": up + down, "up": up, "down": down,
+            "up_ratio": round(up / (up + down), 3) if up + down else None,
+            "failed": failed, "failed_ratio": round(failed / len(group), 3),
+            "avg_input_tokens": round(sum(r["turn_tokens"].get("input", 0) for r in measured) / len(measured)) if measured else None,
+            "avg_output_tokens": round(sum(r["turn_tokens"].get("output", 0) for r in measured) / len(measured)) if measured else None,
+            "avg_cost": round(sum(costs) / len(costs), 6) if costs else None,
+            "currency": pricing.get("currency"),
+        })
+    return out
+
+
+def summarize_structures(rows: list[dict] | None = None) -> list[dict]:
+    """추천 구조별 노출 수(A/B 로 보여 주고 선택까지 받은 횟수), 선택 수, 선택률, 추천 한 번의 평균 토큰."""
+    rows = load_feedback() if rows is None else rows
+    picked = [r for r in rows if r.get("picked") and r.get("left") and r.get("right")]
+    out = []
+    for name in sorted({side for r in picked for side in (r["left"], r["right"])}):
+        shown = [r for r in picked if name in (r["left"], r["right"])]
+        wins = sum(r["picked"] == name for r in shown)
+        ties = sum(r["picked"] == TIE for r in shown)
+        tokens = [r["tokens"][name] for r in shown if isinstance(r.get("tokens"), dict) and isinstance(r["tokens"].get(name), dict)]
+        out.append({
+            "structure": name, "shown": len(shown), "picked": wins, "ties": ties,
+            "pick_ratio": round(wins / len(shown), 3) if shown else None,
+            "avg_input_tokens": round(sum(t.get("input", 0) for t in tokens) / len(tokens)) if tokens else None,
+            "avg_output_tokens": round(sum(t.get("output", 0) for t in tokens) / len(tokens)) if tokens else None,
+        })
+    return out
+
+
+def decide_model(summary: list[dict], *, min_ratings: int = MIN_RATINGS, tolerance: float = TOLERANCE) -> dict:
+    """평가와 비용으로 쓸 모델을 고른다.
+
+    규칙: 좋아요 비율이 가장 높은 모델과의 차이가 tolerance 안인 모델들 가운데 턴당 추정 비용이 가장 낮은 모델.
+    비율이나 비용을 알 수 없는 모델은 후보에서 뺀다. 모델마다 평가가 min_ratings 건이 안 되면 status 가 "provisional"(참고용)이다.
+    """
+    usable = [m for m in summary if m["up_ratio"] is not None and m["avg_cost"] is not None]
+    rule = {"min_ratings": min_ratings, "tolerance": tolerance}
+    if len(usable) < 2:
+        return {"status": "insufficient", "model": None, "rule": rule,
+                "reason": "평가와 비용이 모두 있는 모델이 2개 미만이라 비교할 수 없습니다."}
+    best = max(m["up_ratio"] for m in usable)
+    good_enough = [m for m in usable if m["up_ratio"] >= best - tolerance]
+    chosen = min(good_enough, key=lambda m: (m["avg_cost"], -m["up_ratio"], m["model"]))
+    priciest = max(usable, key=lambda m: m["avg_cost"])
+    saving = round(1 - chosen["avg_cost"] / priciest["avg_cost"], 3) if priciest["avg_cost"] else 0
+    enough = all(m["rated"] >= min_ratings for m in usable)
+    return {
+        "status": "decided" if enough else "provisional", "model": chosen["model"], "rule": rule,
+        "up_ratio": chosen["up_ratio"], "best_up_ratio": best, "avg_cost": chosen["avg_cost"],
+        "saving_vs_priciest": saving, "compared_with": priciest["model"],
+        "reason": (f"좋아요 비율 {chosen['up_ratio']:.0%}(최고 {best:.0%}, 허용 차이 {tolerance * 100:.0f}%p 안)이고 "
+                   f"턴당 추정 비용이 가장 낮습니다. 가장 비싼 모델보다 {saving:.0%} 적게 듭니다."
+                   + ("" if enough else f" 모델별 평가가 {min_ratings}건에 못 미쳐 참고용입니다.")),
+    }
+
+
+# ---------- 결정 기록 ----------
+
+DECISION_KEY = "decision"  # 평가 테이블에서 결정 기록이 쓰는 session_id. 대화 세션 ID(32자리 16진수)와 겹치지 않는다
+
+
+def _decision_path() -> Path:
+    return _log_path().with_name("decisions.jsonl")
+
+
+def save_decision(models: list[dict], decision: dict) -> dict:
+    """그때의 모델별 집계와 고른 모델을 한 건으로 남긴다. 나중에 무엇을 보고 골랐는지 다시 볼 수 있다."""
+    record = {"ts": datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S"), "decision": decision, "models": models}
+    payload = json.dumps(record, ensure_ascii=False)
+    if api.is_mock():
+        path = _decision_path()
+        with _lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload + "\n")
+    else:
+        _table().put_item(Item={"session_id": DECISION_KEY, "turn_id": record["ts"], "payload": payload})
+    return record
+
+
+def load_decisions() -> list[dict]:
+    """남긴 결정 기록(최근 것이 앞)."""
+    if api.is_mock():
+        path = _decision_path()
+        lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    else:
+        from boto3.dynamodb.conditions import Key
+
+        items = _table().query(KeyConditionExpression=Key("session_id").eq(DECISION_KEY)).get("Items", [])
+        lines = [item["payload"] for item in items]
+    records = []
+    for line in lines:
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            continue
+    return sorted(records, key=lambda r: r.get("ts", ""), reverse=True)

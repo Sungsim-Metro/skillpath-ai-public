@@ -1,4 +1,4 @@
-"""운영 현황 탭: 이 서버가 한 Bedrock 호출 수, 토큰, 추정 비용. 주소에 ?admin=<ADMIN_KEY 값> 을 붙였을 때만 보인다(app/main.py).
+"""토큰·비용 구역: 이 서버가 한 Bedrock 호출 수, 토큰, 추정 비용. 관리자 화면(app/admin.py)의 한 탭이다.
 
 집계는 backend/usage.py 가 코드로 한다. 여기서는 표로 보여주기만 한다. 프롬프트나 응답 내용은 기록에도 화면에도 없다.
 """
@@ -49,6 +49,8 @@ def render(ctx: Ctx):
         st.caption("세션 ID가 기록된 실제 호출이 없습니다.")
     st.subheader("단계별")
     st.dataframe(table(data["by_stage"], {"label": "단계"}), hide_index=True, width="stretch")
+    st.subheader("모델별")
+    st.dataframe(table(data["by_model"], {"model": "모델"}), hide_index=True, width="stretch")
     st.subheader("날짜별")
     st.dataframe(table(data["by_day"], {"day": "날짜"}), hide_index=True, width="stretch")
     st.caption(

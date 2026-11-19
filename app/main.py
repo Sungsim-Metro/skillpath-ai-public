@@ -39,7 +39,6 @@ from app.tabs import demand as tab_demand  # noqa: E402
 from app.tabs import extract as tab_extract  # noqa: E402
 from app.tabs import gap as tab_gap  # noqa: E402
 from app.tabs import recommend as tab_recommend  # noqa: E402
-from app.tabs import usage as tab_usage  # noqa: E402
 
 # (탭 이름, 그리는 함수). 순서대로 화면에 놓인다.
 TABS = [
@@ -50,6 +49,17 @@ TABS = [
 ]
 
 st.set_page_config(page_title="skillpath-ai", layout="wide")
+
+# 관리자 화면은 주소 /admin?admin=<ADMIN_KEY 값> 으로만 연다(2026-11-19 회의). 값이 맞을 때만 페이지를 등록하므로
+# 값이 없거나 틀리면 /admin 주소 자체가 없다. 로그인이 아니라 가려 두는 것이다. 메뉴는 숨겨서 사용자 화면은 전과 같다.
+from app import admin as admin_screen  # noqa: E402
+
+_pages = [st.Page(lambda: None, title="skillpath-ai", default=True)]
+if admin_screen.allowed(st.query_params.get("admin", "")):
+    _pages.append(st.Page(admin_screen.render, title="관리자", url_path="admin"))
+if st.navigation(_pages, position="hidden").url_path == "admin":
+    admin_screen.render()
+    st.stop()
 
 VIEWS = {"dashboard": "역량 대시보드", "chat": "학습 상담"}
 
@@ -96,14 +106,6 @@ if demand:
     )
 else:
     st.caption("채용공고를 분석해 부족한 역량과 학습 프로그램을 근거와 함께 보여줍니다.")
-
-# 운영 현황 탭은 주소에 ?admin=<ADMIN_KEY 값> 을 붙였을 때만 맨 뒤에 더한다. ADMIN_KEY 가 비어 있으면 열리지 않는다.
-# 로그인이 아니라 가려 두는 것이다(토큰 수와 모델 ID 만 있고 내용은 없다)
-import hmac  # noqa: E402
-
-_admin_key = os.getenv("ADMIN_KEY", "")
-if _admin_key and hmac.compare_digest(str(st.query_params.get("admin", "")).encode(), _admin_key.encode()):
-    TABS.append(("운영 현황", tab_usage.render))
 
 owned, _ = load(api.owned_skill_names, job, levels) if demand else ([], None)
 ctx = Ctx(job=job, demand=demand, demand_err=demand_err, owned=owned or [], levels=levels, skill_options=skill_options,

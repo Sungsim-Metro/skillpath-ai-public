@@ -101,6 +101,53 @@ class ExperimentsTest(Base):
             experiments.save_feedback("s1", "t1", rating="up")
 
 
+class SummaryTest(Base):
+    PRICING = {"currency": "USD", "models": {"big": {"input_per_1k": 0.003, "output_per_1k": 0.015},
+                                             "small": {"input_per_1k": 0.001, "output_per_1k": 0.005}}}
+
+    def rows(self, model, ups, downs, unrated=0, failed=0):
+        turn = {"model": model, "turn_tokens": {"input": 1000, "output": 200}}
+        return ([dict(turn, rating="up")] * ups + [dict(turn, rating="down")] * downs + [dict(turn)] * unrated
+                + [dict(turn, failed=True)] * failed)
+
+    def test_models_are_counted_and_costed_per_turn(self):
+        rows = self.rows("big", 18, 2, unrated=5) + self.rows("small", 17, 3, failed=2)
+        big, small = experiments.summarize_models(rows, self.PRICING)
+        self.assertEqual((big["turns"], big["rated"], big["up_ratio"], big["failed"]), (25, 20, 0.9, 0))
+        self.assertEqual((small["turns"], small["rated"], small["up_ratio"], small["failed"]), (22, 20, 0.85, 2))
+        self.assertAlmostEqual(big["avg_cost"], 0.006)                 # 1000/1000*0.003 + 200/1000*0.015
+        self.assertAlmostEqual(small["avg_cost"], 0.002)
+
+    def test_cheaper_model_wins_only_inside_the_tolerance(self):
+        close = experiments.summarize_models(self.rows("big", 18, 2) + self.rows("small", 17, 3), self.PRICING)
+        decision = experiments.decide_model(close)
+        self.assertEqual((decision["status"], decision["model"]), ("decided", "small"))   # 5%p 차이 안: 싼 쪽
+        self.assertAlmostEqual(decision["saving_vs_priciest"], 0.667)
+        far = experiments.summarize_models(self.rows("big", 18, 2) + self.rows("small", 14, 6), self.PRICING)
+        self.assertEqual(experiments.decide_model(far)["model"], "big")                    # 차이가 크면 평가가 높은 쪽
+        few = experiments.summarize_models(self.rows("big", 3, 0) + self.rows("small", 3, 0), self.PRICING)
+        self.assertEqual(experiments.decide_model(few)["status"], "provisional")           # 평가가 적으면 참고용
+        one = experiments.summarize_models(self.rows("big", 3, 0), self.PRICING)
+        self.assertEqual(experiments.decide_model(one)["status"], "insufficient")
+
+    def test_structures_count_choices_and_ties(self):
+        pick = {"left": "single", "right": "reviewed", "tokens": {"single": {"input": 100, "output": 10},
+                                                                   "reviewed": {"input": 300, "output": 30}}}
+        rows = [dict(pick, picked="reviewed")] * 3 + [dict(pick, picked="single")] + [dict(pick, picked=experiments.TIE)]
+        reviewed, single = experiments.summarize_structures(rows + [{"model": "big", "rating": "up"}])
+        self.assertEqual((reviewed["shown"], reviewed["picked"], reviewed["ties"], reviewed["pick_ratio"]), (5, 3, 1, 0.6))
+        self.assertEqual((single["picked"], single["avg_input_tokens"]), (1, 100))
+
+    def test_decision_is_saved_with_the_numbers_it_was_based_on(self):
+        summary = experiments.summarize_models(self.rows("big", 18, 2) + self.rows("small", 17, 3), self.PRICING)
+        experiments.save_decision(summary, experiments.decide_model(summary))
+        saved = experiments.load_decisions()
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["decision"]["model"], "small")
+        self.assertEqual([m["model"] for m in saved[0]["models"]], ["big", "small"])
+        self.assertEqual(experiments.load_feedback(), [])                # 결정 기록은 평가 기록에 섞이지 않는다
+
+
 class ChatExperimentTest(Base):
     """상담 한 턴에 실험이 붙는 방식."""
 
@@ -165,7 +212,9 @@ class ChatExperimentTest(Base):
         save = self.start("backend.experiments.save_feedback")
         reply = chat.handle_message(self.state, "상태", job="cloud_engineer", sidebar_skills=[])
         self.assertEqual((seen, reply.model), (["cheap-model"], "cheap-model"))
-        save.assert_not_called()
+        recorded = save.call_args.kwargs                               # 평가가 없어도 턴의 배정과 토큰은 남긴다
+        self.assertEqual((recorded["model"], recorded["action"], recorded["failed"]), ("cheap-model", "summary", None))
+        self.assertEqual(set(recorded["turn_tokens"]), {"input", "output"})
         self.intake.side_effect = ChatIntakeError("해석 실패")
         reply = chat.handle_message(self.state, "상태", job="cloud_engineer", sidebar_skills=[])
         self.assertTrue(reply.failed)

@@ -271,25 +271,31 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     state.nickname = nickname
     model = experiments.pick_model()  # 실험이 꺼져 있으면 None: 기본 모델 그대로
     turn_id = uuid4().hex
+    before = (state.usage.input_tokens, state.usage.output_tokens)
     with track_session(state.usage), use_model(model):
         used = "" if api.is_mock() else current_model()
         try:
             reply = _handle_turn(state, message, job, sidebar_skills)
         except Exception:
-            _record_failure(state, turn_id, job, used)
+            _record_turn(state, turn_id, job, used, before, failed=True)
             raise
     reply.turn_id, reply.model = turn_id, used
-    if reply.failed:
-        _record_failure(state, turn_id, job, used, reply.action)
+    _record_turn(state, turn_id, job, used, before, action=reply.action, failed=reply.failed)
     return reply
 
 
-def _record_failure(state: Conversation, turn_id: str, job: str, model: str, action: str = "") -> None:
-    """모델 응답이 검사를 통과하지 못한 턴을 실험 기록에 남긴다(모델별 실패 수). 기록 실패는 상담을 막지 않는다."""
-    if not experiments.models():
+def _record_turn(state: Conversation, turn_id: str, job: str, model: str, before: tuple[int, int], *,
+                 action: str = "", failed: bool = False) -> None:
+    """실험이 켜져 있으면 턴마다 배정된 모델, 요청 종류, 쓴 토큰, 검사 실패 여부를 남긴다(내용은 남기지 않는다).
+
+    평가를 누르지 않은 턴도 모델별 턴 수와 턴당 비용을 세는 데 필요하다. 기록 실패는 상담을 막지 않는다.
+    """
+    if not experiments.active():
         return
+    tokens = {"input": state.usage.input_tokens - before[0], "output": state.usage.output_tokens - before[1]}
     try:
-        experiments.save_feedback(state.usage.session_id, turn_id, job=job, model=model, action=action or None, failed=True)
+        experiments.save_feedback(state.usage.session_id, turn_id, job=job, model=model or None, action=action or None,
+                                  turn_tokens=tokens, failed=True if failed else None)
     except Exception:
         pass
 

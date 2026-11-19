@@ -74,12 +74,12 @@ class ChatScreenTest(unittest.TestCase):
         self.assertEqual(at.metric[0].value, "0")
         self.assertNotEqual(session_id, at.session_state["chat_conversation"].usage.session_id)
 
-        admin = AppTest.from_file(MAIN, default_timeout=60)
-        admin.query_params["admin"] = "test-key"
-        admin.run()
+        root = str(Path(MAIN).parent.parent)
+        page = "\n".join(["import sys", f"sys.path.insert(0, {root!r})", "from app import admin", "admin.render()"])
+        admin = AppTest.from_string(page, default_timeout=60).run()  # 관리자 화면의 토큰·비용 탭
         self.assertFalse(admin.exception)
         session_table = next(
-            frame.value for frame in admin.tabs[-1].dataframe if "세션 ID" in frame.value.columns
+            frame.value for frame in admin.dataframe if "세션 ID" in frame.value.columns
         )
         self.assertEqual(session_table["세션 ID"].tolist(), [session_id])
         row = session_table.iloc[0]
@@ -160,9 +160,12 @@ class ChatScreenTest(unittest.TestCase):
                 choice[0].set_value("A").run()
                 self.assertFalse(at.exception)
                 rows = experiments.load_feedback()
-            self.assertEqual(len(rows), 1)
-            self.assertIn(rows[0]["picked"], ("single", "reviewed"))
-            self.assertEqual({rows[0]["left"], rows[0]["right"]}, {"single", "reviewed"})
+            self.assertEqual(len(rows), 2)                          # 턴마다 한 건(평가를 안 눌러도 요청 종류와 토큰은 남는다)
+            self.assertEqual(sorted(row["action"] for row in rows), ["courses", "gap"])
+            chosen = [row for row in rows if row.get("picked")]
+            self.assertEqual(len(chosen), 1)
+            self.assertIn(chosen[0]["picked"], ("single", "reviewed"))
+            self.assertEqual({chosen[0]["left"], chosen[0]["right"]}, {"single", "reviewed"})
             self.assertNotIn("추천해줘", log.read_text(encoding="utf-8"))
 
     def diagnose(self, at, levels):
