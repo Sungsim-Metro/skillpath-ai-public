@@ -29,9 +29,9 @@ class AppSmokeTest(unittest.TestCase):
         self.assertIn("추출 결과", [h.value for h in at.subheader])
 
     def test_level_dialog_requires_every_answer(self):
-        from backend.levels import level_guide
+        from backend.levels import job_subskills
 
-        subskills = list(level_guide()["subskills"])
+        subskills = list(job_subskills("cloud_engineer"))  # 기본 직무(클라우드)의 질문만 나온다
 
         def reopen(at, button=None):
             # AppTest 는 모달 안 클릭 뒤 모달을 다시 그리지 않아, 같은 실행에서 모달 열기도 누른다

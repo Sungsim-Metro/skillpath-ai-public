@@ -168,9 +168,12 @@ def mock_turn(message: str, context: dict) -> Turn:
     assistant = next((h["content"] for h in reversed(history) if h["role"] == "assistant"), "")
     role_question = re.search(r"기준|관점|뜻인|원하|의미|맞", assistant)
     if (context.get("needs_role") or _job(user)[0] == "clarify_role") and role_question and re.match(
-        r"(?:네|예|응|맞아|좋아|클라우드)", message
+        r"(?:네|예|응|맞아|좋아|클라우드|AI)", message, re.I
     ):
-        agreed = next((code for code, label in JOBS.items() if label in assistant), job)
+        # 답에 직무 이름이 있으면 그것, 없으면 확인 질문이 직무 하나만 물었을 때 그 직무(둘을 물었으면 고르지 않는다)
+        named = [code for code, label in JOBS.items() if re.search(re.escape(label.split()[0]), message, re.I)]
+        asked = [code for code, label in JOBS.items() if label in assistant]
+        agreed = named[0] if len(named) == 1 else (asked[0] if len(asked) == 1 else job)
         if agreed:
             turn.job = agreed
             if turn.action == "note":

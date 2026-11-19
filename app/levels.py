@@ -11,20 +11,19 @@ import logging
 import streamlit as st
 
 from backend import chat_profiles
-from backend.levels import level_guide
+from backend import api
+from backend.levels import job_subskills, level_guide
 
 # 진단 전에 보여줄 예시: 예전 기본 보유 기술 Python·Linux·Git 에 해당하는 세부 능력 3단계
-EXAMPLE_LEVELS = {"C5-2": 3, "C1-2": 3, "C5-3": 3}
+# 클라우드(C*)는 스크립트·자동화, Linux, Git. AI(A*)는 데이터 분석(Python), 배포 자동화(Git)
+EXAMPLE_LEVELS = {"C5-2": 3, "C1-2": 3, "C5-3": 3, "A2-2": 3, "A4-3": 3}
+EXAMPLE_TEXT = {"cloud_engineer": "스크립트·자동화, Linux, Git 3단계", "ai_engineer": "데이터 분석·특징 추출, 배포 자동화 3단계"}
 logger = logging.getLogger("skillpath.app")
 
 
-def _areas() -> dict[str, str]:
-    import json
-    from pathlib import Path
-
-    path = Path(__file__).resolve().parent.parent / "data" / "skill_areas.json"
-    areas = json.loads(path.read_text(encoding="utf-8"))["areas"]
-    return {k: v for k, v in areas.items() if k != "COMMON"}
+def _areas(job: str) -> dict[str, str]:
+    """그 직무의 영역 {id: 이름}(공통 제외). 영역 표는 backend 가 읽는다."""
+    return api.get_areas(job)
 
 
 def _set(levels: dict[str, int], example: bool) -> None:
@@ -93,12 +92,11 @@ def _move(step: int) -> None:
 
 
 @st.dialog("보유 수준 진단", width="large")
-def diagnose_dialog(nickname: str) -> None:
-    """영역 하나씩 페이지로 넘기며 세부 능력마다 0~5단계 카드를 눌러 고른다."""
-    guide = level_guide()
-    names = guide["level_names"]
-    subskills = guide["subskills"]
-    areas = list(_areas().items())
+def diagnose_dialog(nickname: str, job: str) -> None:
+    """영역 하나씩 페이지로 넘기며 세부 능력마다 0~5단계 카드를 눌러 고른다. 질문은 고른 직무의 진단표에서 온다."""
+    names = level_guide()["level_names"]
+    subskills = job_subskills(job)
+    areas = list(_areas(job).items())
     # 예시 값은 사용자가 고른 것이 아니므로 빈 설문에서 시작한다
     current = {} if st.session_state.get("levels_example") else st.session_state.get("levels", {})
     for sid in subskills:  # 처음 열 때만 지금 값으로 채운다. 저장하거나 닉네임이 바뀌면 지운다
@@ -141,7 +139,9 @@ def diagnose_dialog(nickname: str) -> None:
                    + ("닉네임 프로필에도 저장합니다." if nickname else "닉네임을 넣으면 다음에도 불러옵니다."))
     label = f"저장 (남은 질문 {left}개)" if left else "저장"
     if forward.button(label, type="primary", width="stretch", disabled=bool(left), key="save_levels"):
-        save_levels(nickname, {sid: st.session_state[f"lv_{sid}"] for sid in subskills})
+        # 다른 직무에서 진단한 값은 그대로 두고 이 직무의 답만 덮어쓴다
+        kept = {} if st.session_state.get("levels_example") else dict(st.session_state.get("levels", {}))
+        save_levels(nickname, {**kept, **{sid: st.session_state[f"lv_{sid}"] for sid in subskills}})
         st.rerun()
 
 
@@ -170,22 +170,24 @@ def save_levels(nickname: str, chosen: dict[str, int]) -> None:
         st.session_state.levels_notice = "수준을 프로필에 저장하지 못했습니다. 이번 화면에서만 사용합니다."
 
 
-def sidebar_summary(nickname: str) -> dict[str, int]:
-    """사이드바에 영역별 내 수준을 보여주고 진단 버튼을 둔다. 지금 쓰는 {세부 능력 id: 단계} 를 돌려준다."""
+def sidebar_summary(nickname: str, job: str) -> dict[str, int]:
+    """사이드바에 고른 직무의 영역별 내 수준을 보여주고 진단 버튼을 둔다. 지금 쓰는 {세부 능력 id: 단계} 를 돌려준다."""
     sync_with_profile(nickname)
     levels = st.session_state.levels
-    guide = level_guide()["subskills"]
+    guide = job_subskills(job)
     st.markdown("**내 보유 수준**")
     if st.session_state.get("levels_example"):
-        st.caption("아직 진단 전이라 예시 값(스크립트·자동화, Linux, Git 3단계)으로 보여줍니다.")
+        st.caption(f"아직 진단 전이라 예시 값({EXAMPLE_TEXT.get(job, '예시')})으로 보여줍니다.")
+    elif not any(levels.get(sid) is not None for sid in guide):
+        st.caption("이 직무는 아직 진단하지 않았습니다. 진단하지 않은 세부 능력은 0단계로 봅니다.")
     lines = []
-    for area_id, area_name in _areas().items():
+    for area_id, area_name in _areas(job).items():
         values = [levels.get(sid, 0) for sid, row in guide.items() if row["area_id"] == area_id]
         avg = sum(values) / len(values) if values else 0
         lines.append(f"{area_name} {avg:.1f}")
     st.caption(" · ".join(lines) + " (영역 평균, 0~5)")
     if st.button("수준 진단하기", key="open_levels", icon=":material/checklist:", width="stretch"):
-        diagnose_dialog(nickname)
+        diagnose_dialog(nickname, job)
     notice = st.session_state.pop("levels_notice", None)
     if notice:
         st.warning(notice)

@@ -1,0 +1,173 @@
+[
+  {
+    "gap_skill": "Python",
+    "demand": {
+      "postings": 48,
+      "of": 60,
+      "required_ratio": 0.75
+    },
+    "courses": []
+  },
+  {
+    "gap_skill": "LLM",
+    "demand": {
+      "postings": 33,
+      "of": 60,
+      "required_ratio": 0.61
+    },
+    "courses": [
+      {
+        "title": "(예시) Amazon Bedrock으로 생성형 AI 시작하기",
+        "url": "https://example.com/course/bedrock-intro",
+        "level": "기초",
+        "prerequisites": "없음",
+        "reason": "공고 60건 중 33건이 LLM 활용을 요구합니다. 이 과정은 Bedrock으로 모델을 고르고 호출하는 방법을 처음부터 다룹니다.",
+        "match": "certain"
+      }
+    ]
+  },
+  {
+    "gap_skill": "PyTorch",
+    "demand": {
+      "postings": 30,
+      "of": 60,
+      "required_ratio": 0.6
+    },
+    "courses": [
+      {
+        "title": "(예시) Amazon SageMaker로 딥러닝 모델 학습하기",
+        "url": "https://example.com/course/sagemaker-dl",
+        "level": "중급",
+        "prerequisites": "Python",
+        "reason": "공고 60건 중 30건이 PyTorch를 요구합니다. 이 과정은 SageMaker에서 PyTorch 모델을 학습·평가합니다.",
+        "match": "certain"
+      }
+    ]
+  },
+  {
+    "gap_skill": "AWS",
+    "demand": {
+      "postings": 27,
+      "of": 60,
+      "required_ratio": 0.56
+    },
+    "courses": [
+      {
+        "title": "(예시) AWS Cloud Practitioner Essentials",
+        "url": "https://example.com/course/aws-essentials",
+        "level": "기초",
+        "prerequisites": "없음",
+        "reason": "공고 60건 중 27건이 AWS 경험을 요구합니다. 이 과정은 AI 서비스가 올라가는 기본 AWS 서비스를 다룹니다.",
+        "match": "certain"
+      }
+    ]
+  },
+  {
+    "gap_skill": "RAG",
+    "demand": {
+      "postings": 22,
+      "of": 60,
+      "required_ratio": 0.55
+    },
+    "courses": [
+      {
+        "title": "(예시) Bedrock Knowledge Bases로 RAG 구성하기",
+        "url": "https://example.com/course/bedrock-rag",
+        "level": "중급",
+        "prerequisites": "LLM 기초",
+        "reason": "공고 60건 중 22건이 RAG 구현을 요구합니다. 이 과정은 문서를 넣어 검색 증강 답변을 만드는 방법을 다룹니다.",
+        "match": "certain"
+      }
+    ]
+  },
+  {
+    "gap_skill": "Docker",
+    "demand": {
+      "postings": 21,
+      "of": 60,
+      "required_ratio": 0.48
+    },
+    "courses": [
+      {
+        "title": "(예시) 컨테이너 기초와 Amazon ECS",
+        "url": "https://example.com/course/ecs",
+        "level": "기초",
+        "prerequisites": "Linux 명령어",
+        "reason": "공고 60건 중 21건이 Docker를 요구합니다. 이 과정은 컨테이너 이미지 작성부터 배포까지 다룹니다.",
+        "match": "certain"
+      }
+    ]
+  },
+  {
+    "gap_skill": "SQL",
+    "demand": {
+      "postings": 18,
+      "of": 60,
+      "required_ratio": 0.56
+    },
+    "courses": []
+  },
+  {
+    "gap_skill": "TensorFlow",
+    "demand": {
+      "postings": 15,
+      "of": 60,
+      "required_ratio": 0.47
+    },
+    "courses": [
+      {
+        "title": "(예시) Amazon SageMaker로 딥러닝 모델 학습하기",
+        "url": "https://example.com/course/sagemaker-dl",
+        "level": "중급",
+        "prerequisites": "Python",
+        "reason": "TensorFlow를 직접 다루는 AWS 과정은 찾지 못했습니다. 같은 딥러닝 학습을 SageMaker에서 다루는 과정이라 불확실로 표시합니다.",
+        "match": "uncertain"
+      }
+    ]
+  },
+  {
+    "gap_skill": "Kubernetes",
+    "demand": {
+      "postings": 14,
+      "of": 60,
+      "required_ratio": 0.36
+    },
+    "courses": [
+      {
+        "title": "(예시) Amazon EKS 입문",
+        "url": "https://example.com/course/eks",
+        "level": "중급",
+        "prerequisites": "Docker",
+        "reason": "공고 60건 중 14건이 Kubernetes를 요구합니다. Docker를 먼저 익힌 뒤 듣는 것을 권합니다.",
+        "match": "certain"
+      }
+    ]
+  },
+  {
+    "gap_skill": "MLOps",
+    "demand": {
+      "postings": 13,
+      "of": 60,
+      "required_ratio": 0.46
+    },
+    "courses": [
+      {
+        "title": "(예시) SageMaker로 MLOps 파이프라인 만들기",
+        "url": "https://example.com/course/sagemaker-mlops",
+        "level": "중급",
+        "prerequisites": "Docker",
+        "reason": "공고 60건 중 13건이 MLOps 경험을 요구합니다. 이 과정은 모델 학습부터 배포 자동화까지 다룹니다.",
+        "match": "certain"
+      }
+    ]
+  },
+  {
+    "gap_skill": "Git",
+    "demand": {
+      "postings": 12,
+      "of": 60,
+      "required_ratio": 0.5
+    },
+    "courses": []
+  }
+]

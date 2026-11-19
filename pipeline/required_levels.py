@@ -12,6 +12,7 @@
 실행:
   BEDROCK_MOCK=1 python -m pipeline.required_levels     # data/sample 의 추출 결과, 가짜 벡터(점수에 의미 없음)
   BEDROCK_MOCK=0 python -m pipeline.required_levels     # DynamoDB 추출 결과, Titan 임베딩(EMBED_MODEL_ID)
+  BEDROCK_MOCK=0 python -m pipeline.required_levels --job ai_engineer   # AI 엔지니어 → data/required_levels_ai_engineer.json
 """
 from __future__ import annotations
 
@@ -22,12 +23,13 @@ from datetime import date
 from pathlib import Path
 from statistics import median_low
 
-from backend.levels import ALL, DATA_DIR, DEFAULT_REQUIRED_LEVEL, level_guide, subskills_for
+from backend.jobs import DEFAULT_JOB, job_file
+from backend.levels import ALL, DATA_DIR, DEFAULT_REQUIRED_LEVEL, job_subskills, subskills_for
 from pipeline import embed
 
 MIN_SIMILARITY = 0.3  # 팀 결정값(근거 자료 없음). 이보다 덜 비슷한 문장은 단계를 가르지 못한다고 본다
 MIN_POSTINGS = 3  # 기준 단계를 정하려면 필요한 공고 수
-OUT_FILE = DATA_DIR / "required_levels.json"
+OUT_FILE = DATA_DIR / "required_levels.json"  # 클라우드. 다른 직무는 backend.jobs.job_file 이름(예: required_levels_ai_engineer.json)
 SAMPLE_FILES = ("extraction.json", "extraction_deduplicated.json")
 
 
@@ -42,19 +44,19 @@ def load_extractions(job_category: str) -> tuple[list[dict], str]:
     return [json_numbers(item["extraction"]) for item in items if "extraction" in item], "dynamodb"
 
 
-def _examples() -> tuple[list[tuple[str, int]], list[str]]:
-    """((세부 능력 id, 단계) 목록, 그 순서의 예시 문장 목록)."""
+def _examples(job_category: str = DEFAULT_JOB) -> tuple[list[tuple[str, int]], list[str]]:
+    """((세부 능력 id, 단계) 목록, 그 순서의 예시 문장 목록). 직무의 진단표만 쓴다."""
     keys, texts = [], []
-    for sid, row in level_guide()["subskills"].items():
+    for sid, row in job_subskills(job_category).items():
         for level, text in row["levels"].items():
             keys.append((sid, int(level)))
             texts.append(text)
     return keys, texts
 
 
-def posting_levels(extractions: list[dict]) -> dict[str, list[int]]:
+def posting_levels(extractions: list[dict], job_category: str = DEFAULT_JOB) -> dict[str, list[int]]:
     """{기술: [공고별 요구 단계, ...]}. 한 공고에서 같은 기술이 여러 번 나오면 가장 높은 단계 하나만 센다."""
-    keys, texts = _examples()
+    keys, texts = _examples(job_category)
     vectors = dict(zip(keys, embed.embed_many(texts)))
     found: dict[str, list[int]] = {}
     for extraction in extractions:
@@ -63,7 +65,9 @@ def posting_levels(extractions: list[dict]) -> dict[str, list[int]]:
             skill, evidence = item.get("normalized"), (item.get("evidence") or "").strip()
             if not skill or not evidence or item.get("confidence") != "high":
                 continue
-            linked = subskills_for(skill)
+            linked = subskills_for(skill, job_category)
+            if isinstance(linked, list):  # 다른 직무 진단표의 세부 능력(클라우드 C* 등)은 이 직무의 예시가 없어 뺀다
+                linked = [sid for sid in linked if (sid, 1) in vectors]
             if linked == ALL or not linked:
                 continue
             sentence = embed.embed(evidence)
@@ -94,11 +98,12 @@ def summarize(found: dict[str, list[int]]) -> dict[str, dict]:
 
 def main(argv: list[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--job", default="cloud_engineer")
-    parser.add_argument("--out", type=Path, default=OUT_FILE)
+    parser.add_argument("--job", default=DEFAULT_JOB)
+    parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
     extractions, source = load_extractions(args.job)
-    skills = summarize(posting_levels(extractions))
+    skills = summarize(posting_levels(extractions, args.job))
+    out = args.out or DATA_DIR / job_file("required_levels.json", args.job)
     payload = {
         "note": "기술별 기준 단계. pipeline/required_levels.py 가 공고 근거 문장과 단계 예시(data/skill_levels.json)를 "
                 "임베딩으로 비교해 만든다. 공고 문장은 저장하지 않는다. 파일에 없는 기술은 기본 단계와 uncertain 이다.",
@@ -111,11 +116,11 @@ def main(argv: list[str] | None = None) -> Path:
         "postings": len(extractions),
         "skills": skills,
     }
-    args.out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     usage = embed.usage()
     print(f"공고 {len(extractions)}건({source}), 기준 단계를 정한 기술 {sum(r['confidence'] == 'certain' for r in skills.values())}개"
           f" / 비교한 기술 {len(skills)}개. 임베딩 호출 {usage['calls']}회, 토큰 {usage['tokens']}")
-    return args.out
+    return out
 
 
 if __name__ == "__main__":

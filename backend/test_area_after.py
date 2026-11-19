@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from backend import api
-from backend.levels import level_after_courses, skill_levels
+from backend.levels import level_after_courses, required_level, skill_levels
 
 JOB = "cloud_engineer"
 
@@ -38,10 +38,10 @@ class AreaAfterTest(unittest.TestCase):
         for area_id, row in after.items():
             self.assertEqual(row["demand"], before[area_id]["demand"])
             self.assertGreaterEqual(row["coverage"], before[area_id]["coverage"])
-        # 중급(3단계)은 기준 단계(추정 3)에 닿아 부족 목록에서 빠지고, 기초(2단계)는 남는다
+        # 예상 단계가 기준 단계에 닿은 기술만 부족 목록에서 빠진다. 기준 단계는 파일에서 읽는다(재생성돼도 맞게)
         compute = next(r for r in after.values() if "Docker" in r["skills"])
-        self.assertIn("Docker", compute["missing_skills"])
-        self.assertNotIn("Kubernetes", compute["missing_skills"])
+        for skill, to in (("Docker", 2), ("Kubernetes", 3)):
+            self.assertEqual(skill in compute["missing_skills"], to < required_level(skill)[0], skill)
         self.assertGreater(compute["coverage"], before[compute["area_id"]]["coverage"])
 
     def test_no_courses_or_higher_level_changes_nothing(self):
@@ -52,6 +52,15 @@ class AreaAfterTest(unittest.TestCase):
         self.assertGreaterEqual(linux_level, 3)
         after = api.get_area_gap_after(JOB, levels, [_rec("Linux", ("중급", "certain"))])
         self.assertFalse([x for r in after for x in r["raised"]])  # 이미 4단계면 중급 과정으로 오르지 않는다
+
+    def test_ai_engineer_uses_its_own_areas_and_courses(self):
+        levels = {"A1-1": 2}
+        rows = {r["area_id"]: r for r in api.get_area_gap("ai_engineer", levels)}
+        self.assertTrue({"A1", "A2", "A3", "A4"} <= set(rows))
+        self.assertEqual(rows["UNCLASSIFIED"]["demand"], 0)  # 가짜 AI 수요의 기술은 모두 영역에 들어간다
+        recs = [_rec("RAG", ("중급", "certain")), _rec("Docker", ("기초", "certain"))]
+        raised = {x["skill"]: x["to"] for r in api.get_area_gap_after("ai_engineer", levels, recs) for x in r["raised"]}
+        self.assertEqual(raised, {"RAG": 3, "Docker": 2})
 
 
 if __name__ == "__main__":

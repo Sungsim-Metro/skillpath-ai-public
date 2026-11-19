@@ -86,7 +86,7 @@ class MockIntakeTest(unittest.TestCase):
 
     def test_goal_is_distinct_from_experience(self):
         for text, status in [
-            ("AI 엔지니어로 취업하려면 뭘 준비할까?", "unsupported"),
+            ("AI 엔지니어로 취업하려면 뭘 준비할까?", "ok"),  # 2026-11-19 AI 엔지니어 지원
             ("AI 인프라를 준비 중인데 무엇부터 공부할까?", "clarify_role"),
             ("클라우드 직무를 준비하며 AI 모델을 배포했어요.", "ok"),
             ("AI 엔지니어와 협업해 Python으로 모델을 배포했어요.", "ok"),
@@ -98,6 +98,18 @@ class MockIntakeTest(unittest.TestCase):
         ]:
             with self.subTest(text=text):
                 self.assertEqual(chat.interpret(text, {"job": "cloud_engineer"}).status, status)
+
+    def test_ai_engineer_goal_is_supported(self):
+        turn = chat.interpret("AI 엔지니어로 취업하려면 뭘 준비할까?", {"job": "cloud_engineer"})
+        self.assertEqual((turn.status, turn.job), ("ok", "ai_engineer"))
+        self.assertEqual(chat.interpret("AI 직무 기준으로 부족한 역량 알려줘", {}).job, "ai_engineer")
+
+    def test_role_confirmation_picks_the_named_job(self):
+        history = [{"role": "user", "content": "AI 인프라가 목표인데 어떤 과정을 들을까?"},
+                   {"role": "assistant", "content": "클라우드 엔지니어 또는 AI 엔지니어 중 어느 직무를 기준으로 상담할까요?"}]
+        self.assertEqual(chat.interpret("AI 엔지니어 기준으로", {"history": history}).job, "ai_engineer")
+        self.assertEqual(chat.interpret("클라우드로 할게요", {"history": history}).job, "cloud_engineer")
+        self.assertIsNone(chat.interpret("네", {"history": history, "needs_role": True}).job)  # 둘 중 고르지 않았다
 
     def test_role_confirmation_resumes_prior_question(self):
         history = [{"role": "user", "content": "AI 인프라가 목표인데 어떤 과정을 들을까?"},

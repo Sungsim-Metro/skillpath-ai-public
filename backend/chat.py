@@ -178,6 +178,8 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, sidebar_skills: li
         return Reply(f"현재는 {supported} 직무의 역량 분석과 교육과정 추천을 제공합니다.")
     if turn.status == "clarify_role":
         state.needs_role = True
+        if len(JOBS) > 1:
+            return Reply(f"{' 또는 '.join(JOBS.values())} 중 어느 직무를 기준으로 상담할까요?")
         return Reply(f"{supported} 직무를 기준으로 상담할까요?")
     if turn.status == "incomplete":
         return Reply("이어서 말씀해 주세요.")

@@ -134,7 +134,7 @@ class ChatTest(unittest.TestCase):
         self.assertNotIn("Docker", reply.text)
 
     def test_cannot_infer_cloud_after_an_unsupported_target(self):
-        self.send(Turn(status="unsupported", action="courses"), "AI 직무에 맞는 과정은?")
+        self.send(Turn(status="unsupported", action="courses"), "백엔드 직무에 맞는 과정은?")
         self.send(Turn(action="courses"), "그래서 어떤 교육과정이 있어?")
         self.gap.assert_not_called()
         self.recs.assert_not_called()

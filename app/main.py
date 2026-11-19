@@ -64,7 +64,7 @@ with st.sidebar:
         st.query_params["view"] = view
     job = st.selectbox("목표 직무", options=list(JOBS), format_func=JOBS.get, key="job")
     nickname = chat_screen.nickname_input()
-    levels = levels_screen.sidebar_summary(nickname)
+    levels = levels_screen.sidebar_summary(nickname, job)
     report_dialog.sidebar_button(job, levels)
     demand, demand_err = (None, None) if view == "chat" else load(api.get_demand, job)
     skill_options = [s["skill"] for s in demand["skills"]] if demand else []
