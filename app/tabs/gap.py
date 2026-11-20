@@ -175,7 +175,7 @@ def _render_priorities(missing: list[dict]) -> None:
     top = missing[:PRIORITY_CARDS]
     for number, (column, r) in enumerate(zip(st.columns(len(top)), top)):
         guessed = " (불확실)" if r["required_level_confidence"] == "uncertain" else ""
-        with column, st.container(border=True):
+        with column, st.container(border=True, key=f"priority_{number}"):
             st.markdown(f"##### {number + 1}. {md_escape(r['skill'])}")
             st.markdown(f"공고 {r['of']}건 중 **{r['postings']}건**이 요구 · 그중 필수 {r['required_ratio']:.0%}")
             st.markdown(f"내 단계 **{r['user_level']}** → 기준 **{r['required_level']}단계**{guessed}")

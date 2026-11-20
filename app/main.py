@@ -66,7 +66,7 @@ NEXT = {
 }
 DEFAULT_JOB = next(iter(JOBS))
 
-st.set_page_config(page_title="skillpath-ai", layout="wide")
+st.set_page_config(page_title="skillpath-ai", page_icon=":material/school:", layout="wide")
 
 # 관리자 화면은 주소 /admin?admin=<ADMIN_KEY 값> 으로만 연다(2026-11-19 회의). 값이 맞을 때만 페이지를 등록하므로
 # 값이 없거나 틀리면 /admin 주소 자체가 없다. 로그인이 아니라 가려 두는 것이다. 메뉴는 숨겨서 사용자 화면은 전과 같다.
@@ -79,6 +79,7 @@ if st.navigation(_pages, position="hidden").url_path == "admin":
     admin_screen.render()
     st.stop()
 
+ui.inject_css()  # 관리자 화면 뒤에 둔다(관리자 화면은 기본 모양 그대로)
 chat_screen.entry_gate()  # 로그인하거나 비회원으로 들어오기 전에는 로그인·회원가입 화면만 그린다
 
 with st.sidebar:
