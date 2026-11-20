@@ -51,10 +51,10 @@ def _validate_rows(data: dict, key: str, ids: list[str]) -> None:
 
 def _source_reason(source: dict, objective: str) -> str:
     demand = source["demand"]
-    return (
-        f"전체 공고 {demand['of']}건 중 {demand['postings']}건에서 {source['skill']} 언급을 확인했습니다. "
-        f"과정의 학습 목표 원문은 “{objective}”입니다."
-    )
+    reason = f"과정의 학습 목표 원문은 “{objective}”입니다."
+    if demand is None:
+        return reason
+    return f"전체 공고 {demand['of']}건 중 {demand['postings']}건에서 {source['skill']} 언급을 확인했습니다. " + reason
 
 
 def reviewed_reasons(source: dict) -> ConverseResult:
@@ -86,8 +86,10 @@ def reviewed_reasons(source: dict) -> ConverseResult:
         validate_reasons(data, source)
         return ConverseResult(data, 0, usage)
 
-    draft = ask(WRITE, source, "reasons", ids)
-    review = ask(REVIEW, {"source": source, "draft": list(draft.values())}, "reviews", ids)
+    scope = ("\n공고 수요 자료가 없습니다. 사용자 요청 기술과 학습 목표의 연결만 근거로 사용하세요."
+             if source["demand"] is None else "")
+    draft = ask(WRITE + scope, source, "reasons", ids)
+    review = ask(REVIEW + scope, {"source": source, "draft": list(draft.values())}, "reviews", ids)
 
     revise = [cid for cid in ids if review[cid]["decision"] == "revise"]
     corrected = {}
@@ -107,9 +109,10 @@ def reviewed_reasons(source: dict) -> ConverseResult:
         objective = row.get("objective")
         if objective not in course["objectives"]:
             continue
-        if cid in corrected:
-            if objective not in review[cid]["supported_objectives"]:
-                continue
+        if cid in corrected and objective not in review[cid]["supported_objectives"]:
+            continue
+        quote_only = cid in corrected or source["demand"] is None
+        if quote_only:
             reason = _source_reason(source, objective)
         else:
             text = row.get("reason")
@@ -121,7 +124,7 @@ def reviewed_reasons(source: dict) -> ConverseResult:
             validate_reasons({"reasons": [entry]}, {**source, "courses": [course]})
         except ValueError:
             continue
-        if cid not in corrected:
+        if not quote_only:
             entry["reason"] += f" 학습 목표 원문은 “{objective}”입니다."
         reasons.append(entry)
     if not reasons:

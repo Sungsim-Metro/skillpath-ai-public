@@ -59,6 +59,19 @@ class ExperimentsTest(Base):
         pairs = {experiments.pick_pair(random.Random(seed)) for seed in range(20)}
         self.assertEqual(pairs, {("single", "reviewed"), ("reviewed", "single")})  # 좌우 순서도 무작위
 
+    def test_chat_structure_selection_keeps_recommendation_pairs_separate(self):
+        for setting, expected, cards in (
+            ("", "screen", []),
+            (" 3,3 ", "supervised", []),
+            ("1", "screen", []),
+            ("1,3", "screen", []),
+            ("single,reviewed", "screen", ["single", "reviewed"]),
+            ("single,reviewed,3", "screen", ["single", "reviewed"]),
+        ):
+            with self.subTest(setting=setting), patch.dict(os.environ, AB_STRUCTURES=setting):
+                self.assertEqual(experiments.chat_architecture(), expected)
+                self.assertEqual(experiments.structures(), cards)
+
     def test_use_model_sends_and_logs_that_model(self):
         usage_log = Path(self.directory.name) / "usage.jsonl"
         self.env({"BEDROCK_MOCK": "0", "BEDROCK_MODEL_ID": "default-model", "USAGE_LOG": str(usage_log)})

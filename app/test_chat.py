@@ -53,6 +53,35 @@ class ChatScreenTest(unittest.TestCase):
         at.button(key="auth_register" if register else "auth_login").click().run()
         self.assertFalse(at.exception)
 
+    def test_supervised_launch_preserves_session_and_does_not_rerun_workers_on_refresh(self):
+        with patch("sys.argv", [MAIN, "--supervised"]):
+            at = self.open_screen()
+            at.chat_input[0].set_value("저는 Kubernetes를 배우고 싶어요.").run()
+            at.chat_input[0].set_value("그 기술의 강의를 추천해 주세요.").run()
+            self.assertFalse(at.exception)
+            entry = at.session_state["chat_history"][-1]
+            self.assertEqual({c["gap_skill"] for c in entry["courses"]}, {"Kubernetes"})
+            with patch("backend.chat.handle_message", side_effect=AssertionError("재실행")) as handle:
+                at.run()
+            handle.assert_not_called()
+            self.assertFalse(at.exception)
+
+    def test_registered_structure_three_runs_supervised_chat_without_a_vote(self):
+        with patch.dict(os.environ, AB_STRUCTURES="3"):
+            at = self.open_screen()
+            self.authenticate(at, "팀장 상담 회원", register=True)
+            at.chat_input[0].set_value("저는 Kubernetes를 배우고 싶어요.").run()
+            at.chat_input[0].set_value("그 기술의 강의를 추천해 주세요.").run()
+            self.assertFalse(at.exception)
+            entry = at.session_state["chat_history"][-1]
+            self.assertEqual(entry["architecture"], "supervised")
+            self.assertEqual({card["gap_skill"] for card in entry["courses"]}, {"Kubernetes"})
+            self.assertEqual(entry["alternatives"], [])
+            self.assertFalse(any(button.key and button.key.startswith("ab_") for button in at.button))
+            saved = chat_history.load_session("팀장 상담 회원", entry["session_id"])
+            self.assertEqual(len(saved), 2)
+            self.assertEqual(saved[-1], (entry["prompt"], entry["answer"], entry["courses"]))
+
     def test_guest_chat_is_not_saved_and_is_told_so(self):
         at = self.open_screen()
         self.assertTrue(any("저장되지 않습니다" in c.value for c in at.caption))

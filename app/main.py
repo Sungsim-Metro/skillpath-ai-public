@@ -30,7 +30,7 @@ pythonpath = os.environ.get("PYTHONPATH", "")
 if str(ROOT) not in pythonpath.split(os.pathsep):
     os.environ["PYTHONPATH"] = str(ROOT) + (os.pathsep + pythonpath if pythonpath else "")
 
-from backend import api  # noqa: E402
+from backend import api, experiments  # noqa: E402
 from backend.jobs import JOBS  # noqa: E402
 
 from app import chat as chat_screen  # noqa: E402
@@ -108,7 +108,9 @@ tour.show_if_open()  # 처음 들어온 사용자에게 기능을 단계별로 �
 label, render, need = VIEWS[view]
 if view == "chat":
     confirmed_levels = None if st.session_state.levels_example else levels
-    chat_screen.render(job, levels_screen.chat_skills(job, levels), session, confirmed_levels)
+    architecture = "supervised" if "--supervised" in sys.argv[1:] else experiments.chat_architecture()
+    chat_screen.render(job, levels_screen.chat_skills(job, levels), session, confirmed_levels,
+                       architecture=architecture)
     st.stop()
 
 ctx = build_ctx(job, levels, need)  # 화면에 필요한 데이터만 불러온다(상담은 수요를 부르지 않는다)

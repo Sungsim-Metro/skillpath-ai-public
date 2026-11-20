@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -12,6 +13,9 @@ from backend import api, chat_profiles, experiments
 from backend.jobs import JOBS
 from backend.levels import has_skill_rating
 from pipeline.aliases import normalize_skill
+
+if TYPE_CHECKING:
+    from ai.supervisor import SupervisedTurn
 
 
 @dataclass
@@ -29,6 +33,10 @@ class Conversation:
     history: list[dict] = field(default_factory=list)
     last_changes: dict = field(default_factory=dict)
     usage: SessionUsage = field(default_factory=SessionUsage)
+    wishes: list[str] = field(default_factory=list)
+    pending_course_question: bool = False
+    last_gap_skills: list[str] = field(default_factory=list)
+    last_gap_job: str | None = None
 
 
 @dataclass
@@ -48,6 +56,8 @@ class Reply:
     failed: bool = False
     assessment_skills: list[str] = field(default_factory=list)
     assessment_job: str = ""
+    supervisor_decisions: list[str] = field(default_factory=list)
+    gap_skills: list[str] = field(default_factory=list)
 
 
 def _skill(name: str) -> str:
@@ -149,20 +159,27 @@ def _verified_courses(recommendations: list[dict], missing: list[dict]) -> list[
             rec["demand"][k] != demand[skill][k] for k in ("postings", "of", "required_ratio")
         ):
             raise ValueError("추천과 분석의 수요 기준 불일치")
-        for course in rec["courses"]:
-            keys = ("title", "url", "level", "prerequisites", "reason", "match")
-            if any(not isinstance(course.get(k), str) or not course[k].strip() for k in keys):
-                raise ValueError("과정 필드 누락")
-            url = urlsplit(course["url"])
-            if url.scheme != "https" or not url.hostname or course["match"] not in {"certain", "uncertain"}:
-                raise ValueError("과정 링크 또는 매칭 상태 오류")
-            shown = {**{k: course[k] for k in keys}, "gap_skill": skill}
-            avg, count = course.get("rating_avg"), course.get("rating_count")
-            # 평점은 선택 필드다. 숫자가 아니거나 범위를 벗어나면 과정은 보여 주되 평점만 뺀다
-            if (isinstance(avg, (int, float)) and not isinstance(avg, bool) and 0 < avg <= 5
-                    and isinstance(count, int) and not isinstance(count, bool) and count > 0):
-                shown.update(rating_avg=avg, rating_count=count)
-            courses.append(shown)
+        courses.extend(_verified_course_cards(skill, rec["courses"]))
+    return courses
+
+
+def _verified_course_cards(skill: str, candidates: list[dict]) -> list[dict]:
+    """후보 필드와 링크를 검사하고 검증된 이유를 그대로 카드에 옮긴다."""
+    courses = []
+    for course in candidates:
+        keys = ("title", "url", "level", "prerequisites", "reason", "match")
+        if any(not isinstance(course.get(k), str) or not course[k].strip() for k in keys):
+            raise ValueError("과정 필드 누락")
+        url = urlsplit(course["url"])
+        if url.scheme != "https" or not url.hostname or course["match"] not in {"certain", "uncertain"}:
+            raise ValueError("과정 링크 또는 매칭 상태 오류")
+        shown = {**{k: course[k] for k in keys}, "gap_skill": skill}
+        avg, count = course.get("rating_avg"), course.get("rating_count")
+        # 평점은 선택 필드다. 숫자가 아니거나 범위를 벗어나면 과정은 보여 주되 평점만 뺀다
+        if (isinstance(avg, (int, float)) and not isinstance(avg, bool) and 0 < avg <= 5
+                and isinstance(count, int) and not isinstance(count, bool) and count > 0):
+            shown.update(rating_avg=avg, rating_count=count)
+        courses.append(shown)
     return courses
 
 
@@ -195,7 +212,7 @@ def _compare_structures(pair: tuple[str, str], job: str, requested: list[str],
     return [], default["courses"]
 
 
-def _analyze(facts: dict, levels: dict[str, int], *, courses: bool) -> Reply:
+def _analyze(facts: dict, levels: dict[str, int], *, courses: bool, supervised: bool = False) -> Reply:
     job = facts["job"]
     try:
         rows = api.get_gap(job, levels)
@@ -206,7 +223,7 @@ def _analyze(facts: dict, levels: dict[str, int], *, courses: bool) -> Reply:
                        else "수요 데이터가 없어 현재 역량과 비교할 수 없습니다.")
             return Reply("\n".join([message, *notes]))
     except Exception:
-        return Reply("채용공고 수요를 불러오지 못해 부족 역량을 비교할 수 없습니다.")
+        return Reply("채용공고 수요를 불러오지 못해 부족 역량을 비교할 수 없습니다.", failed=supervised)
     excluded = {name.casefold() for name in facts["excluded_skills"]}
     conflicts = [r["skill"] for r in rows if _skill(r["skill"]).casefold() in excluded and r.get("user_level", 0) > 0]
     if conflicts:
@@ -228,31 +245,70 @@ def _analyze(facts: dict, levels: dict[str, int], *, courses: bool) -> Reply:
             line += f" · 내 수준 {row['user_level']}단계 / 기준 {row['required_level']}단계"
         lines.append(line)
     lines.extend(notes)
-    reply = Reply("\n".join(lines))
+    reply = Reply("\n".join(lines), gap_skills=[row["skill"] for row in missing])
     if courses:
         try:
             requested = [r["skill"] for r in missing][:api.RECOMMEND_TOP_N]
-            pair = experiments.pick_pair()
+            pair = None if supervised else experiments.pick_pair()
+            unavailable_skills = []
             if pair:
                 reply.alternatives, reply.courses = _compare_structures(pair, job, requested, missing[:len(requested)])
             else:
-                recs = api.get_recommendations(job, requested, review=True)
+                if supervised:
+                    known_levels = {r["skill"]: r["user_level"] for r in missing[:len(requested)]
+                                    if has_skill_rating(levels, r["skill"], job)}
+                    recs = api.get_recommendations(job, requested, review=True, levels=known_levels)
+                    returned = {rec["gap_skill"] for rec in recs}
+                    unavailable_skills = [skill for skill in requested if skill not in returned]
+                else:
+                    recs = api.get_recommendations(job, requested, review=True)
                 reply.courses = _verified_courses(recs, missing[:len(requested)])
             detail = ("부족 기술과 연결된 과정입니다. 과정별 추천 이유와 매칭 상태를 확인해 주세요." if reply.courses
                       else "상위 부족 기술에 연결할 교육과정을 찾지 못했습니다.")
             if reply.alternatives:
                 detail = ("부족 기술과 연결된 과정을 두 가지 방식으로 추천했습니다. "
                           "과정별 추천 이유를 읽고 더 도움이 되는 쪽을 골라 주세요.")
+            if unavailable_skills:
+                detail += "\n추천 결과를 확인하지 못한 기술 · " + ", ".join(unavailable_skills)
+                reply.failed = True
         except (BedrockJSONError, KeyError, TypeError, ValueError):
             detail = "추천 결과가 검증을 통과하지 못해 과정을 표시할 수 없습니다."
             reply.failed = True
         except Exception:
             detail = "교육과정 추천을 불러오지 못했습니다."
+            reply.failed = supervised
         reply.text += "\n\n" + detail
     return reply
 
 
-def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[str], levels: dict[str, int]) -> Reply:
+def _supervised_analysis(message: str, facts: dict, levels: dict, plan: SupervisedTurn) -> Reply:
+    from ai import supervisor
+    from backend.supervised_courses import recommend_for_targets
+
+    if plan.turn.action == "courses" and plan.targets:
+        reply = recommend_for_targets(facts["job"], plan.targets, levels, facts)
+    else:
+        reply = _analyze(facts, levels, courses=plan.turn.action == "courses", supervised=True)
+    if reply.failed:
+        reply.supervisor_decisions.append("worker_error")
+    try:
+        approved = supervisor.approve_result(message, facts, plan, reply.text, reply.courses)
+    except intake.ChatIntakeError:
+        return Reply("상담 결과 검토를 완료하지 못했습니다. 잠시 후 다시 요청해 주세요.",
+                     failed=True, supervisor_decisions=[*reply.supervisor_decisions, "result_error"])
+    if not approved:
+        if reply.failed:
+            return Reply("요청하신 분석이나 추천을 검증하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+                         failed=True, supervisor_decisions=[*reply.supervisor_decisions, "result_rejected"])
+        return Reply("요청하신 내용과 분석 결과가 일치하는지 확인하지 못했습니다. "
+                     "비교할 역량이나 원하는 교육과정을 다시 말씀해 주세요.",
+                     action="clarify", supervisor_decisions=[*reply.supervisor_decisions, "result_rejected"])
+    reply.supervisor_decisions.append("result_approved")
+    return reply
+
+
+def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[str], levels: dict[str, int],
+            *, plan: SupervisedTurn | None = None, message: str = "", prior_context: dict | None = None) -> Reply:
     supported = ", ".join(JOBS.values())
     if turn.status == "unsupported" or (turn.job and turn.job not in JOBS):
         state.needs_role = True
@@ -270,13 +326,24 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
     facts = _context(state, job, base_skills)
     # 저장한 경험 자체에서 확인한 기술은 이번 답변의 비교에만 쓴다.
     facts["skills"] = _effective([*facts["skills"], *turn.experience_skills], state.skills)
+    previous_wishes = getattr(state, "wishes", [])
+    if plan is not None:
+        state.wishes = list(plan.wishes)
+        facts["wishes"] = state.wishes
     if turn.action in {"gap", "courses"}:
         if not facts["job"]:
             reply = Reply(f"{supported} 직무 기준으로 비교할까요?")
+        elif plan is not None:
+            reply = _supervised_analysis(message, {**(prior_context or {}), **facts}, levels, plan)
+            if turn.action == "gap" or reply.gap_skills:
+                state.last_gap_job = facts["job"]
+                state.last_gap_skills = list(reply.gap_skills)
         else:
             reply = _analyze(facts, levels, courses=turn.action == "courses")
     elif turn.action == "summary":
         reply = Reply(_summary(facts))
+        if plan is not None and state.wishes:
+            reply.text += "\n학습 희망 기술 · " + ", ".join(state.wishes)
     else:
         updates = []
         if turn.job:
@@ -287,6 +354,8 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
         if turn.remove_skills or turn.remove_experiences:
             items = dict.fromkeys([*turn.remove_skills, *turn.remove_experiences])
             updates.append("이번 상담 정보에서 제외했습니다. " + ", ".join(items))
+        if plan is not None and state.wishes != previous_wishes:
+            updates.append("학습 희망 기술 · " + (", ".join(state.wishes) or "없음"))
         reply = Reply("\n".join(updates) or "현재 보유한 기술이나 프로젝트에서 직접 맡은 일을 말씀해 주세요.")
     if turn.save:
         saved = _save(state, turn, facts)
@@ -300,26 +369,31 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
 
 def handle_message(state: Conversation, message: str, *, job: str, sidebar_skills: list[str],
                    session: chat_profiles.ProfileSession | None = None,
-                   sidebar_levels: dict[str, int] | None = None) -> Reply:
+                   sidebar_levels: dict[str, int] | None = None, architecture: str = "screen") -> Reply:
     """새 메시지 한 건을 처리한다. 화면 재표시는 이 진입점을 호출하지 않는다."""
+    if architecture not in {"screen", "supervised"}:
+        raise ValueError("지원하지 않는 상담 구조입니다.")
+    supervised = architecture == "supervised"
     previous = getattr(state, "session", None)
     # Open connections may still hold the pre-authentication Conversation type.
     legacy_nickname = vars(state).pop("nickname", "")
     if legacy_nickname or (previous is not None and session is not previous):
         Conversation.__init__(state)
     state.session = session
-    model = experiments.pick_model()  # 실험이 꺼져 있으면 None: 기본 모델 그대로
+    model = None if supervised else experiments.pick_model()
     turn_id = uuid4().hex
     before = (state.usage.input_tokens, state.usage.output_tokens)
     with track_session(state.usage), use_model(model):
         used = "" if api.is_mock() else current_model()
         try:
-            reply = _handle_turn(state, message, job, sidebar_skills, sidebar_levels)
+            reply = _handle_turn(state, message, job, sidebar_skills, sidebar_levels, supervised=supervised)
         except Exception:
-            _record_turn(state, turn_id, job, used, before, failed=True)
+            if not supervised:
+                _record_turn(state, turn_id, job, used, before, failed=True)
             raise
     reply.turn_id, reply.model = turn_id, used
-    _record_turn(state, turn_id, job, used, before, action=reply.action, failed=reply.failed)
+    if not supervised:
+        _record_turn(state, turn_id, job, used, before, action=reply.action, failed=reply.failed)
     return reply
 
 
@@ -340,15 +414,15 @@ def _record_turn(state: Conversation, turn_id: str, job: str, model: str, before
 
 
 def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: list[str],
-                 sidebar_levels: dict[str, int] | None) -> Reply:
+                 sidebar_levels: dict[str, int] | None, *, supervised: bool = False) -> Reply:
     if not message.strip():
         return Reply("이어서 말씀해 주세요.")
     try:
         allowed = intake.guard_input(message)
     except intake.ChatIntakeError:
-        return Reply("요청의 가드레일 점검을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+        return Reply("요청의 가드레일 점검을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.", action="intake", failed=True)
     if not allowed:
-        return Reply("이 요청은 학습 상담 범위에서 처리할 수 없습니다.")
+        return Reply("이 요청은 학습 상담 범위에서 처리할 수 없습니다.", action="blocked")
     read_failed = False
     if state.session is not None and state.profile is None:
         try:
@@ -368,22 +442,45 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
     base_skills = names((state.profile or {}).get("skills", []))
     state.skills = {display_name(raw): present for raw, present in state.skills.items()}
     base_skills.extend(names(sidebar_skills))
+    plan = None
     try:
         context = _context(state, job, base_skills)
-        turn = intake.interpret(message, context, screened=True)
+        if supervised:
+            from ai import supervisor
+
+            context.update(wishes=getattr(state, "wishes", []),
+                           pending_course_question=getattr(state, "pending_course_question", False),
+                           offered_gap=state.offered_gap,
+                           last_gap_skills=(getattr(state, "last_gap_skills", [])
+                                            if getattr(state, "last_gap_job", None) == context["job"] else []))
+            plan = supervisor.interpret_turn(message, context)
+            if plan.question:
+                state.pending_save = False
+                state.offered_gap = False
+                state.pending_course_question = plan.question == supervisor.COURSE_QUESTION
+                _remember_reply(state, message, plan.question)
+                return Reply(plan.question, action="clarify", supervisor_decisions=list(plan.decisions))
+            turn = plan.turn
+        else:
+            turn = intake.interpret(message, context, screened=True)
         turn = replace(turn, add_skills=names(turn.add_skills), remove_skills=names(turn.remove_skills),
                        experience_skills=names(turn.experience_skills), save_skills=names(turn.save_skills))
     except intake.ChatIntakeError:
         return Reply("메시지를 해석하지 못했습니다. 요청을 다시 말씀해 주세요.", action="intake", failed=True)
-    if (state.offered_gap and turn.status == "ok" and turn.action == "note"
+    if (not supervised and state.offered_gap and turn.status == "ok" and turn.action == "note"
             and message.strip().rstrip(".!").strip() in {"네", "예", "응", "좋아요", "비교해줘", "비교해 주세요"}):
         turn.action = "gap"
     if turn.status not in {"blocked", "out_of_scope"}:
         state.pending_save = False
         state.offered_gap = False
+        state.pending_course_question = False
     levels = (state.profile or {}).get("levels", {}) if sidebar_levels is None else sidebar_levels
-    reply = _answer(state, turn, job, base_skills, levels)
-    reply.action = turn.action if turn.status == "ok" else turn.status
+    reply = _answer(state, turn, job, base_skills, levels, plan=plan, message=message, prior_context=context)
+    reply.action = reply.action or (turn.action if turn.status == "ok" else turn.status)
+    if plan is not None:
+        reply.supervisor_decisions = [*plan.decisions, *reply.supervisor_decisions]
+        if reply.action == "clarify" and turn.action == "courses":
+            state.pending_course_question = True
     if turn.status == "ok" and turn.action == "summary" and "상태" in message and not any(
         word in message for word in ("정리", "요약", "만")
     ):
@@ -391,9 +488,12 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
         role = JOBS.get(context["job"], "지원 직무")
         reply.text += f"\n\n{role} 공고에서 요구하는 기술과도 비교할까요?"
     if turn.status in {"ok", "unsupported", "clarify_role", "incomplete"}:
-        state.history.extend([{"role": "user", "content": message},
-                              {"role": "assistant", "content": reply.text}])
-        state.history = state.history[-8:]
+        _remember_reply(state, message, reply.text)
     if read_failed and state.profile is None:
         reply.text += "\n\n저장된 프로필을 불러오지 못해 이번 상담에서 확인한 정보만 사용했습니다."
     return reply
+
+
+def _remember_reply(state: Conversation, message: str, text: str) -> None:
+    state.history.extend([{"role": "user", "content": message}, {"role": "assistant", "content": text}])
+    state.history = state.history[-8:]

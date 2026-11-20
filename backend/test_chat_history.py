@@ -87,6 +87,20 @@ class LocalHistoryTest(unittest.TestCase):
         self.assertEqual(chat_history.load_session("kim", S1)[0][2], [COURSE])  # 과정 카드도 함께 저장
         self.assertTrue(chat_history.record_reply("kim", S1, "질문", R(text="답")))  # failed·action·courses 가 없는 응답도 정상으로 본다
 
+    def test_input_guard_stops_member_history_in_both_chat_modes(self) -> None:
+        from ai.chat import ChatIntakeError
+        from backend import chat
+
+        for architecture in ("screen", "supervised"):
+            for guard_result in (False, ChatIntakeError()):
+                with (self.subTest(architecture=architecture, guard=type(guard_result).__name__),
+                      patch("ai.chat.guard_input", side_effect=[guard_result])):
+                    state = chat.Conversation()
+                    reply = chat.handle_message(state, "질문", job="cloud_engineer", sidebar_skills=[],
+                                                architecture=architecture)
+                    self.assertFalse(chat_history.record_reply("kim", state.usage.session_id, "질문", reply))
+        self.assertFalse(self.path.exists())
+
     def test_bad_session_id_is_rejected_and_save_failure_does_not_raise(self) -> None:
         with self.assertRaises(ValueError):
             chat_history.append_turn("kim", "S#x", "질문", "답")

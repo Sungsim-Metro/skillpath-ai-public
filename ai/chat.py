@@ -277,7 +277,7 @@ def _supported_experience_skills(experiences: list[str], candidates: list[str]) 
     return _items("skills", supported)
 
 
-def _validate(data: dict, message: str, context: dict) -> None:
+def _validate(data: dict, message: str, context: dict, *, check_save_scope: bool = True) -> None:
     if set(data) != set(Turn.__dataclass_fields__):
         raise ValueError("필수 필드가 올바르지 않습니다.")
     if data["status"] not in STATUSES or data["action"] not in ACTIONS:
@@ -295,7 +295,7 @@ def _validate(data: dict, message: str, context: dict) -> None:
             raise ValueError("항목은 비어 있지 않은 문자열 목록이어야 합니다.")
     if data["status"] != "ok":
         return
-    if data["save"]:
+    if data["save"] and check_save_scope:
         scope = save_scope(message, context)
         if scope is None:
             raise ValueError("프로필 쓰기는 현재 사용자의 명시적 요청이 있어야 합니다.")
@@ -358,6 +358,27 @@ def _validate(data: dict, message: str, context: dict) -> None:
             raise ValueError("저장 요청과 대상이 일치해야 합니다.")
 
 
+def intake_context(context: dict) -> dict:
+    keys = ("job", "skills", "experiences", "history", "last_changes", "needs_role", "pending_save", "excluded_skills")
+    return {key: context[key] for key in keys if key in context}
+
+
+def intake_prompt() -> str:
+    schema = {"supported_jobs": JOBS, "statuses": STATUSES, "actions": ACTIONS, "empty_turn": asdict(Turn())}
+    return _SYSTEM + "\n" + json.dumps(schema, ensure_ascii=False)
+
+
+def parsed_turn(data: dict) -> Turn:
+    """검사가 끝난 해석 결과의 표기를 정리하고 종료 상태의 도구 요청을 비운다."""
+    turn = Turn(**data)
+    if turn.status != "ok":
+        return Turn(status=turn.status)
+    turn.add_skills = list(dict.fromkeys(normalize_skill(s) or s for s in turn.add_skills))
+    turn.experience_skills = list(dict.fromkeys(normalize_skill(s) or s for s in turn.experience_skills))
+    turn.save_skills = list(dict.fromkeys(normalize_skill(s) or s for s in turn.save_skills))
+    return turn
+
+
 def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
     """이번 발화의 사실·요청만 반환한다. screened는 같은 원문을 미리 검사한 호출자용이다."""
     if not screened and not guard_input(message):
@@ -368,13 +389,10 @@ def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
         from ai.chat_mock import mock_turn
         return mock_turn(message.strip(), context)
 
-    keys = ("job", "skills", "experiences", "history", "last_changes", "needs_role", "pending_save", "excluded_skills")
-    state = {key: context[key] for key in keys if key in context}
-    schema = {"supported_jobs": JOBS, "statuses": STATUSES, "actions": ACTIONS,
-              "empty_turn": asdict(Turn())}
+    state = intake_context(context)
     try:
         result = bedrock.converse_json(
-            _SYSTEM + "\n" + json.dumps(schema, ensure_ascii=False),
+            intake_prompt(),
             json.dumps({"message": message, "context": state}, ensure_ascii=False),
             mock_file="", mock_key="chat_intake", usage_stage="chat_intake", max_tokens=1200,
             validate=lambda data: _validate(data, message, state),
@@ -382,10 +400,4 @@ def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
     except Exception:
         # BedrockJSONError에는 검사에 실패한 응답 일부가 들어 있어 그대로 보여줄 수 없다.
         raise ChatIntakeError("상담 메시지를 해석할 수 없습니다. 다시 시도해 주세요.") from None
-    turn = Turn(**result.data)
-    if turn.status != "ok":
-        return Turn(status=turn.status)
-    turn.add_skills = list(dict.fromkeys(normalize_skill(s) or s for s in turn.add_skills))
-    turn.experience_skills = list(dict.fromkeys(normalize_skill(s) or s for s in turn.experience_skills))
-    turn.save_skills = list(dict.fromkeys(normalize_skill(s) or s for s in turn.save_skills))
-    return turn
+    return parsed_turn(result.data)

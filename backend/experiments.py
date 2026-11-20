@@ -63,13 +63,23 @@ def _reviewed(skill: str, demand: dict) -> dict:
     return build_recommendation(skill, demand, review=True)[0]
 
 
-# 구조 이름 → (기술, 수요 숫자)를 받아 추천 1건(③ 형식)을 돌려주는 함수. 새 구조는 여기에 한 줄을 더하고 AB_STRUCTURES 에 이름을 적는다.
+# 과정 카드 비교에 쓰는 구조는 (기술, 수요 숫자)를 받아 추천 1건(③ 형식)을 돌려준다.
 STRUCTURES: dict[str, Callable[[str, dict], dict]] = {"single": _single, "reviewed": _reviewed}
 DEFAULT_STRUCTURE = "reviewed"
+# 상담 구조는 사용자 메시지를 받는 시점에 선택한다. 값은 backend.chat.handle_message의 architecture다.
+CHAT_STRUCTURES = {"3": "supervised"}
+
+
+def chat_architecture() -> str:
+    """AB_STRUCTURES에 상담 구조 하나만 지정하면 그 구조로 매 턴을 처리한다."""
+    names = _names("AB_STRUCTURES")
+    if len(names) == 1:
+        return CHAT_STRUCTURES.get(names[0], "screen")
+    return "screen"
 
 
 def structures() -> list[str]:
-    """A/B 에 쓰는 구조 이름. 등록된 이름이 2개 이상일 때만 켜진다."""
+    """과정 카드 A/B에 쓸 추천 구조 이름. 두 개 이상 등록되어야 투표를 연다."""
     names = [name for name in _names("AB_STRUCTURES") if name in STRUCTURES]
     return names if len(names) >= 2 else []
 

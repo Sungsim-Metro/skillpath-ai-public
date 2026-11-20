@@ -128,11 +128,11 @@ def candidate_courses(skill: str, *, rules_only: bool = False) -> list[dict]:
     return out
 
 
-def llm_input_of(skill: str, demand: dict, courses: list[dict]) -> dict:
+def llm_input_of(skill: str, demand: dict | None, courses: list[dict]) -> dict:
     """LLM 에 넣는 값. 비율은 코드가 % 로 바꿔 넣어 LLM 이 계산하지 않게 한다."""
     return {
         "skill": skill,
-        "demand": {
+        "demand": None if demand is None else {
             "postings": demand["postings"],
             "of": demand["of"],
             "required_pct": round(demand["required_ratio"] * 100),
@@ -163,13 +163,14 @@ def validate_reasons(data: dict, llm_input: dict) -> None:
     for r in reasons:
         c, text = by_id[r["course_id"]], r["reason"]
         source = " ".join([llm_input["skill"], c["title"], c["level"], c["prerequisites"], *c["objectives"]])
-        allowed = {float(d["postings"]), float(d["of"]), float(d["required_pct"])} | _numbers(source)
+        allowed = _numbers(source)
+        if d is not None:
+            allowed.update((d["postings"], d["of"], d["required_pct"]))
         bad = sorted(_numbers(text) - allowed)
         if bad:
-            raise ValueError(
-                f"{c['course_id']} reason 에 입력에 없는 숫자 {bad}. "
-                f"쓸 수 있는 숫자: 공고 {d['of']}건 중 {d['postings']}건, 필수 {d['required_pct']}%"
-            )
+            detail = (f"쓸 수 있는 숫자: 공고 {d['of']}건 중 {d['postings']}건, 필수 {d['required_pct']}%"
+                      if d is not None else "공고 수요 근거 없음")
+            raise ValueError(f"{c['course_id']} reason 에 입력에 없는 숫자 {bad}. {detail}")
         haystack = source.lower()
         unknown = sorted({
             w for w in _LATIN.findall(text)
@@ -195,15 +196,18 @@ def _mock_fallback(llm_input: dict) -> ConverseResult:
 
 
 def build_recommendation(
-    skill: str, demand: dict, *, review: bool = False,
+    skill: str, demand: dict | None, *, review: bool = False,
 ) -> tuple[dict, Optional[ConverseResult]]:
     """③ 추천 1건과 LLM 호출 결과(시도 횟수·usage)를 돌려준다. 과정이 없으면 LLM 을 부르지 않는다.
 
     demand 는 ③ 의 demand 형식 {"postings", "of", "required_ratio"} 이다.
+    명시한 기술의 검토 요청에서 demand가 None이면 확인한 학습 목표만 사유로 쓴다.
     가짜 모드에서 mock_bedrock_recommend.json 에 그 기술의 응답이 없으면 _mock_fallback 을 쓴다
     (화면 연결과 시연을 가짜 모드로 할 때 어떤 기술이 와도 오류가 나지 않게).
     """
-    rec = {"gap_skill": skill, "demand": dict(demand), "courses": []}
+    if demand is None and not review:
+        raise ValueError("공고 수요 근거가 없으면 과정 목표 검토가 필요합니다.")
+    rec = {"gap_skill": skill, "demand": None if demand is None else dict(demand), "courses": []}
     courses = candidate_courses(skill, rules_only=True) if review and is_mock() else candidate_courses(skill)
     if not courses:
         return rec, None

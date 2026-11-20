@@ -1,0 +1,20 @@
+{
+  "turn": {
+    "status": "ok",
+    "action": "courses",
+    "job": null,
+    "add_skills": [],
+    "remove_skills": [],
+    "add_experiences": [],
+    "remove_experiences": [],
+    "save": false,
+    "save_skills": [],
+    "save_experiences": [],
+    "save_job": false,
+    "experience_skills": []
+  },
+  "wishes": ["Kubernetes"],
+  "targets": ["Kubernetes"],
+  "question": "",
+  "decisions": ["continue"]
+}

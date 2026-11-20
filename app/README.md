@@ -54,3 +54,23 @@ BEDROCK_MOCK=1 uv run --python 3.11 --with-requirements requirements.txt streaml
 | 비교 실험 | `EXPERIMENT_MODELS`에 모델 ID를 쉼표로 적으면 메시지마다 무작위로 한 모델을 쓰고 답 아래에서 평가를 받습니다. `AB_STRUCTURES`에 추천 구조 이름(`single,reviewed`)을 적으면 과정 추천을 A/B로 보여 주고 선택을 받습니다. 기록은 `DYNAMODB_FEEDBACK_TABLE`(파티션 키 `session_id`, 정렬 키 `turn_id`)에 남고 런타임 역할에 `dynamodb:UpdateItem`, `dynamodb:Scan` 권한이 필요합니다. 내용은 저장하지 않습니다. 셋 다 비우면 꺼집니다. |
 
 색과 글꼴은 저장소 루트의 `.streamlit/config.toml`에서 정합니다. 차트는 Altair로 그립니다.
+
+### 팀장 에이전트 상담 실행
+
+저장소 루트에서 `AB_STRUCTURES=3`으로 실행하면 모든 상담 메시지를 3번 팀장 구조가 처리합니다. 일반 화면과 같은 프로필·수준 진단을 사용합니다. 3번 단독 실행에서는 A/B 투표와 메시지별 무작위 모델 배정이 꺼집니다. 기존 실행 인자 `--supervised`도 같은 구조를 선택하며 환경 설정보다 우선합니다.
+
+```bash
+AB_STRUCTURES=3 BEDROCK_MOCK=1 uv run --python 3.11 --with-requirements requirements.txt streamlit run app/main.py
+```
+
+“저는 Kubernetes를 배우고 싶어요”에 이어 “그 기술의 교육과정을 보여 주세요”라고 입력하면 앞서 말한 학습 희망을 참조합니다. 실제 모드는 위 표의 실제 상담 설정을 사용합니다. 모의 모드는 로컬 규칙으로 해석하고 검토한 예시 카드를 표시합니다.
+
+1번과 3번의 비교는 아래 명령으로 실행합니다. 1번은 PR #121의 Git 커밋 `8dcf025b16ca7e50dae00fa8a8027432b7dbf462`에서 에이전트·프롬프트·모의 대본을 읽습니다. 새로 복제한 저장소에서 이 객체가 없으면 `git fetch origin pull/121/head`로 받습니다.
+
+```bash
+BEDROCK_MOCK=1 uv run --python 3.11 --with-requirements requirements.txt python -m ai.eval.supervised_compare
+```
+
+실제 모델과 가드레일 설정이 환경에 있는 터미널에서는 `BEDROCK_MOCK=0`으로 바꾸고 `--bedrock --case wish-reference --max-model-calls 24 --max-guardrail-calls 6`을 붙여 두 턴만 비교합니다. 두 실행 모두 개발 문항, 동일한 예시 수요 및 로컬 과정 검색을 사용하며 각 대화 안에서 문맥을 유지합니다. 실행별 수치와 검사 결과는 `outputs/eval/supervised_compare_*.json`에 생깁니다.
+
+[2026-11-20 실제 Bedrock 비교 결과](../ai/eval/supervised_chat_pilot.md)

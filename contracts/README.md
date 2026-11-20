@@ -8,7 +8,7 @@
 | ① 공고 | `data/sample/posting.json` | 형식 예시 (1건) |
 | ② 추출 결과 | `data/sample/extraction.json` | 형식 예시 (1건) |
 | ③ 추천 | `data/sample/recommendation.json` | 형식 예시 (1건) |
-| ③ 추천 목록 | `data/sample/recommendations.json` | 가짜 모드에서 화면이 읽는 파일 |
+| ③ 추천 목록 | `data/sample/recommendations.json` | 학습 추천 화면의 모의 데이터(`get_recommendations`의 `review=False` 경로) |
 | ④ 수요 집계 | `data/sample/demand.json` | 가짜 모드에서 화면이 읽는 파일 |
 | ⑤ 교육 공급 | `data/sample/supply.json` | 기술별 학습 프로그램 수를 기록하는 형식 예시 |
 | ⑥ 상담 발화 해석 | `data/sample/chat_turn.json` | 상담에서 갱신할 사실과 이번에 요청한 작업 |
@@ -71,9 +71,12 @@ AWS 운영 경험 우대
 
 ## ③ 추천 (`recommendation`) — backend + ai → app
 
+③은 추천 모듈이 **기술 하나에 대해** 반환하는 데이터 형식이다. `get_recommendations`는 이 형식의 목록을 반환한다. 추천할 기술을 고르는 방법과 이 결과로 사용자에게 답하는 방법은 호출 경로에 따라 달라진다. [추천 한 건의 예시](../data/sample/recommendation.json)
+
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `gap_skill` | string | 부족한 기술의 표준 이름 |
+| `gap_skill` | string | 추천 대상 기술 이름. 개인 Gap에서 고른 기술 또는 상담에서 과정을 요청한 기술 |
+| `demand` | object \| null | 해당 직무의 수요 수치. 학습 추천 화면과 Gap 기반 추천은 아래 세 필드가 있는 객체를 받는다. 3번 상담이 특정 기술을 조회했을 때 수요를 확인할 수 없으면 내부 추천 결과에서만 `null`이 된다 |
 | `demand.postings` | number | 이 기술을 요구한 공고 수 (코드로 계산) |
 | `demand.of` | number | 분석한 전체 공고 수 |
 | `demand.required_ratio` | number | 요구한 공고 중 필수로 표기한 비율 |
@@ -85,10 +88,23 @@ AWS 운영 경험 우대
 | `courses[].match` | string | `certain` 또는 `uncertain` |
 | `courses[].rating_avg` | number | (선택, 2026-11-20 추가) AWS Skill Builder 과정 페이지의 별점 평균(0 초과 5 이하). 평가가 없거나 읽지 못한 과정에는 이 필드와 `rating_count`가 없다 |
 | `courses[].rating_count` | number | (선택, 2026-11-20 추가) 그 평균을 낸 평가 수(1 이상 정수). `rating_avg`와 항상 함께 있다 |
-| `user_level` | number | (선택, 2026-11-19 추가) 이 기술의 내 단계 0~5. 화면이 단계를 넘겼을 때만 있다. 0~2단계는 기초, 3단계 이상은 중급 과정을 앞에 놓는다 |
+| `user_level` | number | (선택) 호출자가 이 기술의 수준을 전달했을 때만 들어가는 내 단계(0~5) |
 
-`courses`는 추천 순서대로 놓인다(직접 다루는 과정이 먼저, 그 안에서는 내 단계에 맞는 난이도가 먼저). 화면은 이 순서에 1위, 2위 번호만 붙인다.
+`courses`는 추천 순서대로 놓이며, 연결할 과정이 없으면 빈 목록이다. 해당 기술의 수준을 전달하면 직접 다루는 과정을 먼저 두고, 같은 매칭 상태 안에서 3단계 미만은 기초, 3단계 이상은 중급 과정을 우선한다. 수준이 없으면 기존 순서를 유지한다. 카드 화면은 기술별로 이 순서에 1위부터 번호를 붙인다.
 평점은 수집한 날의 값을 코드가 과정 페이지에서 읽은 것이고(`pipeline/courses/build_courses.py`의 `parse_rating`), 화면에 보여 주기만 한다. 추천 순서와 추천 이유에는 쓰지 않고 LLM 입력에도 넣지 않는다.
+
+### 호출 경로별 추천 동작
+
+| 경로 | 추천 대상 | 결과 사용 방식 |
+| --- | --- | --- |
+| 학습 추천 화면 | 개인 Gap에서 기준 단계에 미달한 기술 | 기술별 수준을 전달하고 ③의 수요와 과정을 탭에 표시한다. 기본 호출은 `review=False`다. |
+| 기본 상담(0번) | 개인 Gap의 상위 부족 기술 | 기본은 `review=True`다. 추천 수치가 Gap 계산에 쓴 수치와 일치하는지 확인하고 과정 카드를 표시한다. |
+| 도구 호출형 상담(1번, 비교 평가용) | 에이전트가 추천 도구에 넘긴 기술 중 직무 수요 집계에 있거나 사용자가 이번 메시지에서 이름을 언급한 기술 | 도구가 `review=True`로 추천을 받아 과정 제목·난이도·매칭 상태·이유를 에이전트에 전달한다. 에이전트가 최종 답변을 글로 작성한다. |
+| 팀장형 상담(3번, `AB_STRUCTURES=3`) | 이번 요청에서 지목한 기술. “그 기술”처럼 앞선 대화에서 대상을 확인한 경우도 포함한다. 일반적인 과정 추천 요청에는 개인 Gap을 사용한다. | `review=True`로 과정별 추천 이유를 검토한다. 팀장이 요청과 결과가 맞는지 승인하면 검증된 이유와 링크를 카드로 표시한다. |
+
+기본 상담에서 `AB_STRUCTURES=single,reviewed`를 설정하면 같은 Gap 기술로 두 방식의 추천을 만든다. 실제 모드에서 `single`은 추천 이유를 작성한 뒤 코드로 검사하고, `reviewed`는 별도 모델로 초안을 검토해 필요한 경우 한 번 수정한 뒤 최종 근거를 검사한다. 두 방식 모두 ③ 형식을 사용하며 양쪽에 표시할 과정이 있을 때 카드 투표를 연다. [추천 구조 등록과 선택](../backend/experiments.py)
+
+3번이 특정 기술의 과정을 요청받으면 직무 집계에서 확인한 수치만 사용한다. 예를 들어 Kubernetes 과정을 요청했는데 수요 행이 없으면 내부 추천 결과는 `gap_skill="Kubernetes"`, `demand=null`이다. 이때는 확인된 과정 학습 목표로 추천 이유를 구성하고, 상담 답변에는 수요 자료가 없다고 안내한다. 상담 화면은 `Reply.text`와 과정별 `Reply.courses`를 받는다. [특정 기술 추천 처리](../backend/supervised_courses.py)
 
 ## ④ 수요 집계 (`demand`) — backend → app  · 11/10 회의 승인 대기
 
@@ -192,6 +208,10 @@ Gap 행(`get_gap`)에 더한 필드:
 | `experience_skills` | 보존된 프로젝트 경험에서 본인이 직접 사용했다고 밝힌 기술. 이번 응답의 비교·요약에 사용하며, 이 필드만으로 프로필의 보유 기술을 수정하지 않습니다. |
 | `save`, `save_job` | 명시적 프로필 쓰기 요청 여부와 직무가 저장 대상인지 나타내는 불리언. |
 | `save_skills`, `save_experiences` | 프로필 쓰기에서 명시적으로 지정한 항목 목록. 정정과 함께 지정하면 해당 항목을 삭제합니다. |
+
+### 팀장 상담의 실행 계획
+
+`ai.supervisor.interpret_turn`은 원문, 직전 대화, 이번 해석을 팀장이 대조한 뒤 `SupervisedTurn`을 반환한다. `turn`은 위 형식이고 `wishes`는 이번 턴을 반영한 세션의 학습 희망, `targets`는 이번에 과정을 요청한 기술이다. 대상 확인이 필요하면 `question`을 표시하고 다음 발화를 기다린다. 희망이나 과정 요청만으로 보유 기술·수준·저장 동의를 설정하지 않는다. `decisions`는 실행 전 팀장의 결정 순서다. 백엔드는 `Reply.supervisor_decisions`에 워커 결과의 승인·거절·실패까지 기록한다. [학습 희망을 참조한 계획 예시](../data/sample/supervised_turn.json)
 
 ## ⑧ 직군별 시장 Gap
 

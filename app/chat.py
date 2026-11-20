@@ -241,7 +241,8 @@ def _render_answer(entry: dict, index: int) -> None:
     if shortcut and (action == "gap" or entry["courses"] or entry["alternatives"]):
         view, label = shortcut
         st.button(label, key=f"go_{index}", on_click=_go, args=(view,), icon=":material/arrow_forward:")
-    if entry["turn_id"] and experiments.active() and not entry.get("rated"):  # 실험이 꺼져 있으면 평가를 받지 않는다
+    if (entry["turn_id"] and entry.get("architecture") != "supervised"
+            and experiments.active() and not entry.get("rated")):
         st.feedback("thumbs", key=f"fb_{entry['turn_id']}", on_change=_on_rating, args=(entry,))
 
 
@@ -385,7 +386,7 @@ def _assessment_panel(conversation: Conversation, sidebar_job: str, session: cha
 
 def _render_current_chat(chat, conversation, history: list, message: str | None, *, job: str,
                          sidebar_skills: list[str], session: chat_profiles.ProfileSession | None,
-                         sidebar_levels: dict[str, int] | None, nickname: str | None) -> None:
+                         sidebar_levels: dict[str, int] | None, nickname: str | None, architecture: str) -> None:
     """지금 하고 있는 대화: 내 상태, 대화 목록, 새 답, 수준 문항, 설문과 추천 질문."""
     # 내 상태 한 줄: 목표 직무, 진단으로 확인한 보유 기술, 이번 대화에서 말한 기술
     target = conversation.job or (conversation.profile or {}).get("job") or job
@@ -418,6 +419,7 @@ def _render_current_chat(chat, conversation, history: list, message: str | None,
                     reply = chat.handle_message(
                         conversation, message,
                         job=job, sidebar_skills=sidebar_skills, session=session, sidebar_levels=sidebar_levels,
+                        architecture=architecture,
                     )
                     # 실험용 항목은 없을 수도 있다(없으면 평가 위젯을 붙이지 않는다)
                     entry = {"answer": reply.text, "courses": reply.courses,
@@ -428,7 +430,8 @@ def _render_current_chat(chat, conversation, history: list, message: str | None,
                     # 예외에 닉네임, 프로필 또는 원문이 포함될 수 있다.
                     entry = {"answer": "메시지 처리 결과를 확인할 수 없습니다.", "courses": [], "turn_id": "",
                              "model": "", "action": "", "alternatives": []}
-            history.append({"prompt": message, "job": job, "session_id": conversation.usage.session_id, **entry})
+            history.append({"prompt": message, "job": job, "session_id": conversation.usage.session_id,
+                            "architecture": architecture, **entry})
             chat_history.record_reply(nickname, conversation.usage.session_id, message, reply)  # 저장 여부는 backend 가 정한다
             _render_answer(history[-1], len(history) - 1)
         # 대화에서 목표 직무가 정해지거나 바뀌면 마이페이지와 다른 화면도 그 직무를 따른다
@@ -451,7 +454,7 @@ def _render_current_chat(chat, conversation, history: list, message: str | None,
 
 
 def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSession | None,
-           sidebar_levels: dict[str, int] | None = None) -> None:
+           sidebar_levels: dict[str, int] | None = None, *, architecture: str = "screen") -> None:
     from backend import chat
 
     st.session_state.pop("from_chat", None)  # 상담으로 돌아왔으면 '돌아가기' 표시를 지운다
@@ -488,7 +491,8 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
             _render_past(nickname, viewing)
         else:
             _render_current_chat(chat, conversation, history, message, job=job, sidebar_skills=sidebar_skills,
-                                 session=session, sidebar_levels=sidebar_levels, nickname=nickname)
+                                 session=session, sidebar_levels=sidebar_levels, nickname=nickname,
+                                 architecture=architecture)
     # 패널은 메시지를 처리하고 저장한 뒤에 채운다. 그래야 방금 보낸 첫 대화도 목록에 바로 뜬다.
     if opened:
         with panel, st.container(key="history_panel"):
