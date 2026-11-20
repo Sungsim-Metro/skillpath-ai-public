@@ -36,6 +36,11 @@ def _render_recommendations(ctx: Ctx):
         notice("학습 추천", err, "부족한 기술마다 학습 프로그램과 추천 이유가 여기에 나옵니다.")
         return
     _render_order(recs)
+    shown = {rec["gap_skill"] for rec in recs}
+    last = max((i for i, r in enumerate(missing) if r["skill"] in shown), default=-1)
+    skipped = [r["skill"] for r in missing[:last] if r["skill"] not in shown]
+    if skipped:  # 백엔드가 과정이 있는 기술부터 골랐다. 건너뛴 기술을 알린다
+        st.caption("연결할 교육과정이 없어 건너뛴 기술 · " + ", ".join(md_escape(s) for s in skipped))
     area_of = {r["skill"]: r["area"] for r in missing}
     # 길게 늘어놓지 않고 기술마다 탭으로 넘겨 본다. 탭 순서는 공고 수요가 높은 순서다
     labels = [f"{priority}. {md_escape(rec['gap_skill'])}" for priority, rec in enumerate(recs, start=1)]

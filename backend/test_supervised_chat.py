@@ -88,7 +88,8 @@ class SupervisedChatTest(unittest.TestCase):
             result = self.send("부족한 기술에 맞는 교육과정을 추천해줘")
         self.assertTrue(result.failed)
         self.assertIn("확인하지 못한 기술 · Linux", result.text)
-        self.assertEqual({card["gap_skill"] for card in result.courses}, {"AWS"})
+        # 과정이 없는 Python 은 건너뛰고 과정이 있는 Docker 가 채운다(AWS, Linux, Docker). Linux 는 실패해서 카드가 없다
+        self.assertEqual({card["gap_skill"] for card in result.courses}, {"AWS", "Docker"})
         self.assertIn("worker_error", result.supervisor_decisions)
         self.assertIn("result_approved", result.supervisor_decisions)
 

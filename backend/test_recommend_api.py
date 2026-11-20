@@ -40,6 +40,7 @@ class RealRecommendationsTest(unittest.TestCase):
         patch.dict(os.environ, {"BEDROCK_MOCK": "0"}).start()
         self.demand = patch.object(api, "get_demand", return_value=DEMAND).start()
         self.build = patch("ai.recommend.build_recommendation", side_effect=fake_build).start()
+        patch.object(api, "_has_courses", return_value=True).start()  # 과정 검색(KB)은 부르지 않는다
         self.addCleanup(patch.stopall)
 
     def test_only_top_n_are_recommended(self) -> None:
@@ -47,6 +48,21 @@ class RealRecommendationsTest(unittest.TestCase):
         self.assertEqual(api.RECOMMEND_TOP_N, 3)
         self.assertEqual([r["gap_skill"] for r in recs], ["AWS", "Docker", "CI/CD"])
         self.assertEqual([c.args[0] for c in self.build.call_args_list], ["AWS", "Docker", "CI/CD"])
+
+    def test_skills_without_courses_are_skipped_for_ones_with_courses(self) -> None:
+        with patch.object(api, "_has_courses", side_effect=lambda skill, review=False: skill not in {"AWS", "Docker"}):
+            picked = api.pick_recommendable(["AWS", "Docker", "CI/CD", "Terraform", "Linux", "Git"])
+        self.assertEqual(picked, ["CI/CD", "Terraform", "Linux"])  # 수요 순서를 지킨다
+
+    def test_fills_with_skills_without_courses_when_too_few(self) -> None:
+        with patch.object(api, "_has_courses", side_effect=lambda skill, review=False: skill == "Linux"):
+            self.assertEqual(api.pick_recommendable(["AWS", "Docker", "Linux", "Git"]), ["AWS", "Docker", "Linux"])
+        with patch.object(api, "_has_courses", return_value=False):
+            self.assertEqual(api.pick_recommendable(["AWS", "Docker", "CI/CD", "Git"]), ["AWS", "Docker", "CI/CD"])  # 전부 없으면 전처럼 앞 3개
+
+    def test_search_failure_keeps_old_order(self) -> None:
+        with patch("ai.recommend.candidate_courses", side_effect=RuntimeError("KB down")):
+            self.assertEqual(api._has_courses("AWS"), True)
 
     def test_demand_numbers_are_computed_from_get_demand(self) -> None:
         api.get_recommendations("cloud_engineer", GAP)
