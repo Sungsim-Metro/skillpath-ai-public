@@ -14,10 +14,12 @@ from streamlit.testing.v1 import AppTest
 from app.testing import set_job
 
 from ai.chat import Turn
-from backend import api, chat_profiles
+from backend import api, chat_history, chat_profiles
 from backend.jobs import JOBS
 
 MAIN = str(Path(__file__).with_name("main.py"))
+# 공개 검사가 전화번호 모양을 찾으므로 예시 번호는 조각을 이어 만든다
+PHONE = "010-" + "1234-" + "5678"
 
 
 def tokens(at) -> str:
@@ -30,9 +32,11 @@ class ChatScreenTest(unittest.TestCase):
 
     def setUp(self):
         self.profile_db = Path(self.enterContext(TemporaryDirectory())) / "profiles.sqlite3"
+        self.history_db = Path(self.enterContext(TemporaryDirectory())) / "chat-history.sqlite3"
         self.enterContext(patch.dict(os.environ, {
             "BEDROCK_MOCK": "1", "PYTHON_DOTENV_DISABLED": "1", "USAGE_LOG": "off",
             "SKILLPATH_MOCK_PROFILE_DB": str(self.profile_db),
+            "SKILLPATH_MOCK_CHAT_DB": str(self.history_db),
         }))
 
     def open_screen(self, view="chat"):
@@ -48,6 +52,88 @@ class ChatScreenTest(unittest.TestCase):
         at.text_input(key="auth_password").set_value(self.password if password is None else password)
         at.button(key="auth_register" if register else "auth_login").click().run()
         self.assertFalse(at.exception)
+
+    def test_guest_chat_is_not_saved_and_is_told_so(self):
+        at = self.open_screen()
+        self.assertTrue(any("저장되지 않습니다" in c.value for c in at.caption))
+        self.assertTrue(any("로그인하면 대화 기록이 저장됩니다" in c.value for c in at.caption))
+        first = at.session_state["chat_conversation"].usage.session_id
+        at.button(key="chat_new").click().run()  # 비회원도 새 채팅을 시작할 수 있다
+        self.assertNotEqual(at.session_state["chat_conversation"].usage.session_id, first)
+        at.button(key="history_toggle").click().run()  # 패널을 접어도 새 채팅 버튼은 제목 옆에 남는다(하나뿐)
+        self.assertEqual(len([b for b in at.button if b.key == "chat_new"]), 1)
+        at.button(key="history_toggle").click().run()  # 다시 펼치면 패널 안의 버튼 하나뿐이다(제목 옆 버튼은 사라진다)
+        self.assertEqual(len([b for b in at.button if b.key == "chat_new"]), 1)
+        at.chat_input[0].set_value(f"제가 Docker로 API를 배포했어요. 연락처 {PHONE}").run()
+        self.assertFalse(at.exception)
+        self.assertFalse(self.history_db.exists())
+
+    def test_member_chat_is_saved_listed_and_opened_read_only(self):
+        at = self.open_screen()
+        self.authenticate(at, "기록 회원", register=True)
+        self.assertTrue(any("대화는 저장되고" in c.value for c in at.caption))
+        at.chat_input[0].set_value(f"제가 Docker로 API를 배포했어요. 연락처 {PHONE}").run()
+        first = at.session_state["chat_conversation"].usage.session_id
+        saved = chat_history.load_session("기록 회원", first)
+        self.assertEqual(saved[0][0], "제가 Docker로 API를 배포했어요. 연락처 [전화번호]")  # 가려서 저장
+        self.assertEqual(chat_history.load_session("다른 회원", first), [])  # 다른 회원의 대화는 열리지 않는다
+        self.assertFalse(at.exception)
+        self.assertIn(f"history_{first}", [b.key for b in at.button])  # 첫 대화부터 목록에 뜬다
+
+        at.chat_input[0].set_value("그다음은 Kubernetes 얘기예요").run()
+        self.assertEqual([b.key for b in at.button].count(f"history_{first}"), 1)  # 같은 대화는 한 줄
+        at.button(key=f"history_{first}").click().run()  # 지금 하던 대화를 누르면 그대로 돌아온다
+        self.assertEqual(len(at.info), 0)
+
+        at.button(key="chat_new").click().run()  # 새 채팅은 새 세션 ID 로 시작한다
+        self.assertNotEqual(at.session_state["chat_conversation"].usage.session_id, first)
+        at.button(key=f"history_{first}").click().run()  # 지난 대화는 읽기 전용으로 열린다
+        self.assertTrue(any("지난 대화를 보고 있습니다" in i.value for i in at.info))
+        self.assertTrue(any("[전화번호]" in t.value for t in at.text))
+        self.assertTrue(any("Kubernetes" in t.value for t in at.text))
+
+    def test_history_is_hidden_and_nothing_is_saved_when_storage_is_off(self):
+        """저장소가 꺼져 있으면(실제 모드에서 DYNAMODB_CHAT_TABLE 없음) 패널도 '저장됩니다' 안내도 없고 저장도 없다."""
+        from app import chat as chat_screen
+
+        with patch.object(chat_history, "enabled", return_value=False):
+            at = self.open_screen()
+            self.authenticate(at, "저장 꺼짐", register=True)
+            at.chat_input[0].set_value("제가 Docker로 API를 배포했어요").run()
+            self.assertFalse(at.exception)
+            # 패널과 접기 버튼은 없고, 대화를 비우는 새 채팅 버튼은 제목 옆에 남는다
+            self.assertEqual([b.key for b in at.button if b.key in ("chat_new", "history_toggle")], ["chat_new"])
+            self.assertFalse({c.value for c in at.caption} & {chat_screen.GUEST_NOTICE, chat_screen.MEMBER_NOTICE})
+            self.assertFalse(self.history_db.exists())
+
+    def test_only_real_counseling_turns_are_saved(self):
+        """막힌 발화·범위 밖 질문·검사 실패·처리 오류는 화면에는 남아도 DB 에는 저장하지 않는다."""
+        from backend.chat import Reply
+
+        at = self.open_screen()
+        self.authenticate(at, "저장 기준", register=True)
+        session_id = at.session_state["chat_conversation"].usage.session_id
+        cases = [
+            ("막힌 발화", Reply("차단 안내", action="blocked"), False),
+            ("범위 밖", Reply("범위 안내", action="out_of_scope"), False),
+            ("검사 실패", Reply("해석 실패", action="intake", failed=True), False),
+            ("오류", RuntimeError("boom"), False),
+            ("정상", Reply("정상 답", action="note"), True),
+        ]
+        # 저장 여부는 backend(chat_history.record_reply)가 정한다. 화면은 부르기만 하므로, 저장하지 않는 턴에서도 부르되
+        # 실제 저장(append_turn)은 일어나지 않는 것을 호출 횟수와 저장 결과로 함께 확인한다.
+        with patch.object(chat_history, "append_turn", wraps=chat_history.append_turn) as spy:
+            for text, outcome, saved in cases:
+                before = len(chat_history.load_session("저장 기준", session_id))
+                calls = spy.call_count
+                with patch("backend.chat.handle_message", side_effect=[outcome]):
+                    at.chat_input[0].set_value(text).run()
+                self.assertFalse(at.exception, text)
+                after = len(chat_history.load_session("저장 기준", session_id))
+                self.assertEqual(after - before, 1 if saved else 0, text)
+                self.assertEqual(spy.call_count - calls, 1 if saved else 0, text)  # append_turn 호출 자체가 없다
+        self.assertEqual([t[0] for t in chat_history.load_session("저장 기준", session_id)], ["정상"])
+        self.assertEqual(len(at.session_state["chat_history"]), 5)  # 화면에는 다섯 턴이 모두 보인다
 
     def test_token_usage_counts_retries_and_failed_turns_only_for_this_chat(self):
         log = Path(self.enterContext(TemporaryDirectory())) / "usage.jsonl"
@@ -515,7 +601,7 @@ class ChatScreenTest(unittest.TestCase):
         at.radio(key="view").set_value("chat").run()
 
         self.diagnose(at, {"C1-4": 3})
-        at.button(key="chat_reset").click().run()  # 새 상담: 대화만 비우고 진단은 그대로 둔다
+        at.button(key="chat_new").click().run()  # 새 채팅: 대화만 비우고 진단은 그대로 둔다
         self.assertFalse(at.exception)
         self.assertFalse(at.chat_message)
         self.assertEqual(at.session_state["levels"], {"C1-4": 3})

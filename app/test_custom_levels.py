@@ -106,7 +106,7 @@ class CustomLevelTest(unittest.TestCase):
 
     def test_guest_levels_wait_for_an_explicit_save_to_an_empty_account(self):
         database = Path(self.enterContext(TemporaryDirectory())) / "profiles.sqlite3"
-        self.enterContext(patch.dict(os.environ, {"SKILLPATH_MOCK_PROFILE_DB": str(database)}))
+        self.enterContext(patch.dict(os.environ, {"SKILLPATH_MOCK_PROFILE_DB": str(database), "SKILLPATH_MOCK_CHAT_DB": str(database.with_name("chat.sqlite3"))}))
         session = chat_profiles.create_profile("level-test", "integration test password")
         at = AppTest.from_function(sidebar).run()
         at.session_state["levels"] = {"custom:C++": 4, "A1-1": 2}

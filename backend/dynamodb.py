@@ -158,14 +158,45 @@ def create_profile_table(*, resource=None) -> str:
     return name
 
 
+def _ensure_ttl(client, name: str, attribute: str) -> None:
+    """TTL 이 꺼져 있으면 켠다. 이미 켜졌거나 켜지는 중이면 속성 이름만 확인한다."""
+    spec = client.describe_time_to_live(TableName=name)["TimeToLiveDescription"]
+    if spec.get("TimeToLiveStatus") in ("ENABLED", "ENABLING"):
+        if spec.get("AttributeName") != attribute:
+            raise ValueError(f"기존 테이블의 TTL 속성이 {attribute}이(가) 아닙니다: {name}")
+        return
+    client.update_time_to_live(
+        TableName=name, TimeToLiveSpecification={"Enabled": True, "AttributeName": attribute})
+
+
+def create_chat_table(*, resource=None) -> str:
+    """회원 대화 기록 테이블(backend/chat_history.py)을 만들거나 확인하고, 만료 시각 속성으로 TTL 을 켠다."""
+    name = os.getenv("DYNAMODB_CHAT_TABLE", "").strip()
+    if not name:
+        raise ValueError("DYNAMODB_CHAT_TABLE을 설정하세요.")
+    others = {os.getenv(key, "").strip() for key in (
+        "DYNAMODB_EXTRACTIONS_TABLE", "DYNAMODB_DEMAND_TABLE", "DYNAMODB_PROFILE_TABLE")} - {""}
+    if name in others:
+        raise ValueError("대화 기록에는 다른 데이터와 다른 테이블 이름이 필요합니다.")
+    client = (resource if resource is not None else _resource()).meta.client
+    _ensure_table(client, name, [
+        {"AttributeName": "nickname", "KeyType": "HASH"},
+        {"AttributeName": "sk", "KeyType": "RANGE"},
+    ])
+    _ensure_ttl(client, name, "expires_at")
+    return name
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["create-tables", "create-profile-table"])
+    parser.add_argument("command", choices=["create-tables", "create-profile-table", "create-chat-table"])
     args = parser.parse_args()
     from pipeline.rocketpunch import load_env_file
 
     load_env_file()
-    names = [create_profile_table()] if args.command == "create-profile-table" else create_tables()
+    names = {"create-profile-table": lambda: [create_profile_table()],
+             "create-chat-table": lambda: [create_chat_table()],
+             "create-tables": lambda: create_tables()}[args.command]()
     for name in names:
         print(f"테이블 준비 완료 {name}")
 

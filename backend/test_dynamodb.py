@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from botocore.exceptions import ClientError
 
 from backend import api
-from backend.dynamodb import DynamoDBStore, create_profile_table, create_tables, json_numbers
+from backend.dynamodb import DynamoDBStore, create_chat_table, create_profile_table, create_tables, json_numbers
 
 
 def client_error(code: str) -> ClientError:
@@ -123,6 +123,44 @@ class DynamoDBStoreTest(unittest.TestCase):
             self.assertEqual(create_profile_table(resource=resource), "profiles")
         self.assertEqual(client.create_table.call_count, 1)
         self.assertEqual(client.create_table.call_args.kwargs["KeySchema"], keys)
+
+    def test_chat_table_has_a_sort_key_and_turns_on_ttl_once(self) -> None:
+        resource = Mock()
+        client = resource.meta.client
+        keys = [{"AttributeName": "nickname", "KeyType": "HASH"}, {"AttributeName": "sk", "KeyType": "RANGE"}]
+        active = description()
+        active["Table"]["KeySchema"] = keys
+        active["Table"]["AttributeDefinitions"] = [
+            {"AttributeName": "nickname", "AttributeType": "S"}, {"AttributeName": "sk", "AttributeType": "S"}]
+        client.describe_table.side_effect = [client_error("ResourceNotFoundException"), active, active]
+        off = {"TimeToLiveDescription": {"TimeToLiveStatus": "DISABLED"}}
+        on = {"TimeToLiveDescription": {"TimeToLiveStatus": "ENABLED", "AttributeName": "expires_at"}}
+        client.describe_time_to_live.side_effect = [off, on]
+        with patch.dict(os.environ, {"DYNAMODB_CHAT_TABLE": "chat"}, clear=True):
+            self.assertEqual(create_chat_table(resource=resource), "chat")
+            self.assertEqual(create_chat_table(resource=resource), "chat")
+        self.assertEqual(client.create_table.call_count, 1)
+        self.assertEqual(client.create_table.call_args.kwargs["KeySchema"], keys)
+        client.update_time_to_live.assert_called_once_with(
+            TableName="chat", TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"})
+
+    def test_chat_table_rejects_another_tables_name_and_a_wrong_ttl_attribute(self) -> None:
+        resource = Mock()
+        with patch.dict(os.environ, {"DYNAMODB_CHAT_TABLE": "same", "DYNAMODB_PROFILE_TABLE": "same"}, clear=True):
+            with self.assertRaises(ValueError):
+                create_chat_table(resource=resource)
+        resource.meta.client.create_table.assert_not_called()
+        keys = [{"AttributeName": "nickname", "KeyType": "HASH"}, {"AttributeName": "sk", "KeyType": "RANGE"}]
+        active = description()
+        active["Table"]["KeySchema"] = keys
+        active["Table"]["AttributeDefinitions"] = [
+            {"AttributeName": "nickname", "AttributeType": "S"}, {"AttributeName": "sk", "AttributeType": "S"}]
+        resource.meta.client.describe_table.return_value = active
+        resource.meta.client.describe_time_to_live.return_value = {
+            "TimeToLiveDescription": {"TimeToLiveStatus": "ENABLED", "AttributeName": "other"}}
+        with patch.dict(os.environ, {"DYNAMODB_CHAT_TABLE": "chat"}, clear=True):
+            with self.assertRaises(ValueError):
+                create_chat_table(resource=resource)
 
     def test_profile_table_rejects_a_reserved_pipeline_table_name_before_creation(self) -> None:
         resource = Mock()
