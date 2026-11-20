@@ -82,7 +82,11 @@ class EntryScreenTest(unittest.TestCase):
         again = open_app(entered=False)
         again.button(key="guest_enter").click().run()
         again.checkbox(key="tour_hide").set_value(False).run()
-        again.button(key="tour_skip").click().run()  # 체크를 풀고 닫으면 사이드바에서 다시 열 수 있다
+        again.button(key="tour_skip").click().run()  # 건너뛰기는 닫지 않고 마지막 단계로 보낸다
+        self.assertTrue(again.session_state["tour_open"])
+        self.assertEqual(again.session_state["tour_step"], 4)
+        self.assertFalse([b for b in again.button if b.key in ("tour_skip", "tour_next")])
+        again.button(key="tour_done").click().run()  # 체크를 풀고 닫으면 사이드바에서 다시 열 수 있다
         self.assertFalse(again.session_state["tour_open"])
         again.sidebar.button(key="tour_reopen").click().run()
         self.assertTrue(again.session_state["tour_open"])

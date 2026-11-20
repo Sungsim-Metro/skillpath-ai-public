@@ -254,6 +254,9 @@ PANEL_REM = 17
 #   z-index 100 은 화면 아래 고정 입력창 영역(99) 위로 올려 상자 테두리가 입력창 높이까지 끊기지 않게 한다.
 # - 입력창: 화면 아래에 고정된 입력창을 패널 너비만큼 오른쪽으로 민다(접으면 이 CSS 를 쓰지 않아 전체 폭이 된다).
 PANEL_CSS = f"""<style>
+/* 열 두 개가 한 줄에 못 들어가면(Streamlit 버전에 따라) 본문이 패널 아래로 밀려 제목을 가린다. 줄바꿈을 끄고 본문 열이 남는 폭을 쓰게 한다 */
+[data-testid="stHorizontalBlock"]:has(.st-key-history_panel) {{ flex-wrap: nowrap; }}
+[data-testid="stHorizontalBlock"]:has(.st-key-history_panel) > [data-testid="stColumn"]:not(:has(.st-key-history_panel)) {{ flex: 1 1 0; min-width: 0; width: auto; }}
 [data-testid="stColumn"]:has(.st-key-history_panel) {{ flex: 0 0 {PANEL_REM}rem; width: {PANEL_REM}rem; min-width: {PANEL_REM}rem; align-self: stretch; }}
 .stVerticalBlock.st-key-history_panel {{ flex: 0 0 auto; position: sticky; top: 4rem; height: calc(100vh - 8.5rem); margin-bottom: -7.5rem; z-index: 100; overflow-y: auto; background: #ffffff;
   border: 1px solid rgba(49, 51, 63, 0.2); border-radius: 0.5rem; padding: 1rem; }}
