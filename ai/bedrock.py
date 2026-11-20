@@ -79,12 +79,19 @@ def is_mock() -> bool:
 
 
 def parse_json_object(text: str) -> dict:
-    """응답 문자열을 JSON 객체로 읽는다. ```json 울타리만 벗기고 그 밖의 보정은 하지 않는다."""
+    """응답 문자열을 JSON 객체로 읽는다. ```json 울타리만 벗기고 그 밖의 보정은 하지 않는다.
+
+    울타리 앞뒤에 설명 글이 붙어 있어도 울타리 안의 객체를 읽는다(2026-11-20: 실제 모델이 추천 이유 수정 응답에
+    설명을 덧붙여 재시도 없는 호출이 그대로 실패했다). 울타리가 없으면 전체가 JSON 이어야 한다. 값은 고치지 않는다.
+    """
     s = text.strip()
-    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", s, flags=re.DOTALL)
-    if fence:
-        s = fence.group(1)
-    data = json.loads(s)
+    try:
+        data = json.loads(s)
+    except ValueError:
+        fence = re.search(r"```(?:json)?\s*(\{.*?)\s*```", s, flags=re.DOTALL)
+        if not fence:
+            raise
+        data = json.loads(fence.group(1))
     if not isinstance(data, dict):
         raise ValueError("JSON 객체가 아닙니다")
     return data
