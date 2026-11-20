@@ -81,7 +81,8 @@ def demo():
     assert normalize_skill("JavaScript") == "JavaScript" != normalize_skill("Java")
     assert normalize_skill("") is None
     # 목록: 순서 유지, 중복 제거, 없는 표현은 따로
-    assert normalize_skills(["도커", "Docker", "Rust", "파이썬", "Rust"]) == (["Docker", "Python"], ["Rust"])
+    assert normalize_skill("Rust") == "Rust"  # AI 공고 보강(2026-11-20)으로 사전에 들어간 이름. 미등록 예시는 Zig 를 쓴다
+    assert normalize_skills(["도커", "Docker", "Zig", "파이썬", "Zig"]) == (["Docker", "Python"], ["Zig"])
     # 성진의 정답지: 사전이 아는 raw 는 정답지의 normalized 와 같아야 한다(틀리게 합치지 않는다).
     # 사전이 모르는 raw(TCP/IP, 정답지가 EKS 분리 전의 쿠버네티스(EKS) 등)는 막지 않고 신규 후보로 모아 보여 준다.
     unresolved = []

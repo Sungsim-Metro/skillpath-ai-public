@@ -46,6 +46,15 @@
     "Kotlin": "C5",
     "Prometheus": "C6",
     "Grafana": "C6",
-    "CloudWatch": "C6"
+    "CloudWatch": "C6",
+    "Elasticsearch": "C6",
+    "ELK Stack": "C6",
+    "OpenTelemetry": "C6",
+    "Loki": "C6",
+    "GitLab": "C5",
+    "GitLab CI": "C5",
+    "Kustomize": "C5",
+    "Ceph": "C2",
+    "Nginx": "C3"
   }
 }
