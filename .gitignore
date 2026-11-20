@@ -234,3 +234,6 @@ outputs/
 
 # Claude Review 실행 점검 결과 (.github/review/run_checks.sh)
 .review/
+
+# 개인 기록 (저장소에 올리지 않음)
+CLAUDE.local.md

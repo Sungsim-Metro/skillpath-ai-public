@@ -20,6 +20,7 @@ section 은 근거 문장이 들어 있는 칸을 코드(ai.sections.find_sectio
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import sys
@@ -54,7 +55,9 @@ def shown(path: Path) -> str:
 
 
 def sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    """본문 지문. 16진수 대신 base32(소문자, a-z2-7)로 적는다. 16진수 해시에는 우연히 12자리 숫자나 전화번호
+    모양이 생겨 공개 동기화 검사(.github/public-sync/build.sh)가 막히기 때문이다(0·1이 없고 숫자 연속이 거의 없다)."""
+    return base64.b32encode(hashlib.sha256(text.encode("utf-8")).digest()).decode().lower().rstrip("=")
 
 
 def load_postings(folder: Path) -> list[dict]:

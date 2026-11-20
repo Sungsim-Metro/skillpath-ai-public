@@ -1,0 +1,208 @@
+{
+ "note": "#21 채점용 공고 확인표. 본문 원문·URL·제목은 두지 않는다. 공고와 정답지는 data/raw/eval_test/ (커밋 안 함)",
+ "created": "2026-11-20",
+ "count": 50,
+ "postings": [
+  {
+   "id": "hf-wanted-162049",
+   "text_sha256": "ybmmttqn4mh3cdccq6cgcezvjqwdp7y7wfe3k37ndu55jvpzk6ca"
+  },
+  {
+   "id": "hf-wanted-166692",
+   "text_sha256": "5a2yhgtchmj6uih4oogp37z2iviv27arqdmmfbxwdbetnhune62a"
+  },
+  {
+   "id": "hf-wanted-246176",
+   "text_sha256": "7f5vw2avm3dzf2e6yvckydmlrumajond56cofqu7seavr7tyjfma"
+  },
+  {
+   "id": "hf-wanted-250075",
+   "text_sha256": "gtzdxqixypl7sik2xhq5ocat36azf3tejdm6dtpir3jaw7bo2mqa"
+  },
+  {
+   "id": "hf-wanted-258130",
+   "text_sha256": "s2gdbqcl2v22pnpxidz6ly4glxaiwtlrfphr6jmnpl2m2uo755ba"
+  },
+  {
+   "id": "hf-wanted-285686",
+   "text_sha256": "gi45vapoyk5z52bqdcnttx6zidfp7useqwzqrje6l4kjh2ebbasa"
+  },
+  {
+   "id": "hf-wanted-289143",
+   "text_sha256": "keyiu6c3xmw4pmvqm5ii5ztncghvuuqxmnslsfm2akil2c6km2sa"
+  },
+  {
+   "id": "hf-wanted-304544",
+   "text_sha256": "ys5jiaxwdbdvyuwf4i5hel6ydbbt5u3tyotkpc6qai66jc5s7fma"
+  },
+  {
+   "id": "hf-wanted-315501",
+   "text_sha256": "fmz7fcmyermyreryc42dnblwgdgf6bzvb7hvscysq3ijcgsquy5a"
+  },
+  {
+   "id": "hf-wanted-318367",
+   "text_sha256": "z2llloxpxbfer4y5dlkgh2atkokh64u7p3mv3vqriunlb6y54ayq"
+  },
+  {
+   "id": "hf-wanted-323919",
+   "text_sha256": "cuwzbbdfk4eisirdnxmuiln3pcwbl2ym34lvpdm6rgiychfmwhda"
+  },
+  {
+   "id": "hf-wanted-328202",
+   "text_sha256": "7itektqqtjoaicaetffxwnrdgxlva2qrde3wwvzjx5syakfcbksq"
+  },
+  {
+   "id": "hf-wanted-332530",
+   "text_sha256": "237h3xj37ii4jvz7aalvskjncobw7mliefbfcvbnim4lnmthcxyq"
+  },
+  {
+   "id": "hf-wanted-334267",
+   "text_sha256": "qjpm2iik7xgadwehptnf2vgz3rckfxvup6hpx23u4azha5v2wgqa"
+  },
+  {
+   "id": "hf-wanted-339170",
+   "text_sha256": "nygkwd4per5smeswif4oob7qxss4wxvegningjik6ekhicaety3a"
+  },
+  {
+   "id": "hf-wanted-341292",
+   "text_sha256": "mmxzwbmo5cbaxjvkmxrs5mlduuky5o3zttlvcolcib7p7b57a7wa"
+  },
+  {
+   "id": "hf-wanted-342676",
+   "text_sha256": "357nysfilhkqhcysbj2gj3u5vjlnjef7zmpuu4po6yagt2ydkmdq"
+  },
+  {
+   "id": "hf-wanted-343025",
+   "text_sha256": "d3osv4442nbvtoh4wdzvsvzudql7hb4bbtfowo5qqhgjows5xyrq"
+  },
+  {
+   "id": "hf-wanted-343753",
+   "text_sha256": "o6dfaukfldvsxqdmn2dvs2mw56smjblrt3hlmywcz3wyqs5ous4a"
+  },
+  {
+   "id": "hf-wanted-343889",
+   "text_sha256": "m4ifcrgzqjss4o5r3hhymifj6qlfyfiga7n3vpodfe27ob2xes5q"
+  },
+  {
+   "id": "hf-wanted-343893",
+   "text_sha256": "4wjfk2gs52kxavz4sshduvj2hhiptdz37rfownjc3nutyvkdgrda"
+  },
+  {
+   "id": "hf-wanted-345372",
+   "text_sha256": "65l2d4c6wv4667pxd3a4uxw6g6cjelztmle4fsrzgpkl2ww33doa"
+  },
+  {
+   "id": "hf-wanted-347456",
+   "text_sha256": "crcrotniwt3s4zgkq7cm7ce66p65ghanp3lk7rb7rthag3httvbq"
+  },
+  {
+   "id": "hf-wanted-348773",
+   "text_sha256": "savx2gbcycqhjmvl2fokaybywuizsxgxriwxo5znfrgsoynaymza"
+  },
+  {
+   "id": "hf-wanted-349279",
+   "text_sha256": "3hnfpgb3lh7ay3oqicfu6guyj6y2rvclz7l4ykdrw7ntwqdw7nrq"
+  },
+  {
+   "id": "hf-wanted-351691",
+   "text_sha256": "rf57o4snzb4lazoxqxfzlnkceyo3dc2ivyaeugujtlwvxx5lakvq"
+  },
+  {
+   "id": "hf-wanted-352055",
+   "text_sha256": "yv2xkuxy436g6ax4vn7soh5mlhlfe22g7bf5d2arme4wvbbyejea"
+  },
+  {
+   "id": "hf-wanted-353181",
+   "text_sha256": "a3u6o3f52e4vwwbvxxgjaq5qh227kx3g6pqjvmlemizxgeml72ka"
+  },
+  {
+   "id": "hf-wanted-353634",
+   "text_sha256": "edfhqbwyetlvc7en5uvyy7lvqeyqqbntnh2ci5vmtdvuwqhg3kka"
+  },
+  {
+   "id": "hf-wanted-355361",
+   "text_sha256": "k7acrn6m4svdje4gi2nxssnubwigszg4zeb76gwt47cr3a6mzc4a"
+  },
+  {
+   "id": "hf-wanted-356059",
+   "text_sha256": "wsm4epwznzfrmdzaovoxgts63hytycjbpdzlxpyazqaevpfnvrjq"
+  },
+  {
+   "id": "hf-wanted-356105",
+   "text_sha256": "4lgkk7g4ahbs7eiqtjlrdg54bu2rhpvqnalsplq7dtfl6vw7c3uq"
+  },
+  {
+   "id": "hf-wanted-356543",
+   "text_sha256": "cl5o2krs2xyneiu6ht7qxuxt75qdqmmz5lpdet6ewlsxxj6jmqfa"
+  },
+  {
+   "id": "hf-wanted-356821",
+   "text_sha256": "dynngxygp7jcrjkb5l3fqbb5xe7msgtfaykxvvuwuazywfj3k3pq"
+  },
+  {
+   "id": "hf-wanted-357761",
+   "text_sha256": "vknaisi6h2evzpqciasw4oliywhpq6uh55n3mkzvc5vwk2kkpcfq"
+  },
+  {
+   "id": "hf-wanted-358977",
+   "text_sha256": "2tgdvkqziuhgpdakueivef6zk35huhztr3i4euvlxzxtherd2x3a"
+  },
+  {
+   "id": "hf-wanted-359937",
+   "text_sha256": "o267h5wzrjwcenf2gtu3wiw3lk5h6hf6i2ifbjoi3qgtmviuzxja"
+  },
+  {
+   "id": "hf-wanted-360493",
+   "text_sha256": "l73pfr7zwfg5guwlp2pmm47hwcxjjy5skanhxjwmvupg7wc2i3cq"
+  },
+  {
+   "id": "hf-wanted-360883",
+   "text_sha256": "wppukpvjxthfgv5yatrwjwooxkqshjwsek6dkpqbc2cglb5wse5q"
+  },
+  {
+   "id": "hf-wanted-362305",
+   "text_sha256": "bq4baozsbslvh4ya6tqdxsqphxhfh2zfdz6i7xd7uqlk2ui5u57a"
+  },
+  {
+   "id": "hf-wanted-362636",
+   "text_sha256": "cpwmvec3kpx2f3sdeuhlp5nrp4gvcpgjiv6qosx4rgzftnixio3a"
+  },
+  {
+   "id": "hf-wanted-364279",
+   "text_sha256": "3n7t4ld5azes2sveahl2p35e2aw2dsrogg4xmmurm6ayxkxut5sa"
+  },
+  {
+   "id": "hf-wanted-364355",
+   "text_sha256": "y4u4vom2ksqlrsi3gz6r4goa4punmesctd42wah4euee7smc3jka"
+  },
+  {
+   "id": "hf-wanted-365522",
+   "text_sha256": "z5plt2eju2hsdj4b7fjmxr2eiaw6ayzqynw6hbo3bhbf6cene2fq"
+  },
+  {
+   "id": "hf-wanted-365715",
+   "text_sha256": "5gnsghv5lnrqewd6mjrgmhsw2r7bv55kofvq37ncaf2afecj72pa"
+  },
+  {
+   "id": "rp-159158",
+   "text_sha256": "uuej62kkx3orblntb5camqcl4s2bqzqwqbgbaee4pjefjnclngfq"
+  },
+  {
+   "id": "rp-159323",
+   "text_sha256": "g4figl2wcabzm3jqdlznfnmfheez4l7n6bizh3dclgdd2d7q32xq"
+  },
+  {
+   "id": "rp-159452",
+   "text_sha256": "cjnvtj2hjkvwdoagzv2kz6snq4lyajssgjp5wx5kubfvdawziznq"
+  },
+  {
+   "id": "rp-159557",
+   "text_sha256": "2vpd67tn3nf3cohfwkhzsofwbvy2f5qbhcv64avasqeig2qtbwiq"
+  },
+  {
+   "id": "rp-159632",
+   "text_sha256": "uriiznrig2f225ocsi2apscp4jrtyiyzfa3g4ojbongkcn7iozrq"
+  }
+ ],
+ "regenerated": "2026-11-20 채점 공고 10건 → 50건 확장(성진 요청). 최종 평가(outputs/eval/test_runs.log)를 아직 돌리지 않았고, 기존 10건의 id·본문 해시는 그대로 포함한다. 이전 확인표는 outputs/eval/test_manifest.10건.bak.json"
+}
