@@ -58,7 +58,7 @@ BEDROCK_MOCK=1 uv run --python 3.11 --with-requirements requirements.txt streaml
 
 ### 팀장 에이전트 상담 실행
 
-저장소 루트에서 `AB_STRUCTURES=3`으로 실행하면 모든 상담 메시지를 3번 팀장 구조가 처리합니다. 일반 화면과 같은 프로필·수준 진단을 사용합니다. 3번 단독 실행에서는 A/B 투표와 메시지별 무작위 모델 배정이 꺼집니다. 기존 실행 인자 `--supervised`도 같은 구조를 선택하며 환경 설정보다 우선합니다.
+저장소 루트에서 `AB_STRUCTURES=3`으로 실행하면 모든 상담 메시지를 3번 팀장 구조가 처리합니다. 일반 화면과 같은 프로필·수준 진단을 사용합니다. 3번 단독 실행에서는 A/B 투표와 메시지별 무작위 모델 배정이 꺼집니다. `AB_STRUCTURES=reviewed,3`으로 실행하면 상담은 기본 구조로 처리하고, 과정 추천 턴에서만 기본 구조와 3번 구조의 추천을 A/B로 나란히 보여 주고 선택을 받습니다. 기존 실행 인자 `--supervised`도 같은 구조를 선택하며 환경 설정보다 우선합니다.
 
 ```bash
 AB_STRUCTURES=3 BEDROCK_MOCK=1 uv run --python 3.11 --with-requirements requirements.txt streamlit run app/main.py

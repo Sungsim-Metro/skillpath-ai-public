@@ -78,6 +78,18 @@ def chat_architecture() -> str:
     return "screen"
 
 
+def chat_rival() -> str | None:
+    """과정 추천 턴에서 기본 구조와 나란히 비교할 상담 구조 이름. 꺼져 있으면 None.
+
+    AB_STRUCTURES 에 기본 구조(reviewed)와 상담 구조(3)를 함께 적으면 켜진다(예: `reviewed,3`).
+    상담 구조 하나만 적으면 chat_architecture 가 그 구조로 모든 턴을 처리하고 비교는 하지 않는다.
+    """
+    names = _names("AB_STRUCTURES")
+    if DEFAULT_STRUCTURE not in names:
+        return None
+    return next((name for name in names if name in CHAT_STRUCTURES), None)
+
+
 def structures() -> list[str]:
     """과정 카드 A/B에 쓸 추천 구조 이름. 두 개 이상 등록되어야 투표를 연다."""
     names = [name for name in _names("AB_STRUCTURES") if name in STRUCTURES]
@@ -111,7 +123,7 @@ def recommend_with(structure: str, job_category: str, gap_skills: list[str]) -> 
 
 def active() -> bool:
     """실험이 하나라도 켜져 있는가. 꺼져 있으면 화면은 평가를 받지 않는다."""
-    return bool(models() or structures())
+    return bool(models() or structures() or chat_rival())
 
 
 # ---------- 기록 ----------

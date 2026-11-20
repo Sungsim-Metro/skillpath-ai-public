@@ -1,6 +1,8 @@
 """학습 상담 상태를 합치고, 사용자가 요청한 범위의 도구만 실행한다."""
 from __future__ import annotations
 
+import copy
+import random
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -383,6 +385,8 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     model = None if supervised else experiments.pick_model()
     turn_id = uuid4().hex
     before = (state.usage.input_tokens, state.usage.output_tokens)
+    rival = None if supervised else experiments.chat_rival()
+    snapshot = copy.deepcopy(state) if rival else None  # 비교용 구조는 이 턴 전의 상태에서 같은 메시지를 다시 처리한다
     with track_session(state.usage), use_model(model):
         used = "" if api.is_mock() else current_model()
         try:
@@ -394,7 +398,40 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     reply.turn_id, reply.model = turn_id, used
     if not supervised:
         _record_turn(state, turn_id, job, used, before, action=reply.action, failed=reply.failed)
+    if rival and reply.action == "courses" and reply.courses and not reply.alternatives and not reply.failed:
+        reply.alternatives = _compare_chat_structures(state, snapshot, rival, message, job, sidebar_skills,
+                                                      sidebar_levels, reply, before)
     return reply
+
+
+def _compare_chat_structures(state: Conversation, snapshot: Conversation, rival: str, message: str, job: str,
+                             sidebar_skills: list[str], sidebar_levels: dict[str, int] | None, reply: Reply,
+                             before: tuple[int, int]) -> list[dict]:
+    """과정 추천 턴을 상담 구조(rival, 예: 3번 팀장 구조)로 한 번 더 처리해 A/B 로 나란히 보여 줄 두 결과를 만든다.
+
+    상담 상태와 화면의 답은 기본 구조의 것을 그대로 둔다. 비교용 구조는 턴 전 상태의 사본에서 돌리고 프로필에는 쓰지 못하게
+    로그인 정보를 뺀다. 비교용 구조가 과정을 내지 못했거나 검증에 실패하면 빈 목록을 돌려줘 A/B 를 열지 않는다.
+    좌우 순서는 코드가 무작위로 정하고, 구조별 토큰은 세션 사용량의 앞뒤 차이로 잰다.
+    """
+    usage = state.usage
+    screen_tokens = {"input": usage.input_tokens - before[0], "output": usage.output_tokens - before[1]}
+    snapshot.session = None
+    snapshot.profile = copy.deepcopy(state.profile)
+    start = (usage.input_tokens, usage.output_tokens)
+    try:
+        with track_session(usage), use_model(None):
+            other = _handle_turn(snapshot, message, job, sidebar_skills, sidebar_levels, supervised=True)
+    except Exception:
+        return []
+    if other.failed or other.action != "courses" or not other.courses:
+        return []
+    results = [
+        {"structure": experiments.DEFAULT_STRUCTURE, "courses": reply.courses, "tokens": screen_tokens},
+        {"structure": rival, "courses": other.courses,
+         "tokens": {"input": usage.input_tokens - start[0], "output": usage.output_tokens - start[1]}},
+    ]
+    random.shuffle(results)
+    return results
 
 
 def _record_turn(state: Conversation, turn_id: str, job: str, model: str, before: tuple[int, int], *,

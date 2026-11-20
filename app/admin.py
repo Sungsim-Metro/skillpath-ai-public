@@ -83,7 +83,7 @@ def _models() -> None:
 def _structures() -> None:
     st.subheader("실험 2. 추천 구조 A/B")
     st.caption("과정 추천을 두 구조로 만들어 A/B 로 보여 주고 선택을 받았습니다. 좌우 순서는 무작위이고 구조 이름은 보여 주지 않았습니다. "
-               "single 은 한 번에 쓰기, reviewed 는 쓰기→검토→고치기입니다.")
+               "single 은 한 번에 쓰기, reviewed 는 쓰기→검토→고치기, 3 은 팀장 구조(멀티에이전트)입니다.")
     summary, err = load(experiments.summarize_structures)
     if err:
         notice("추천 구조 A/B", err)
