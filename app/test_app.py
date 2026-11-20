@@ -6,10 +6,12 @@ import json
 import os
 import unittest
 from unittest import mock
+from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
 from app.testing import MENU, open_app
+from backend import api
 
 
 class AppSmokeTest(unittest.TestCase):
@@ -29,6 +31,16 @@ class AppSmokeTest(unittest.TestCase):
             self.assertFalse(at.exception, view)
             self.assertEqual(bool(at.tabs), view == "recommend", view)  # 학습 추천만 기술별 탭이 있다
             self.assertEqual(at.title[0].value, label)
+
+    def test_a_date_range_in_the_collected_text_is_not_drawn_as_strikethrough(self):
+        demand = api.get_demand("cloud_engineer")
+        ranged = {**demand, "collected": "2026-11-17~2026-11-19 (이전 포함), 2026-11-18~19"}
+        with patch("backend.api.get_demand", return_value=ranged):
+            at = open_app("demand")
+        self.assertFalse(at.exception)
+        caption = next(c.value for c in at.caption if "수집일" in c.value)
+        self.assertIn("2026-11-17\\~2026-11-19", caption)
+        self.assertNotIn("7~2", caption)
 
     def test_recommend_screen_shows_study_order_ranked_cards_and_ratings(self):
         """학습 추천 화면: 먼저 들을 순서, 기술마다 1위부터 붙는 카드, 평점 줄(있는 과정만)."""

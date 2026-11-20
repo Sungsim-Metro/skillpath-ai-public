@@ -130,7 +130,8 @@ if need:
     count = f" {demand['total_postings']}건" if demand else ""
     st.caption(
         f"{JOBS[job]} · 채용공고{count}을 분석해 부족한 역량과 학습 프로그램을 근거와 함께 보여줍니다."
-        + (f" {', '.join(origin)}." if origin else "")
+        # 수집일에 "11-17~11-19" 같은 기간이 있으면 물결표 사이가 취소선으로 그려진다. 글자 그대로 보이게 한다
+        + (f" {', '.join(origin)}." if origin else "").replace("~", "\\~")
     )
 else:
     st.caption(f"{JOBS[job]} 기준")
