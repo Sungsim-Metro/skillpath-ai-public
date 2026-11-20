@@ -17,8 +17,7 @@
  },
  "normal": [
   [{"toolUse": {"toolUseId": "t1", "name": "get_gap", "input": {"user_skills": ["Python", "Docker"]}}}],
-  [{"toolUse": {"toolUseId": "t2", "name": "search_courses", "input": {"skill": "AWS"}}},
-   {"toolUse": {"toolUseId": "t3", "name": "search_courses", "input": {"skill": "Linux"}}}],
+  [{"toolUse": {"toolUseId": "t2", "name": "recommend_courses", "input": {"skills": ["AWS", "Linux"]}}}],
   [{"toolUse": {"toolUseId": "t4", "name": "answer", "input": {"answer": "Python과 Docker는 이미 공고가 많이 찾는 기술이라 좋은 출발입니다. 다음 순서를 권합니다.\n- AWS: 공고 40건 중 31건이 요구하고, 그중 77%가 필수입니다. 'AWS Cloud Practitioner Essentials'(기초)로 시작해 보세요. 이 과정이 AWS 전체를 직접 다루는지는 확실하지 않습니다.\n- Linux: 공고 40건 중 26건이 요구하고, 그중 73%가 필수입니다. 찾은 과정은 Linux를 직접 다루는지 확실하지 않아, 기본 명령어부터 따로 익히는 것을 권합니다.", "scope": "in"}}}]
  ],
  "ambiguous": [
@@ -44,8 +43,8 @@
  "max_turns": [
   [{"toolUse": {"toolUseId": "t1", "name": "get_skill_demand", "input": {"skill": "AWS"}}}],
   [{"toolUse": {"toolUseId": "t2", "name": "get_skill_demand", "input": {"skill": "Linux"}}}],
-  [{"toolUse": {"toolUseId": "t3", "name": "search_courses", "input": {"skill": "AWS"}}}],
-  [{"toolUse": {"toolUseId": "t4", "name": "search_courses", "input": {"skill": "Linux"}}}]
+  [{"toolUse": {"toolUseId": "t3", "name": "recommend_courses", "input": {"skills": ["AWS"]}}}],
+  [{"toolUse": {"toolUseId": "t4", "name": "recommend_courses", "input": {"skills": ["Linux"]}}}]
  ],
  "mixed": [
   [{"toolUse": {"toolUseId": "t1", "name": "get_skill_demand", "input": {"skill": "AWS"}}},

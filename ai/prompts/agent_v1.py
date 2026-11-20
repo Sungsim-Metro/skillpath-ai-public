@@ -5,7 +5,7 @@
 숫자 검사와 되묻기 문장 추가는 코드가 한다(ai/agent.py).
 """
 
-VERSION = "agent_v1"
+VERSION = "agent_v1.2"  # 11/19 recommend_courses 는 과정·강의를 요청했을 때만(v1.1: search_courses 를 recommend_courses 로)
 
 SYSTEM = """당신은 클라우드 엔지니어 취업을 준비하는 학생을 돕는 학습 상담 에이전트입니다.
 채용공고에서 뽑은 기술 수요와 AWS 교육과정을 도구로 찾아, 무엇부터 공부할지 근거와 함께 짧게 답합니다.
@@ -14,8 +14,11 @@ SYSTEM = """당신은 클라우드 엔지니어 취업을 준비하는 학생을
 - get_gap: 사용자가 해 본 기술 목록을 넣으면, 클라우드 엔지니어 공고가 많이 요구하는데 사용자에게 없는 기술을 수요 높은 순으로 돌려줍니다.
   사용자가 기술을 말했으면 먼저 이 도구를 부릅니다. 사용자가 쓴 표기를 고치지 말고 그대로 넣습니다.
 - get_skill_demand: 기술 하나가 공고 몇 건 중 몇 건에 나오는지, 그중 필수 비율을 돌려줍니다.
-- search_courses: 기술 하나를 다루는 AWS 교육과정을 돌려줍니다. match 가 "uncertain" 이면 그 기술을 직접 다루는지 확실하지 않은 과정입니다.
-  추천하는 기술마다 부르되, 답에는 많아야 기술 두세 개만 다룹니다.
+- recommend_courses: 부족 기술 목록(많아야 세 개)을 넣으면 기술마다 검증한 AWS 교육과정과 추천 이유(reason)를 돌려줍니다.
+  사용자가 과정·강의를 요청했을 때만 이 도구를 부릅니다. 부족 역량이나 무엇부터 공부할지만 물으면 부르지 않습니다.
+  과정을 추천할 때는 부족 기술을 정한 뒤 이 도구를 한 번만 부릅니다. 이유는 reason 을 그대로 옮기고 새로 지어 쓰지 않습니다.
+  match 가 "uncertain" 이면 그 기술을 직접 다루는지 확실하지 않은 과정입니다. 답에는 많아야 기술 두세 개만 다룹니다.
+  사용자가 이름을 댄 기술이 공고 수요 집계에 없으면 demand_known 이 false 이고 공고 수가 없습니다. 그 기술은 공고 수를 말하지 않습니다.
 - get_gap 결과에 이미 있는 기술은 get_skill_demand 를 다시 부르지 않습니다. 공고 수와 필수 비율은 get_gap 결과를 그대로 씁니다.
   get_skill_demand 는 get_gap 결과에 없는 기술을 물을 때만 부릅니다.
 
@@ -59,12 +62,13 @@ TOOLS = [
         }},
     },
     {
-        "name": "search_courses",
-        "description": "기술 하나를 다루는 AWS 교육과정 몇 개(제목, 난이도, match).",
+        "name": "recommend_courses",
+        "description": "부족 기술(많아야 세 개)마다 검증한 AWS 교육과정(제목, 난이도, match)과 검사를 통과한 추천 이유(reason). 기술마다 공고 수와 summary 도 준다.",
         "inputSchema": {"json": {
             "type": "object",
-            "properties": {"skill": {"type": "string"}},
-            "required": ["skill"],
+            "properties": {"skills": {"type": "array", "items": {"type": "string"},
+                                      "description": "추천할 부족 기술 이름(많아야 세 개, 넘으면 앞의 세 개만 추천)"}},
+            "required": ["skills"],
         }},
     },
 ]

@@ -7,7 +7,9 @@
 - get_gap(user_skills): 보유 기술 → 부족 기술 상위 TOP_GAP 개와 공고 수. backend.api.get_gap 을 감싼다.
   표기는 pipeline.aliases.normalize_skill 로만 맞춘다. 사전에 없는 표기는 unrecognized 로 돌려주고 자동으로 바꾸지 않는다.
 - get_skill_demand(skill): 공고 n건 중 m건, 그중 필수 비율(%).
-- search_courses(skill): ai.recommend.candidate_courses(= pipeline.search.search_courses) 의 과정과 match.
+- recommend_courses(skills): 부족 기술(최대 MAX_RECOMMEND 개)마다 검증한 과정 추천. 화면 상담과 같은
+  backend.api.get_recommendations(..., review=True)(작성 → 독립 검토 → 한 번 수정 → 코드 근거 검사)를 부른다.
+  과정마다 제목·난이도·match·reason(검사를 통과한 이유, uncertain 이면 코드가 붙인 안내 문장 포함). 11/19 search_courses 를 대신함
 
 코드가 하는 검사
 - 답의 숫자는 이번 대화의 도구 결과와 사용자 메시지(이전 대화 포함)에 있는 것만 허용한다(ai.recommend 의 숫자 검사 방식).
@@ -40,19 +42,23 @@ import json
 import logging
 import re
 import time
+from contextvars import ContextVar
 from typing import Optional
 
 from ai.bedrock import BedrockJSONError, SAMPLE_DIR, USAGE_KEYS, add_usage, converse_tools, is_mock, parse_json_object
 from ai import guardrail
 from ai.prompts import agent_v1 as prompt
-from ai.recommend import candidate_courses, uncertain_note
 from ai.recommend import extract_numbers as _numbers
 from backend import api
 from pipeline.aliases import _index, _key, normalize_skill, normalize_skills
 
 JOB = "cloud_engineer"
 TOP_GAP = 3          # get_gap 이 돌려주는 부족 기술 수 (도구 결과가 대화에 쌓여 토큰이 늘어 5 → 3, 11/17)
-TOP_COURSES = 3      # search_courses 가 돌려주는 과정 수
+TOP_COURSES = 3      # recommend_courses 가 기술마다 돌려주는 과정 수
+MAX_RECOMMEND = 3    # recommend_courses 한 번에 추천하는 기술 수(기술마다 모델 호출 2~3번)
+NO_DEMAND_SUMMARY = "수요 집계에 없는 기술(공고 수 정보 없음)"
+NO_DEMAND_REASON = "이 기술은 공고 수요 집계에 없어 공고 수 정보는 없습니다."
+_MESSAGE: ContextVar[str] = ContextVar("agent_message", default="")  # 이번 사용자 메시지(이름 댄 기술 판정용)
 MAX_TURNS = 4        # 도구 호출 반복 한도(모델 호출 수)
 MAX_SKILLS = 30      # get_gap 입력 기술 수 한도
 CLOSE_MIN = 0.5      # 문자열 비교 후보의 최소 비슷도 (도카↔도커 0.5, 파이선↔파이썬 0.67)
@@ -161,23 +167,65 @@ def tool_get_skill_demand(skill: str) -> dict:
             "required_pct": pct, "summary": demand_summary(total, s["postings"], pct)}
 
 
-def tool_search_courses(skill: str) -> dict:
-    canon = normalize_skill(skill) or skill
-    courses = candidate_courses(canon)[:TOP_COURSES]
+def _named_skills() -> set[str]:
+    """이번 사용자 메시지에 실제로 나온 기술(대표명). 화면 해석과 같은 ai.chat.mentioned_skills 를 쓴다(읽기만)."""
+    from ai.chat import mentioned_skills
+
+    return {x.lower() for x in mentioned_skills(_MESSAGE.get()) if x}
+
+
+def _drop_pair_sentences(reason: str) -> str:
+    """수요 집계에 없는 기술의 이유에서 "n건 중 m건" 문장을 뺀다(공고 수 0 으로 넘어가 "0건에서 언급"이 되므로)."""
+    kept = [x for x in re.split(r"(?<=[.!?。])\s+", reason) if x.strip() and not _PAIR.search(x)]
+    return " ".join([NO_DEMAND_REASON, *kept])
+
+
+def tool_recommend_courses(skills: list) -> dict:
+    """부족 기술마다 검증한 과정 추천(화면 상담과 같은 api.get_recommendations(review=True)).
+
+    표기는 별칭 사전으로만 맞춘다. 수요 집계에 있는 기술은 공고 수·필수 비율·summary 를 get_gap 과 같은 계산으로 준다.
+    수요 집계에 없는 기술은 사용자가 이번 메시지에서 직접 이름을 댔을 때만 추천하고(수요는 "정보 없음"), 아니면 not_found.
+    (화면 상담 구조 0 은 이름 댄 기술 대신 Gap 의 상위 부족 기술을 추천한다: backend/chat.py _analyze. 11/19 결정 ⓐ)
+    reason 은 검사를 통과한 문장이다. 수요 정보가 없는 기술은 공고 수를 말하는 문장만 빼고 안내 문장을 앞에 붙인다.
+    """
+    if not isinstance(skills, list):
+        raise ValueError("skills 는 목록이어야 합니다")
+    demand = api.get_demand(JOB)
+    total = demand["total_postings"]
+    raw = {s["skill"].lower(): s for s in demand["skills"]}
+    named = _named_skills()
+    picked, not_found = [], []
+    for name in [str(x).strip() for x in skills if str(x).strip()]:
+        canon = normalize_skill(name) or name
+        row = raw.get(canon.lower())
+        skill = row["skill"] if row else canon
+        if row is None and canon.lower() not in named:
+            not_found.append(canon)
+        elif skill not in picked:
+            picked.append(skill)
+    picked = picked[:MAX_RECOMMEND]
+    recs = api.get_recommendations(JOB, picked, review=True) if picked else []
     out = []
-    for c in courses:  # 선수지식(prerequisites)은 길어서 뺀다. 화면의 추천 탭이 보여준다
-        row = {k: c[k] for k in ("title", "level", "match")}
-        note = uncertain_note(canon, c)  # match 가 uncertain 이면 코드가 정한 안내 문장(#24)
-        if note:
-            row["note"] = note
-        out.append(row)
-    return {"skill": canon, "courses": out}
+    for rec in recs:
+        s = raw.get(rec["gap_skill"].lower())
+        courses = [{k: c[k] for k in ("title", "level", "match", "reason")} for c in rec["courses"][:TOP_COURSES]]
+        if s is None:  # 사용자가 이름을 댄, 수요 집계에 없는 기술
+            for c in courses:
+                c["reason"] = _drop_pair_sentences(c["reason"])
+            out.append({"skill": rec["gap_skill"], "demand_known": False, "summary": NO_DEMAND_SUMMARY, "courses": courses})
+            continue
+        pct = _pct(s["required"], s["postings"])
+        out.append({
+            "skill": rec["gap_skill"], "demand_known": True, "postings": s["postings"], "required_pct": pct,
+            "summary": demand_summary(total, s["postings"], pct), "courses": courses,
+        })
+    return {"of": total, "recommendations": out, "not_found": not_found}
 
 
 TOOL_FUNCS = {
     "get_gap": lambda inp: tool_get_gap(inp.get("user_skills", [])),
     "get_skill_demand": lambda inp: tool_get_skill_demand(str(inp.get("skill", ""))),
-    "search_courses": lambda inp: tool_search_courses(str(inp.get("skill", ""))),
+    "recommend_courses": lambda inp: tool_recommend_courses(inp.get("skills", [])),
 }
 
 
@@ -257,6 +305,9 @@ def demand_facts(outputs: list[dict], texts: list[str]) -> dict:
             add(out["of"], row["postings"], row.get("required_pct"))
         if out.get("found"):
             add(out["of"], out["postings"], out.get("required_pct"))
+        for row in out.get("recommendations", []):
+            if row.get("demand_known"):  # 수요 정보가 없는 기술은 맞는 짝이 없다
+                add(out["of"], row["postings"], row.get("required_pct"))
     for text in texts:
         for n, m, k in _PAIR.findall(text):
             add(n, m, k or None)
@@ -342,6 +393,15 @@ def _result(answer: str, calls: list, usage: dict, started: float, uncertain_rea
 
 
 def chat(message: str, history: Optional[list] = None) -> dict:
+    """화면용 진입점. 이번 메시지를 추천 도구가 읽을 수 있게 둔 채 _chat 을 부른다(이름 댄 기술 판정)."""
+    token = _MESSAGE.set((message or "").strip())
+    try:
+        return _chat(message, history)
+    finally:
+        _MESSAGE.reset(token)
+
+
+def _chat(message: str, history: Optional[list] = None) -> dict:
     """화면용. {"answer", "tool_calls", "usage", "latency_ms", "uncertain", "uncertain_reason"}.
 
     history 는 [{"role": "user"|"assistant", "content": str}] (user 부터 번갈아, assistant 로 끝남).

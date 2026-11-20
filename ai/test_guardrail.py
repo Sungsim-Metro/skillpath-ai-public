@@ -481,9 +481,11 @@ def test_uncertain_note():
     for c in r["courses"]:
         assert set(c) - {"rating_avg", "rating_count"} == {"title", "url", "level", "prerequisites", "reason", "match"}
         assert c["reason"].endswith("직접 다룬다는 내용을 확인하지 못했습니다.") == (c["match"] == "uncertain"), c
-    # 상담 에이전트의 과정 검색 도구에도 note 로 들어간다
-    courses = agent.tool_search_courses("Docker")["courses"]
-    assert all(("note" in c) == (c["match"] == "uncertain") for c in courses)
+    # 상담 에이전트의 추천 도구도 같은 reason(안내 문장 포함)을 그대로 넘긴다
+    rows = agent.tool_recommend_courses(["Docker"])["recommendations"]
+    for c in (c for row in rows for c in row["courses"]):
+        noted = "확실하지 않습니다" in c["reason"] or "입문 과정을 붙였습니다" in c["reason"]
+        assert noted == (c["match"] == "uncertain"), c
 
 
 if __name__ == "__main__":

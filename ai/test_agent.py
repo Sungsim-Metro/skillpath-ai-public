@@ -26,7 +26,8 @@ def names(r):
 def test_normal():
     r = agent.chat(QUESTION)
     assert set(r) == KEYS, set(r)
-    assert names(r) == ["get_gap", "search_courses", "search_courses"], names(r)
+    assert names(r) == ["get_gap", "recommend_courses"], names(r)
+    assert r["tool_calls"][1]["input"] == {"skills": ["AWS", "Linux"]}
     assert r["tool_calls"][0]["input"] == {"user_skills": ["Python", "Docker"]}
     assert all(c["ok"] for c in r["tool_calls"])
     assert "40건 중 31건" in r["answer"] and "77%" in r["answer"]
@@ -57,10 +58,66 @@ def test_tool_results_are_short():
     assert gap["basis"] == "recognized_skills" and gap["recognized_skills"] == ["Python", "Docker"]
     assert len(gap["missing_top"]) == agent.TOP_GAP == 3
     assert all(set(m) == {"skill", "postings", "required_pct", "summary"} for m in gap["missing_top"])
-    courses = agent.tool_search_courses("Kubernetes")["courses"]
-    # 선수지식은 뺀다. uncertain 과정에만 코드가 정한 안내 문장(note, #24)
-    assert courses and all(set(c) == {"title", "level", "match"} | ({"note"} if c["match"] == "uncertain" else set())
-                           for c in courses)
+    rec = agent.tool_recommend_courses(["Kubernetes"])
+    assert set(rec) == {"of", "recommendations", "not_found"}
+    # 선수지식은 뺀다. 과정마다 제목·난이도·match·검사를 통과한 reason
+    for row in rec["recommendations"]:
+        assert set(row) == {"skill", "demand_known", "postings", "required_pct", "summary", "courses"} and row["demand_known"]
+        assert all(set(c) == {"title", "level", "match", "reason"} for c in row["courses"])
+
+
+def test_recommend_courses_tool():
+    # 화면 상담과 같은 get_recommendations(review=True) 를 부르고, 기술은 MAX_RECOMMEND 개까지만
+    seen = []
+    old = agent.api.get_recommendations
+
+    def spy(job, skills, *, review=False, levels=None):
+        seen.append((job, list(skills), review))
+        return old(job, skills, review=review, levels=levels)
+
+    agent.api.get_recommendations = spy
+    try:
+        out = agent.tool_recommend_courses(["AWS", "리눅스", "aws", "Kubernetes", "Terraform", "없는기술"])
+    finally:
+        agent.api.get_recommendations = old
+    assert seen == [("cloud_engineer", ["AWS", "Linux", "Kubernetes"], True)]  # 별칭으로 맞추고 중복을 빼고 셋까지, review=True
+    assert out["not_found"] == ["없는기술"]  # 수요 집계에 없는 기술은 추천하지 않는다
+    gap = {m["skill"]: m for m in agent.tool_get_gap([])["missing_top"]}
+    for row in out["recommendations"]:
+        if row["skill"] in gap:  # 공고 수·필수 비율·summary 는 get_gap 과 같은 계산
+            assert (row["postings"], row["required_pct"], row["summary"]) == tuple(gap[row["skill"]][k] for k in ("postings", "required_pct", "summary"))
+        for c in row["courses"]:
+            if c["match"] == "uncertain":  # uncertain 과정은 코드가 붙인 안내 문장이 reason 에 남는다(#24)
+                assert "확실하지 않습니다" in c["reason"] or "입문 과정을 붙였습니다" in c["reason"], c["reason"]
+    # 수요 짝 검사가 이 도구의 (공고 수, 기술 공고 수, 필수 %) 도 맞는 짝으로 본다
+    facts = agent.demand_facts([out], [])
+    row = out["recommendations"][0]
+    assert (out["of"], row["postings"]) in facts["pairs"] and (out["of"], row["postings"], row["required_pct"]) in facts["triples"]
+    assert agent.tool_recommend_courses([]) == {"of": out["of"], "recommendations": [], "not_found": []}
+
+
+def test_recommend_named_skill_without_demand():
+    # 사용자가 이름을 댄 기술은 수요 집계에 없어도 추천한다(수요 "정보 없음"). 이름을 대지 않았으면 not_found(11/19 결정 ⓐ)
+    token = agent._MESSAGE.set("EC2랑 VPC를 배울 수 있는 AWS 강의 추천해 주세요")
+    try:
+        out = agent.tool_recommend_courses(["EC2", "VPC", "Terraform", "없는기술"])
+    finally:
+        agent._MESSAGE.reset(token)
+    rows = {r["skill"]: r for r in out["recommendations"]}
+    assert set(rows) == {"EC2", "VPC", "Terraform"} and out["not_found"] == ["없는기술"]
+    for skill in ("EC2", "VPC"):
+        r = rows[skill]
+        assert r["demand_known"] is False and r["summary"] == agent.NO_DEMAND_SUMMARY and "postings" not in r
+        for c in r["courses"]:  # "공고 n건 중 0건" 같은 문장은 빠지고 안내 문장이 앞에 붙는다
+            assert c["reason"].startswith(agent.NO_DEMAND_REASON) and not agent._PAIR.search(c["reason"]), c["reason"]
+    assert rows["Terraform"]["demand_known"] is True and "postings" in rows["Terraform"]
+    facts = agent.demand_facts([out], [])  # 수요 정보가 없는 기술은 맞는 짝에 넣지 않는다
+    assert all(m != 0 for _, m in facts["pairs"])
+    # 메시지에 이름이 없으면 수요에 없는 기술은 추천하지 않는다
+    assert agent.tool_recommend_courses(["EC2"])["not_found"] == ["EC2"]
+    # chat() 이 끝나면 메시지 기억을 지운다
+    agent.chat(QUESTION)
+    assert agent._MESSAGE.get() == ""
 
 
 def test_suggest_is_limited_per_call():
@@ -283,7 +340,7 @@ def test_converse_tools_real_request_shape():
         os.environ.update(old_env)
     first = fake.calls[0]
     assert first["modelId"] == "test-model"
-    assert [t["toolSpec"]["name"] for t in first["toolConfig"]["tools"]] == ["get_gap", "get_skill_demand", "search_courses", "answer"]
+    assert [t["toolSpec"]["name"] for t in first["toolConfig"]["tools"]] == ["get_gap", "get_skill_demand", "recommend_courses", "answer"]
     results = fake.calls[1]["messages"][-1]
     assert results["role"] == "user"
     tr = [b["toolResult"] for b in results["content"]]
