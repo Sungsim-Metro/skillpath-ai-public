@@ -11,8 +11,8 @@ GOLD = Path(__file__).resolve().parent.parent / "ai" / "eval" / "gold_extraction
 class FindSkillsTest(unittest.TestCase):
     def test_aliases_in_prose_have_word_boundaries_and_allow_korean_particles(self):
         text = "자바스크립트와 Dockerfile, NoSQL, nextXjs. 도커에서는 docker를, 자바와 K8S를 사용합니다."
-        self.assertEqual(find_skills(text), ["Docker", "Java", "Kubernetes"])
-        self.assertEqual(find_skills("자바스크립트 도구Docker AWS2"), [])
+        self.assertEqual(find_skills(text), ["Docker", "Java", "JavaScript", "Kubernetes"])  # 자바스크립트는 Java 가 아니다
+        self.assertEqual(find_skills("자바스크립트 도구Docker AWS2"), ["JavaScript"])
 
     def test_longest_mention_wins_and_distinct_mentions_still_count(self):
         text = "Elastic Kubernetes Service와 SQL Server, AWS Lambda 사용"
@@ -28,6 +28,27 @@ class FindSkillsTest(unittest.TestCase):
         self.assertEqual(find_skills("learn how to go about it. Go directly to the assessment. Go to the next lab."), [])
         self.assertEqual(find_skills("Go로 API를 개발합니다."), ["Go"])
         self.assertEqual(find_skills("golang"), ["Go"])
+
+
+class SimilarNamesStayApartTest(unittest.TestCase):
+    """이름이 비슷한 기술을 한 이름으로 합치지 않는다. 임베딩 추천(pipeline/suggest.py)은 JavaScript 의 1순위 후보로 Java 를
+    올리므로(0.657), 사전에 독립 항목이 없으면 사람이 Java 로 잘못 합칠 수 있다(2026-11-20)."""
+
+    def test_javascript_is_its_own_skill_not_java(self):
+        for raw in ("JavaScript", "Javascript", "자바스크립트"):
+            self.assertEqual(normalize_skill(raw), "JavaScript", raw)
+        self.assertEqual(normalize_skill("Java"), "Java")
+        self.assertEqual(normalize_skill("자바"), "Java")
+        self.assertEqual(find_skills("자바스크립트와 자바를 함께 씁니다"), ["Java", "JavaScript"])
+        self.assertEqual(find_skills("JavaScript 기초"), ["JavaScript"])
+
+    def test_spring_and_spring_boot_are_separate_skills(self):
+        for raw in ("Spring Boot", "SpringBoot", "스프링 부트", "스프링부트"):
+            self.assertEqual(normalize_skill(raw), "Spring Boot", raw)
+        for raw in ("Spring", "스프링"):
+            self.assertEqual(normalize_skill(raw), "Spring", raw)
+        self.assertEqual(find_skills("Spring Boot로 서버를 개발합니다"), ["Spring Boot"])  # 더 긴 이름이 이긴다
+        self.assertEqual(find_skills("Spring과 Spring Boot 경험"), ["Spring", "Spring Boot"])
 
 
 def demo():
@@ -56,8 +77,8 @@ def demo():
     assert normalize_skill("IaC") == "IaC" != normalize_skill("Terraform")  # IaC 는 Terraform 과 합치지 않는다
     assert normalize_skill("CICD") == normalize_skill("CI/CD") == "CI/CD"
     assert normalize_skill("aws") == normalize_skill("아마존 웹 서비스") == "AWS"
-    # 비슷해도 합치지 않는다
-    assert normalize_skill("JavaScript") is None
+    # 비슷해도 합치지 않는다: 사전에 독립 항목으로 둔다(사전에서 빼 두면 어디서도 세지 못한다)
+    assert normalize_skill("JavaScript") == "JavaScript" != normalize_skill("Java")
     assert normalize_skill("") is None
     # 목록: 순서 유지, 중복 제거, 없는 표현은 따로
     assert normalize_skills(["도커", "Docker", "Rust", "파이썬", "Rust"]) == (["Docker", "Python"], ["Rust"])

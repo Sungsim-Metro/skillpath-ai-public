@@ -46,7 +46,8 @@ def test_ambiguous_skill_is_asked_back_not_replaced():
     assert r["uncertain"] is False
     # 후보가 없는 표기, 비슷해 보여도 다른 기술은 후보로 내지 않는다(시연에 엉뚱한 되묻기가 나오지 않게)
     assert agent.maybe_skill("점심") is None
-    assert [agent.maybe_skill(x) for x in ("자바스크립트", "JavaScript", "쿠버", "리녹스")] == [None, None, "Kubernetes", "Linux"]
+    # JavaScript 는 이제 사전의 독립 항목이라 정확히 일치하면 Java 와 따로 나온다(2026-11-20)
+    assert [agent.maybe_skill(x) for x in ("자바스크립트", "JavaScript", "쿠버", "리녹스")] == ["JavaScript", "JavaScript", "Kubernetes", "Linux"]
     assert agent.ASK_BACK_UNKNOWN.format(input="점심").startswith("'점심'은(는) 아직 사전에 없는")
 
 

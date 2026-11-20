@@ -87,7 +87,7 @@ class IndustryGapTest(unittest.TestCase):
         self.assertTrue(all(r["industry"] == "예시" for r in rows))
 
     def test_dictionary_aliases_in_demand_and_supply(self) -> None:
-        text = "postgres와 docker / 자바스크립트 Dockerfile"
+        text = "postgres와 docker / 점심 Dockerfile"  # 사전에 없는 말은 세지 않는다
         self.assertEqual(posting_weights(text), {"PostgreSQL": 0.5, "Docker": 0.5})
         supply = aggregate_supply([course(text, "PostgreSQL")], source="테스트 목록")
         self.assertEqual({row["skill"]: row["courses"] for row in supply["skills"]},
