@@ -1,5 +1,5 @@
 {
-  "note": "교육과정 검색(#14) 평가용 정답 초안. 종훈이 data/courses/courses.csv 의 제목·학습 목표를 보고 만들었고 성진·형섭의 검토를 받는다(아직 검토 전). course_subskill.csv 의 연결은 정답으로 쓰지 않았다(검색이 쓰는 기준과 같아서 개선을 증명하지 못한다).",
+  "note": "교육과정 검색(#14) 평가용 정답 초안. 종훈이 data/courses/courses.csv 의 제목·학습 목표를 보고 만들었고 성진·형섭의 검토를 받는다(아직 검토 전). course_subskill.csv 의 연결은 정답으로 쓰지 않았다(검색이 쓰는 기준과 같아서 개선을 증명하지 못한다). 2026-11-21 고침: Amazon Bedrock 정답을 AI용 과정 추가(11/19) 뒤의 목록 기준으로 늘렸고(정답 4, 관련 3), Prometheus는 과정 글에 이름 없이 PromQL 만 있어 정답에서 관련으로 내렸다. 서비스 검색이 좋아진 것이 아니라 정답지 오류를 바로잡은 것이라 점수 상승을 개선으로 보고하지 않는다. 2026-11-21 추가: AI 직무 기술 18개(SageMaker, RAG, Prompt Engineering, LLM, MLOps, OpenAI API, PyTorch 등)를 검색 결과를 보기 전에 과정 목록을 글자로 훑어 정했다. 정답 4개는 종훈 초안이고 검토 전이다. 비어야 하는 기술은 AWS 과정이 없는 프레임워크(PyTorch, LangChain 등)다. 서비스는 이런 기술에 같은 영역 과정을 uncertain(유사 과정)으로 보여 주는 설계라 '비어야 함' 지표에서는 오탐으로 잡힌다.",
   "rules": {
     "relevant": "그 기술(서비스)이 과정의 주제인 과정. 추천해도 좋은 과정. 학습 목표가 비어 있거나 종료 예정인 과정은 검색이 추천하지 않으므로 넣지 않았다.",
     "related": "주제는 아니지만 관련 기초로 보여 줘도 되는 과정(예: Terraform 에 CloudFormation). 맞는 것으로 세지 않지만 틀린 것으로도 세지 않는다.",
@@ -25,8 +25,8 @@
     {"skill": "CloudFront", "relevant": ["5ER4A2FQNV", "BV947W27Y6", "DWXS69HSC5", "E75NMW2Y16"], "related": []},
     {"skill": "PostgreSQL", "relevant": ["AK479CRG5K", "P99CFGE4HQ", "5KYPN7B8TQ"], "related": []},
     {"skill": "MySQL", "relevant": ["YV5RHEG365", "UNAUKTYU63", "FPD37ZDEBU"], "related": []},
-    {"skill": "Amazon Bedrock", "relevant": ["N51992VAXT"], "related": ["YFACXFGBSJ"]},
-    {"skill": "Prometheus", "relevant": ["82HRXHP1SM"], "related": []},
+    {"skill": "Amazon Bedrock", "relevant": ["N51992VAXT", "63KTRM86DQ", "2UE5PPMPPZ", "71GXBJX1H5"], "related": ["YFACXFGBSJ", "24YYPWPMEF", "PWJCMNXWHT"]},
+    {"skill": "Prometheus", "relevant": [], "related": ["82HRXHP1SM"]},
     {"skill": "정보보안", "relevant": ["S2N5PM41ZK", "JDENZUBGWD"], "related": ["BAUSUK26QC", "MQ6PTVMC8A"]},
     {"skill": "AWS", "relevant": ["94T2BEN85A"], "related": []},
     {"skill": "Linux", "relevant": [], "related": []},
@@ -39,6 +39,24 @@
     {"skill": "Jenkins", "relevant": [], "related": []},
     {"skill": "Grafana", "relevant": [], "related": []},
     {"skill": "Redis", "relevant": [], "related": []},
-    {"skill": "React", "relevant": [], "related": []}
+    {"skill": "React", "relevant": [], "related": []},
+    {"skill": "SageMaker", "relevant": ["R9R8GZ9TJ1", "FXFTA818BY"], "related": ["PY13DQ9U1D", "M3VGHNKNYB", "7S8M5RTN1D", "RPNTDQ36CY"]},
+    {"skill": "RAG", "relevant": ["A1X8G6S34E", "QZDAPJ6R5V"], "related": ["A3GRZ1U4AN", "PWJCMNXWHT"]},
+    {"skill": "Prompt Engineering", "relevant": ["XBNAVKA88J", "ZUNND14QN5"], "related": ["24YYPWPMEF"]},
+    {"skill": "LLM", "relevant": ["PWJCMNXWHT", "2UE5PPMPPZ"], "related": ["CDYTAJCKGY", "QZDAPJ6R5V", "XBNAVKA88J"]},
+    {"skill": "MLOps", "relevant": [], "related": ["VSS1JQ8QWW"]},
+    {"skill": "OpenAI API", "relevant": [], "related": ["N51992VAXT"]},
+    {"skill": "PyTorch", "relevant": [], "related": []},
+    {"skill": "TensorFlow", "relevant": [], "related": []},
+    {"skill": "LangChain", "relevant": [], "related": []},
+    {"skill": "LangGraph", "relevant": [], "related": []},
+    {"skill": "Airflow", "relevant": [], "related": []},
+    {"skill": "Hugging Face", "relevant": [], "related": []},
+    {"skill": "MLflow", "relevant": [], "related": []},
+    {"skill": "Spark", "relevant": [], "related": []},
+    {"skill": "FastAPI", "relevant": [], "related": []},
+    {"skill": "vLLM", "relevant": [], "related": []},
+    {"skill": "Pinecone", "relevant": [], "related": []},
+    {"skill": "scikit-learn", "relevant": [], "related": []}
   ]
 }

@@ -178,7 +178,7 @@ uv run --python 3.11 --with boto3 python -m unittest ai.test_extract backend.tes
 `search_courses(skill, k, mode)`의 `mode`는 `rules`, `keyword`, `embedding`, `hybrid`, `final`(기본)이다. Reranking은 하지 않는다.
 
 - 모의 모드(`BEDROCK_MOCK=1`)의 기본 검색은 AWS 호출 없이 규칙을 사용한다. 실제 모드(`BEDROCK_MOCK=0`)의 앱 자격 증명에는 해당 KB의 `bedrock:Retrieve` 권한이 필요하다. KB 서비스 역할이 임베딩 모델과 S3 Vectors에 접근한다.
-- 방식 비교표: `BEDROCK_MOCK=0 python -X utf8 -m pipeline.eval_search --detail final`. 정답은 `ai/eval/search_gold.json`(34개 기술, 초안이며 검토 전)이다.
+- 방식 비교표: `BEDROCK_MOCK=0 python -X utf8 -m pipeline.eval_search --detail final`. 정답은 `ai/eval/search_gold.json`(52개 기술: 클라우드 34개 + AI 18개, 초안이며 검토 전)이다.
 
 ### 교육과정 문서 동기화
 
