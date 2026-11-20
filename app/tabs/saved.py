@@ -6,6 +6,7 @@
 """
 import streamlit as st
 
+from app import ui
 from app.common import Ctx, load
 from app.course_card import RATING_NOTE, render_course_card
 from backend import api
@@ -21,6 +22,7 @@ def render(ctx: Ctx) -> None:
         st.caption("비회원은 이번 접속 동안만 보관합니다. 로그인하면 지금 담은 과정이 프로필에 저장됩니다.")
     if not saved:
         st.info("아직 담은 교육과정이 없습니다. 학습 상담이나 학습 추천의 카드에서 '담기'를 누르면 여기에 모입니다.")
+        ui.next_step("recommend", "학습 추천 보기")
         return
     cards, err = load(api.get_saved_course_cards, saved)
     if err or not cards:

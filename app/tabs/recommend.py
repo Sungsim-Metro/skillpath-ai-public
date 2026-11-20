@@ -22,7 +22,7 @@ def _render_order(recs: list[dict]) -> None:
         for item in plan:
             level = f" · 난이도 {item['level']}" if item["level"] else ""
             st.text(f"{item['step']}. {item['title']} ({item['skill']}{level})")
-        st.caption("직접 다루는 과정만 넣었습니다. 기술은 공고 수요가 높은 순서이고, 선수지식에 다른 부족 기술이 있으면 그 과정 뒤로 미룹니다.")
+        st.caption("공고 수요가 높은 기술부터 놓고, 선수지식이 필요한 과정은 뒤로 미뤘습니다.")
 
 
 def _render_recommendations(ctx: Ctx):
@@ -44,16 +44,16 @@ def _render_recommendations(ctx: Ctx):
         with tab:
             st.subheader(rec["gap_skill"], anchor=False)
             level = f" · 내 단계 {rec['user_level']}" if "user_level" in rec else ""
-            st.caption(f"공고 {d['of']}건 중 {d['postings']}건이 요구 · 그중 필수 {d['required_ratio']:.0%}{level}")
+            # 왜 이 기술을 먼저 보라고 하는지(공고 수요와 내 단계)를 카드 위에 본문 글씨로 적는다
+            st.markdown(f"**왜 이 기술인가요** · 공고 {d['of']}건 중 {d['postings']}건이 요구 · 그중 필수 {d['required_ratio']:.0%}{level}")
             if not rec["courses"] and area_of.get(rec["gap_skill"]) == COMMON_AREA:
                 st.markdown(f"여러 영역에 걸친 기술이라 한 영역의 과정으로 잇지 않았습니다. "
                             f"AWS 기초·자격증 과정 연결을 준비하고 있습니다. {PENDING}")
             elif not rec["courses"]:
                 st.write("이 기술을 다루는 교육과정을 찾지 못했습니다.")
             render_course_list(rec["courses"], columns=CARDS_PER_ROW, key=f"rec{number}")
-    st.caption("탭은 공고 수요가 높은 기술 순서입니다. 카드의 순위는 그 기술 안에서의 추천 순서입니다(직접 다루는 과정이 먼저, "
-               "그다음 내 단계에 맞는 난이도). 'AWS Skill Builder'는 그 기술을 직접 다루는 과정, '유사 과정'은 직접 다루는지 "
-               "확인하지 못한 관련 과정입니다. " + RATING_NOTE)
+    st.caption("'AWS Skill Builder'는 그 기술을 직접 다루는 과정, '유사 과정'은 직접 다루는지 확인하지 못한 관련 과정입니다. "
+               + RATING_NOTE)
 
 
 def render(ctx: Ctx):

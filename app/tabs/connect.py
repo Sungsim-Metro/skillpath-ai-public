@@ -61,7 +61,6 @@ def render(ctx: Ctx):
     if ctx.gap_err:
         notice("현직자에게 물어보기", ctx.gap_err, "부족한 영역에 맞는 개발자 모임과 사람 찾기 검색 링크가 여기에 나옵니다.")
         return
-    st.caption("부족한 영역은 사이드바의 목표 직무와 수준 진단으로 계산합니다.")
     with st.container(border=True):
         st.subheader("현직자에게 물어보기")
         render_connect(ctx)

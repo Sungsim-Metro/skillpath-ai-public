@@ -5,6 +5,7 @@
 """
 import streamlit as st
 
+from app import ui
 from app.common import load
 from app.report import build_report, file_name
 from backend import api
@@ -47,6 +48,7 @@ def render(ctx) -> None:
     if st.session_state.get("levels_example"):
         st.info("수준 진단을 하거나 기술 수준을 직접 입력하면 진단 보고서를 받을 수 있습니다. "
                 "학습 상담 화면의 '수준 진단 설문'에서 시작하세요.", icon=":material/checklist:")
+        ui.next_step("chat", "학습 상담으로 가기")
         return
     with st.spinner("보고서를 만드는 중입니다"):
         md, note = _build(job, levels)

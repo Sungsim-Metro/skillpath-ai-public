@@ -300,7 +300,7 @@ def sidebar_summary(session: chat_profiles.ProfileSession | None, job: str) -> d
     guest = st.session_state.get("guest_levels")
     if session and guest:
         st.caption("로그인 전에 입력한 수준을 이번 세션에서 사용하고 있습니다.")
-        if st.button("손님 수준을 내 프로필에 저장", key="save_guest_levels"):
+        if st.button("비회원 때 입력한 수준을 내 프로필에 저장", key="save_guest_levels"):
             _persist_levels(session, {key: levels[key] for key in guest})
             st.rerun()
     if st.session_state.get("levels_example"):

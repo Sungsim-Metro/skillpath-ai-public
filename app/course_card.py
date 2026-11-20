@@ -19,7 +19,7 @@ from app.common import md_escape
 from backend import chat_profiles
 
 RATING_NOTE = "★ 평점은 AWS Skill Builder 과정 페이지의 별점 평균과 평가 수입니다(수집한 날 기준). 추천 순서에는 쓰지 않습니다."
-CARD_HEIGHT = 380  # 카드 한 장의 높이(px). 넘치는 내용은 카드 안에서 스크롤한다
+CARD_HEIGHT = 450  # 카드 한 장의 높이(px). 1위 카드는 추천 이유를 펼쳐 두므로 그만큼 높인다. 넘치는 내용은 카드 안에서 스크롤한다
 SAVE_FAILED = "담은 교육과정을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요."
 CERTAIN_BADGE = ":green-badge[:material/verified: AWS Skill Builder]"
 SIMILAR_BADGE = ":orange-badge[:material/travel_explore: 유사 과정]"
@@ -114,7 +114,7 @@ def render_course_card(course: dict, *, rank: int | None = None, key: str = "") 
         elif rating:
             st.caption(rating)
         if course.get("reason"):
-            with st.expander("추천 이유 더보기"):
+            with st.expander("추천 이유 더보기", expanded=rank == 1):  # 1위는 펼쳐 두어 왜 추천했는지 바로 읽게 한다
                 st.text(course["reason"])
         if linked:
             st.link_button("교육과정 열기", course["url"], icon=":material/open_in_new:", width="stretch")

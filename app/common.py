@@ -55,7 +55,7 @@ def load(fn, *args, **kwargs):
 
     함수가 하나씩 실제 구현으로 바뀌므로, 한 함수가 아직 없거나 실패해도
     화면 전체가 멈추지 않고 그 구역에만 안내를 띄운다. 구현 전이면 안내 문구가 Pending 이다.
-    오류 내용에는 계정 ID 같은 값이 들어 있을 수 있어 화면에는 오류 종류만 보이고 전체는 터미널 로그에 남긴다.
+    오류 내용에는 계정 ID 같은 값이 들어 있을 수 있어 화면에는 안내만 보이고 전체는 터미널 로그에 남긴다.
     """
     try:
         return fn(*args, **kwargs), None
@@ -63,7 +63,7 @@ def load(fn, *args, **kwargs):
         return None, Pending(str(e))
     except Exception as e:  # noqa: BLE001 - 시연 중 한 구역 오류로 화면 전체가 멈추지 않게
         logger.exception("%s 호출 실패", fn.__name__)
-        return None, f"불러오지 못했습니다({type(e).__name__}). 실행한 터미널의 로그를 확인하세요."
+        return None, "불러오지 못했습니다. 잠시 뒤 다시 시도해 주세요."
 
 
 def build_ctx(job: str, levels: dict[str, int], need: str | None) -> Ctx:

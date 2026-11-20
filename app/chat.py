@@ -16,6 +16,7 @@ import streamlit as st
 
 from ai.usage import SessionUsage
 from app import levels as levels_screen
+from app import ui
 from app.course_card import render_course_list
 from backend import chat_history, chat_profiles
 from backend.jobs import JOBS
@@ -80,8 +81,7 @@ def entry_gate() -> None:
     _, middle, _ = st.columns([1, 2, 1])
     with middle:
         st.title("skillpath-ai")
-        st.caption("채용공고에서 요구 기술을 찾아 부족한 역량과 AWS 교육과정을 추천합니다. "
-                   "진단 결과와 상담에서 말한 경험을 이어서 보려면 로그인하세요.")
+        st.caption("채용공고에서 요구 기술을 찾아 부족한 역량과 AWS 교육과정을 추천합니다.")
         with st.form("entry_access"):
             st.text_input("닉네임", key="auth_nickname")
             st.text_input("비밀번호", type="password", key="auth_password",
@@ -93,11 +93,9 @@ def entry_gate() -> None:
                                         width="stretch")
         if error := st.session_state.get("auth_error"):
             st.error(error)
-        st.caption("처음이면 닉네임과 비밀번호를 적고 회원가입을 누릅니다. 이름이나 연락처는 받지 않습니다. "
-                   "다른 서비스에서 쓰는 비밀번호는 쓰지 마세요.")
+        st.caption("처음이면 닉네임과 비밀번호를 적고 회원가입을 누릅니다. 다른 서비스에서 쓰는 비밀번호는 쓰지 마세요.")
         st.button("로그인 없이 둘러보기", key="guest_enter", on_click=_enter_as_guest, width="stretch")
-        st.caption("비회원도 상담과 모든 화면을 볼 수 있습니다. 진단 결과와 상담 정보는 저장되지 않고 창을 닫으면 사라집니다. "
-                   "들어간 뒤에도 사이드바에서 로그인할 수 있습니다.")
+        st.caption("비회원은 진단 결과와 대화가 저장되지 않습니다.")
     st.stop()
 
 
@@ -112,15 +110,20 @@ def profile_access() -> chat_profiles.ProfileSession | None:
         st.button("로그아웃", key="auth_logout", on_click=_clear_private_state)
         return session
 
-    with st.form("profile_access"):
-        st.text_input("닉네임", key="auth_nickname")
-        st.text_input("비밀번호", type="password", key="auth_password",
-                      help="앞뒤 공백도 비밀번호에 포함됩니다.")
-        login, register = st.columns(2)
-        login.form_submit_button("로그인", key="auth_login", on_click=_authenticate, args=(False,))
-        register.form_submit_button("새 프로필 만들기", key="auth_register", on_click=_authenticate, args=(True,))
-    if error := st.session_state.get("auth_error"):
-        st.error(error)
+    # 비회원에게는 접어 둔다(메뉴와 보유 수준이 폼에 밀리지 않게). 오류가 있으면 펼쳐서 보여 준다
+    error = st.session_state.get("auth_error")
+    with st.expander("로그인 · 회원가입", expanded=bool(error), icon=":material/person:"):
+        with st.form("profile_access", border=False):
+            st.text_input("닉네임", key="auth_nickname")
+            st.text_input("비밀번호", type="password", key="auth_password",
+                          help="앞뒤 공백도 비밀번호에 포함됩니다.")
+            login, register = st.columns(2)
+            login.form_submit_button("로그인", key="auth_login", on_click=_authenticate, args=(False,),
+                                     type="primary", width="stretch")
+            register.form_submit_button("회원가입", key="auth_register", on_click=_authenticate, args=(True,),
+                                        width="stretch")
+        if error:
+            st.error(error)
     return None
 
 
@@ -128,7 +131,8 @@ def profile_access() -> chat_profiles.ProfileSession | None:
 SHORTCUTS = {"gap": ("gap", "부족 역량 자세히 보기"), "courses": ("recommend", "추천 과정 보기")}
 
 
-# 상담 화면 아래에 늘 보여 주는 추천 질문 (버튼 글자, 보낼 메시지). 좁은 화면에서도 잘리지 않게 버튼 글자는 짧게 둔다
+# 상담 화면에 늘 보여 주는 추천 질문 (버튼 글자, 보낼 메시지). 좁은 화면에서도 잘리지 않게 버튼 글자는 짧게 둔다.
+# 마지막 칸은 지금 목표가 아닌 직무로 바꿔 보는 질문이다(_suggestions 가 붙인다).
 SUGGESTIONS = (("내 경험 정리", "내 경험을 정리해줘"), ("부족한 기술", "지금 뭐가 부족해?"),
                ("교육과정 추천", "먼저 들을 교육과정을 추천해줘"))
 JOB_SHORT = {"cloud_engineer": "클라우드", "ai_engineer": "AI"}  # 직무 전환 버튼의 글자
@@ -408,6 +412,10 @@ def _render_current_chat(chat, conversation, history: list, message: str | None,
     elif picked == "unknown" and not history:
         st.info(f"우선 {JOBS[job]} 기준으로 보여 드립니다. 해 본 일을 적어 주시면 상담에서 맞는 직무를 함께 찾아볼 수 있습니다.",
                 icon=":material/explore:")
+    target_job = target if target in JOBS else job
+    fresh = not history and not (message and message.strip())  # 대화 전에는 할 일을 위에서 먼저 보여 준다
+    if fresh:
+        _suggestion_bar(session, target_job)
 
     for index, entry in enumerate(history):
         if isinstance(entry, tuple):  # 평가 기능 이전의 열린 세션에는 턴 ID가 없다.
@@ -454,12 +462,20 @@ def _render_current_chat(chat, conversation, history: list, message: str | None,
             st.rerun()
     _assessment_panel(conversation, job, session, sidebar_levels, reply)
 
+    if not fresh:
+        _suggestion_bar(session, target_job)
+    if any(isinstance(entry, dict) and (entry.get("courses") or entry.get("alternatives")) for entry in history):
+        ui.survey_card()  # 과정 추천까지 받았으면 설문으로 안내한다
+
+
+def _suggestion_bar(session: chat_profiles.ProfileSession | None, job: str) -> None:
+    """수준 진단 설문 버튼과 추천 질문. 대화 전에는 대화 위에, 대화가 시작되면 맨 아래에 그린다."""
     survey, _ = st.columns([1, 3])
     with survey:
-        levels_screen.survey_button(session, target if target in JOBS else job)
+        levels_screen.survey_button(session, job)
     st.caption("이렇게 물어보세요")
-    suggestions = _suggestions(target if target in JOBS else job)
-    for number, (column, (label, text)) in enumerate(zip(st.columns(len(suggestions)), suggestions)):
+    choices = _suggestions(job)
+    for number, (column, (label, text)) in enumerate(zip(st.columns(len(choices)), choices)):
         column.button(label, key=f"suggest_{number}", on_click=_suggest, args=(text,), width="stretch", help=text)
 
 

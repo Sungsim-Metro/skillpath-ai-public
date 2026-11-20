@@ -218,5 +218,41 @@ class MarketGapScreenTest(unittest.TestCase):
             self.assertIn("클라우드 엔지니어", at.info[-1].value)
 
 
+class GuidedFlowTest(unittest.TestCase):
+    """화면 아래의 다음 단계 버튼과 설문 안내(2026-11-20): 부족 역량 → 근거 → 학습 추천 → 설문."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1", "SURVEY_URL": ""})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_next_buttons_lead_from_demand_to_gap_to_recommend(self):
+        at = open_app("demand")
+        at.button(key="step_gap").click().run()
+        self.assertEqual(at.session_state["view"], "gap")
+        at.button(key="step_recommend").click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["view"], "recommend")
+
+    def test_priority_card_opens_the_evidence_of_that_skill(self):
+        at = open_app("gap")
+        self.assertIn("먼저 채울 기술", [item.value for item in at.subheader])
+        at.button(key="evidence_0").click().run()
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["view"], "demand")
+        picked = at.selectbox(key="evidence_skill").value
+        self.assertTrue(any(f"1. " in item.value and picked in item.value.replace("\\", "")
+                            for item in open_app("gap").markdown))  # 카드 1번의 기술이 골라져 있다
+
+    def test_survey_card_follows_the_recommendations_only_with_an_address(self):
+        self.assertFalse(open_app("recommend").main.get("link_button") and
+                         [b for b in open_app("recommend").main.get("link_button") if "설문" in b.proto.label])
+        with mock.patch.dict(os.environ, {"SURVEY_URL": "https://example.com/form"}):
+            at = open_app("recommend")
+            links = [b.proto.url for b in at.main.get("link_button") if "설문" in b.proto.label]
+            self.assertEqual(links, ["https://example.com/form"])
+            self.assertTrue(any("설문" in c.value for c in at.caption))  # 단계 표시에도 설문이 붙는다
+
+
 if __name__ == "__main__":
     unittest.main()

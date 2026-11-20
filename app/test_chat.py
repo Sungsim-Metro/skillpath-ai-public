@@ -664,6 +664,12 @@ class ChatScreenTest(unittest.TestCase):
             links = self.open_screen().sidebar.get("link_button")
         self.assertEqual([item.proto.url for item in links], ["https://example.com/form"])
 
+    def test_suggestions_sit_above_an_empty_chat_and_offer_the_other_job(self):
+        at = self.open_screen()
+        labels = [b.label for b in at.button if (b.key or "").startswith("suggest_")]
+        self.assertEqual(len(labels), 4)
+        self.assertFalse(at.chat_message)
+
     def test_returned_course_links_have_plain_text_details(self):
         at = self.open_screen()
         course = {"title": "[예시 과정]", "url": "https://example.com/course", "match": "uncertain",

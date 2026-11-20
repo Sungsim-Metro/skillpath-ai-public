@@ -38,6 +38,7 @@ from app import course_card  # noqa: E402
 from app import levels as levels_screen  # noqa: E402
 from app import report_dialog  # noqa: E402
 from app import tour  # noqa: E402
+from app import ui  # noqa: E402
 from app.common import build_ctx  # noqa: E402
 from app.tabs import connect as tab_connect  # noqa: E402
 from app.tabs import demand as tab_demand  # noqa: E402
@@ -57,6 +58,11 @@ VIEWS = {
     "saved": ("담은 교육과정", tab_saved.render, None),
     "connect": ("현직자에게 물어보기", tab_connect.render, "gap"),
     "report": ("진단 보고서", report_dialog.render, None),
+}
+# 화면 맨 아래의 '다음 단계' 버튼: 지금 화면 → (옮겨 갈 화면, 버튼 글자). 학습 추천 끝에는 설문 안내를 둔다
+NEXT = {
+    "demand": ("gap", "내 부족 역량 보기"),
+    "gap": ("recommend", "추천 교육과정 보기"),
 }
 DEFAULT_JOB = next(iter(JOBS))
 
@@ -81,28 +87,26 @@ with st.sidebar:
     if st.session_state.get("view") not in VIEWS:  # 첫 실행이거나 모르는 값이면 주소의 값을 보고, 없으면 학습 상담으로 연다
         asked = st.query_params.get("view")
         st.session_state.view = asked if asked in VIEWS else DEFAULT_VIEW
-    st.markdown("**마이페이지**")  # 프로필(로그인), 목표 직무. 바로 아래에 화면 메뉴를 둔다
-    session = chat_screen.profile_access()
-    course_card.sync_saved(session)  # 로그인하면 프로필에 담아 둔 교육과정을 불러온다
+    # 화면 메뉴를 맨 위에 둔다. 로그인 폼과 보유 수준에 밀려 메뉴와 설문 버튼이 가려지지 않게(2026-11-20)
+    view = st.radio("화면", list(VIEWS), format_func=lambda key: VIEWS[key][0], key="view")
+    if view != st.query_params.get("view", DEFAULT_VIEW):
+        st.query_params["view"] = view
     # 목표 직무는 고르는 칸을 두지 않는다. 학습 상담의 첫 화면에서 고르거나 대화로 바꾼다(2026-11-20)
     if st.session_state.get("job") not in JOBS:
         st.session_state.job = DEFAULT_JOB
     job = st.session_state.job
-    st.caption(f":material/flag: 목표 직무 · **{JOBS[job]}** (학습 상담에서 바꿉니다)")
-    view = st.radio("화면", list(VIEWS), format_func=lambda key: VIEWS[key][0], key="view")
-    if view != st.query_params.get("view", DEFAULT_VIEW):
-        st.query_params["view"] = view
+    st.caption(f":material/flag: 목표 직무 · **{JOBS[job]}**")
+    if survey := ui.survey_url():  # 사용자 테스트 설문 주소가 있을 때만 보인다
+        st.link_button("사용 후기 설문 참여하기", survey, icon=":material/rate_review:", type="primary", width="stretch")
     st.divider()
+    st.markdown("**마이페이지**")  # 프로필(로그인)과 내 보유 수준
+    session = chat_screen.profile_access()
+    course_card.sync_saved(session)  # 로그인하면 프로필에 담아 둔 교육과정을 불러온다
     levels = levels_screen.sidebar_summary(session, job)
     st.divider()
     tour.sidebar_link()
-    survey = os.getenv("SURVEY_URL", "").strip()
-    if survey.startswith("https://"):  # 사용자 테스트 설문 주소가 있을 때만 보인다
-        st.link_button("사용 후기 설문 참여하기", survey, icon=":material/rate_review:", type="primary", width="stretch")
     if api.is_mock():
-        st.caption("가짜 데이터 모드입니다 (BEDROCK_MOCK=1). 개인 역량 진단과 추천 과정은 예시입니다.")
-    else:
-        st.caption("실제 모드입니다 (BEDROCK_MOCK=0).")
+        st.caption("예시 데이터로 보여 드립니다. 개인 역량 진단과 추천 과정은 예시입니다.")
 
 tour.show_if_open()  # 처음 들어온 사용자에게 기능을 단계별로 보여 준다
 label, render, need = VIEWS[view]
@@ -130,4 +134,9 @@ if need:
     )
 else:
     st.caption(f"{JOBS[job]} 기준")
+ui.journey(view)
 render(ctx)
+if view in NEXT:
+    ui.next_step(*NEXT[view])
+elif view == "recommend":
+    ui.survey_card()
