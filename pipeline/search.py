@@ -362,9 +362,7 @@ def search_courses(skill: str, k: int = 3, mode: str = "final") -> list[dict]:
         if len(out) == k:
             return out
         certain_ids = {r["course_id"] for r in certain}
-        # 규칙 표가 같은 세부 능력으로 붙인 유사 과정은 키워드·임베딩 검색도 올린 것만 남긴다. 검색이 받쳐 주지 않는 연결로
-        # AWS 과정이 없는 기술(PyTorch, LangChain 등)에 엉뚱한 과정을 채우지 않기 위해서다(원칙 4, 2026-11-21).
-        related = {r["course_id"]: r for r in rules if r["match"] == "uncertain" and r["course_id"] in position}
+        related = {r["course_id"]: r for r in rules if r["match"] == "uncertain"}
         ranked = _fuse(list(related), [cid for cid in hybrid if cid not in certain_ids])
         for cid in ranked[:k - len(out)]:
             out.append(related.get(cid) or {

@@ -355,36 +355,6 @@ def demand_pairs(job_category: str, gap_skills: list[str]) -> list[tuple[str, di
     return pairs
 
 
-def _has_courses(skill: str, review: bool = False) -> bool:
-    """그 기술에 보여 줄 과정 후보가 있는가. 검색이 실패하면 있는 것으로 보고 넘겨, 오류가 추천 단계에서 그대로 드러나게 한다."""
-    from ai.recommend import candidate_courses
-
-    try:
-        return bool(candidate_courses(skill, rules_only=review and is_mock()))
-    except Exception:
-        return True
-
-
-def pick_recommendable(skills: list[str], n: int | None = None, *, review: bool = False) -> list[str]:
-    """수요 높은 순 목록에서 추천할 기술 n개를 고른다. 과정이 있는 기술을 앞에서부터 고르고, 모자라면 과정 없는 기술로
-    채운다(과정 없는 상위 기술에 막혀 카드가 하나도 안 나오는 것을 막는다, 2026-11-21). 원래 순서는 그대로다."""
-    n = RECOMMEND_TOP_N if n is None else n
-    if len(skills) <= n:  # 고를 것이 없다(명시한 기술, 이미 고른 목록). 검색을 부르지 않는다
-        return list(skills)
-    chosen: list[str] = []
-    for skill in skills:
-        if len(chosen) == n:
-            break
-        if _has_courses(skill, review):
-            chosen.append(skill)
-    for skill in skills:
-        if len(chosen) == n:
-            break
-        if skill not in chosen:
-            chosen.append(skill)
-    return [skill for skill in skills if skill in chosen]
-
-
 def get_recommendations(job_category: str, gap_skills: list[str], *, review: bool = False,
                         levels: dict[str, float] | None = None,
                         review_evidence: dict[str, dict] | None = None) -> list[dict]:
@@ -396,7 +366,7 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
 
     가짜 모드는 data/sample 의 추천을 읽는다. 실제 모드는 수요 숫자를 코드로 만들고(get_demand),
     ai.recommend 는 교육과정 KB 검색 결과로 후보를 고르고 Bedrock 모델로 추천 이유를 작성한다.
-    실제 모드는 gap_skills 에서(화면은 수요 높은 순으로 준다) 과정이 있는 기술부터 RECOMMEND_TOP_N 개만 추천하고,
+    실제 모드는 gap_skills 앞에서부터(화면은 수요 높은 순으로 준다) RECOMMEND_TOP_N 개만 추천하고,
     같은 직무·같은 기술·같은 수요 숫자면 Bedrock 을 다시 부르지 않고 캐시를 돌려준다.
     채팅에서 review=True이면 과정 목표로 사유를 검증한다. 모의 모드에서도 로컬 과정 목록을 쓴다.
     명시한 기술의 상담은 직무 집계에서 읽은 review_evidence를 넘긴다. 해당 기술의 행이 없으면
@@ -404,7 +374,7 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
     """
     mock = is_mock()
     if not mock or review:
-        gap_skills = pick_recommendable(gap_skills, review=review)  # 기술별 모델 호출 비용과 화면 길이를 제한한다(과정이 있는 기술 우선)
+        gap_skills = gap_skills[:RECOMMEND_TOP_N]  # 기술별 모델 호출 비용과 화면 길이를 제한한다
     if review_evidence is None:
         pairs = demand_pairs(job_category, gap_skills)
     else:

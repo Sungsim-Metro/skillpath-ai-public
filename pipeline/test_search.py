@@ -107,22 +107,10 @@ def hybrid():
         docker = search_courses("Docker")
         assert docker[0] == search_courses("Docker", mode="rules")[0]
         assert all(row["match"] == "uncertain" for row in docker[1:])
-        # 규칙 표가 붙인 유사 과정이라도 검색(여기서는 [a, b, c])이 올리지 않은 과정은 나오지 않는다
-        searched = {a, b, c}
-        assert all(row["course_id"] in searched for row in docker if row["match"] == "uncertain")
         k8s = search_courses("Kubernetes", k=5)
         certain = [r for r in search_courses("Kubernetes", mode="rules", k=5) if r["match"] == "certain"]
         assert all(r["match"] == "certain" for r in k8s[:len(certain)])
         assert len({f["course_id"] for f in k8s}) == len(k8s)
-        # 규칙 연결이면서 검색에도 올라온 유사 과정은 남고, 검색이 안 올린 것만 빠진다(필터를 모두 지우거나 넓히면 실패)
-        rules_docker = [r["course_id"] for r in S._rules("Docker", 50)]
-        assert rules_docker[:3] == ["JV8N39BFYH", "WU72QMK76B", "CUCA1DK47V"]  # 확신 1개, 유사 과정 둘 이상
-        S._keyword_ranking, S._semantic_ranking = (lambda skill: ["AK479CRG5K", "WU72QMK76B"]), (lambda skill: [])  # 검색 전용 과정이 위, 규칙 연결 과정이 아래
-        docker = search_courses("Docker")
-        # 규칙 연결이 있는 과정(WU72)은 검색 순위가 낮아도 규칙 순위 덕에 위로 오고, 검색이 안 올린 CUCA1DK47V 등은 없다
-        assert [f["course_id"] for f in docker] == ["JV8N39BFYH", "WU72QMK76B", "AK479CRG5K"]
-        assert docker[1]["match"] == "uncertain" and docker[1]["subskill_id"] is not None  # 규칙 연결 정보가 그대로다
-        S._keyword_ranking, S._semantic_ranking = (lambda skill: [a, b]), (lambda skill: [b, c])
         # KB 운영 오류는 정상적인 빈 검색 결과와 구분되어야 재시도가 가능하다
         def boom(skill):
             raise ConnectionError("KB unavailable")

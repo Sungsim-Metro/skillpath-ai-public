@@ -250,31 +250,26 @@ def _analyze(facts: dict, levels: dict[str, int], *, courses: bool, supervised: 
     reply = Reply("\n".join(lines), gap_skills=[row["skill"] for row in missing])
     if courses:
         try:
-            requested = api.pick_recommendable([r["skill"] for r in missing], review=True)
-            rows = [r for r in missing if r["skill"] in requested]  # 수요 순서 그대로, 추천 대상 행
-            last = max((i for i, r in enumerate(missing) if r["skill"] in requested), default=-1)
-            skipped = [r["skill"] for r in missing[:last] if r["skill"] not in requested]
+            requested = [r["skill"] for r in missing][:api.RECOMMEND_TOP_N]
             pair = None if supervised else experiments.pick_pair()
             unavailable_skills = []
             if pair:
-                reply.alternatives, reply.courses = _compare_structures(pair, job, requested, rows)
+                reply.alternatives, reply.courses = _compare_structures(pair, job, requested, missing[:len(requested)])
             else:
                 if supervised:
-                    known_levels = {r["skill"]: r["user_level"] for r in rows
+                    known_levels = {r["skill"]: r["user_level"] for r in missing[:len(requested)]
                                     if has_skill_rating(levels, r["skill"], job)}
                     recs = api.get_recommendations(job, requested, review=True, levels=known_levels)
                     returned = {rec["gap_skill"] for rec in recs}
                     unavailable_skills = [skill for skill in requested if skill not in returned]
                 else:
                     recs = api.get_recommendations(job, requested, review=True)
-                reply.courses = _verified_courses(recs, rows)
+                reply.courses = _verified_courses(recs, missing[:len(requested)])
             detail = ("부족 기술과 연결된 과정입니다. 과정별 추천 이유와 매칭 상태를 확인해 주세요." if reply.courses
                       else "상위 부족 기술에 연결할 교육과정을 찾지 못했습니다.")
             if reply.alternatives:
                 detail = ("부족 기술과 연결된 과정을 두 가지 방식으로 추천했습니다. "
                           "과정별 추천 이유를 읽고 더 도움이 되는 쪽을 골라 주세요.")
-            if skipped and reply.courses:
-                detail += "\n연결할 교육과정이 없어 건너뛴 기술 · " + ", ".join(skipped)
             if unavailable_skills:
                 detail += "\n추천 결과를 확인하지 못한 기술 · " + ", ".join(unavailable_skills)
                 reply.failed = True
