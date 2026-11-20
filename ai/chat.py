@@ -379,6 +379,80 @@ def parsed_turn(data: dict) -> Turn:
     return turn
 
 
+_VENDOR_PREFIX = re.compile(r"^(?:AWS|Amazon|Google|GCP|Microsoft|MS)\s+", re.I)
+_LOOSE_DROP = re.compile(r"[\W_]+")  # 공백·괄호·문장부호. 한글·영문·숫자만 남긴다
+MIN_QUOTE_CHARS = 6  # 이보다 짧은 인용은 우연히 겹칠 수 있어 느슨한 비교를 하지 않는다
+ANCHOR_CHARS = 10  # 앞뒤 끝 맞추기에 쓰는 글자 수(공백·부호 제외). 짧은 인용에는 쓰지 않는다
+
+
+def _own_work_only(span: str) -> bool:
+    """구간 안의 모든 절이 본인이 한 일인가. 제삼자 절이 끼었거나 희망·부정 절이 있으면 거짓."""
+    clauses = [c for c in _CLAUSES.split(span) if c and c.strip(" ,")]
+    return len(list(owned_clauses(span))) == len(clauses) and not any(
+        WISH.search(c) or NEGATION.search(c) for c in clauses)
+
+
+def _verbatim_span(item: str, sources: list[str]) -> str | None:
+    """모델이 공백·괄호·문장부호만 바꿔 인용했다면 원문에 실제로 있는 그 구간을 돌려준다. 없으면 None.
+
+    되살린 구간에 팀원이 한 일, 희망, 부정이 섞이면 경험으로 저장하지 않는다(_own_work_only).
+    """
+    want = _LOOSE_DROP.sub("", item).casefold()
+    if len(want) < MIN_QUOTE_CHARS:
+        return None
+    for text in sources:
+        kept = [(i, c) for i, c in enumerate(text) if not _LOOSE_DROP.fullmatch(c)]
+        flat = "".join(c for _, c in kept).casefold()
+        at = flat.find(want)
+        if at >= 0:
+            span = text[kept[at][0]:kept[at + len(want) - 1][0] + 1]
+            return span if _own_work_only(span) else None
+        if len(want) >= 2 * ANCHOR_CHARS:  # 모델이 중간의 한 구절을 뺀 경우: 앞뒤 끝이 원문에 있으면 그 사이 원문 구간을 쓴다
+            start = flat.find(want[:ANCHOR_CHARS])
+            end = flat.find(want[-ANCHOR_CHARS:], start + ANCHOR_CHARS) if start >= 0 else -1
+            if end >= 0:
+                span = text[kept[start][0]:kept[end + ANCHOR_CHARS - 1][0] + 1]
+                return span if _own_work_only(span) else None
+    return None
+
+
+def _prune(data: dict, message: str, context: dict) -> None:
+    """모델 답에서 사용자 발화로 확인되지 않는 기술·경험만 덜어 낸다(제자리 수정). 하나가 틀렸다고 턴 전체를 버리지 않기 위해서다.
+
+    남기는 항목은 모두 사용자 발화에 실제로 있다: 기술은 같은 절 규칙(제삼자·희망·부정·수강 제외)으로 확인하고,
+    경험은 공백·괄호·문장부호 차이만 눈감은 채 원문 구간으로 바꿔 넣는다. 원문에 없는 것은 버린다.
+    그 밖의 검사(정정·저장·직무)는 그대로 엄격하다.
+    """
+    if data.get("status") != "ok":
+        return
+    if not all(isinstance(data.get(k), list) and all(isinstance(i, str) for i in data[k])
+               for k in ("add_skills", "add_experiences", "experience_skills")):
+        return  # 형식이 틀린 답은 _validate 가 거부해 다시 요청한다
+    sources = [message]
+    history = context.get("history", [])
+    previous = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
+    if FRAGMENT.search(previous):
+        sources.append(previous)
+
+    def grounded(name: str) -> str | None:
+        for candidate in (name, _VENDOR_PREFIX.sub("", name)):
+            if candidate.strip() and _items("skills", [candidate]) <= _supported_experience_skills(sources, [candidate]):
+                return candidate
+        return None
+
+    data["add_skills"] = list(dict.fromkeys(n for n in map(grounded, data["add_skills"]) if n))
+    quotes = []
+    for item in data["add_experiences"]:
+        found = item if any(item in text for text in sources) else _verbatim_span(item, sources)
+        if found:
+            quotes.append(found)
+    data["add_experiences"] = list(dict.fromkeys(quotes))
+    # 경험 기반 기술은 지금 확인된 본인 작업으로 설명되는 것만 둔다
+    active = active_experiences(context, data["add_experiences"], data.get("remove_experiences") or [])
+    data["experience_skills"] = [n for n in data["experience_skills"]
+                                 if _items("skills", [n]) <= _supported_experience_skills(active, [n])]
+
+
 def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
     """이번 발화의 사실·요청만 반환한다. screened는 같은 원문을 미리 검사한 호출자용이다."""
     if not screened and not guard_input(message):
@@ -395,7 +469,7 @@ def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
             intake_prompt(),
             json.dumps({"message": message, "context": state}, ensure_ascii=False),
             mock_file="", mock_key="chat_intake", usage_stage="chat_intake", max_tokens=1200,
-            validate=lambda data: _validate(data, message, state),
+            validate=lambda data: (_prune(data, message, state), _validate(data, message, state)),
         )
     except Exception:
         # BedrockJSONError에는 검사에 실패한 응답 일부가 들어 있어 그대로 보여줄 수 없다.

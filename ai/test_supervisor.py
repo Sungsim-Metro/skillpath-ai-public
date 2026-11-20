@@ -16,6 +16,14 @@ class SupervisedLearningTest(unittest.TestCase):
         mode.start()
         self.addCleanup(mode.stop)
 
+    def test_candidate_validation_prunes_like_the_default_structure(self):
+        """감독형 구조도 기본 구조처럼 어긋난 항목만 버린다(AWS S3 → S3, 말하지 않은 기술은 삭제)."""
+        message = "S3 버킷을 직접 만들어 봤어요."
+        turn = asdict(chat.Turn(status="ok", add_skills=["AWS S3", "Terraform"]))
+        candidate = {"turn": turn, "add_wishes": [], "remove_wishes": [], "targets": [], "course_scope": "none"}
+        self.supervisor._validate_candidate(candidate, message, {})
+        self.assertEqual(candidate["turn"]["add_skills"], ["S3"])
+
     def test_wish_is_separate_from_own_and_teammates_completed_work(self):
         raw = "팀원이 Docker를 썼고 저는 Python으로 API를 개발했어요. Terraform을 배우고 싶어요."
         with patch("ai.bedrock._client", side_effect=AssertionError):

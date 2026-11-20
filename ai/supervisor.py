@@ -166,6 +166,7 @@ def _validate_candidate(data: dict, message: str, context: dict) -> None:
         raise ValueError("상담 해석 필드를 확인하세요.")
     turn = data["turn"]
     scopes = _save_scopes(message, context) if turn.get("save") is True else []
+    chat._prune(turn, message, context)  # 기본 구조와 같은 느슨한 처리(어긋난 항목만 버림)
     chat._validate(turn, message, context, check_save_scope=len(scopes) <= 1)
     if turn["status"] == "ok" and turn["save"]:
         _validate_writes(turn, context, scopes)

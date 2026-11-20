@@ -342,6 +342,14 @@ def _history_panel(session: chat_profiles.ProfileSession | None) -> None:
                   type="secondary" if item["session_id"] == shown else "tertiary")
 
 
+CHAT_HEIGHT = 520  # 대화 목록 상자의 높이(px). 이보다 길어지면 상자 안에서 스크롤한다
+
+
+def _scroll_area(has_content: bool):
+    """대화 목록을 담는 상자. 비어 있을 때는 높이를 고정하지 않아 빈 칸이 크게 남지 않게 한다."""
+    return st.container(height=CHAT_HEIGHT, border=False) if has_content else st.container()
+
+
 def _render_entries(entries: list) -> None:
     for index, entry in enumerate(entries):
         if isinstance(entry, tuple):  # 평가 기능 이전의 열린 세션에는 턴 ID가 없다.
@@ -361,8 +369,9 @@ def _render_past(nickname: str, session_id: str) -> None:
     except Exception:
         st.caption("이 대화를 불러오지 못했습니다.")
         return
-    _render_entries([{"prompt": q, "answer": a, "courses": c, "alternatives": [], "turn_id": ""}
-                     for q, a, c in turns])
+    with _scroll_area(bool(turns)):
+        _render_entries([{"prompt": q, "answer": a, "courses": c, "alternatives": [], "turn_id": ""}
+                         for q, a, c in turns])
 
 
 def _assessment_panel(conversation: Conversation, sidebar_job: str, session: chat_profiles.ProfileSession | None,
@@ -417,49 +426,51 @@ def _render_current_chat(chat, conversation, history: list, message: str | None,
     if fresh:
         _suggestion_bar(session, target_job)
 
-    for index, entry in enumerate(history):
-        if isinstance(entry, tuple):  # 평가 기능 이전의 열린 세션에는 턴 ID가 없다.
-            prompt, answer, courses = entry
-            entry = {"prompt": prompt, "answer": answer, "courses": courses, "alternatives": [], "turn_id": ""}
-        with st.chat_message("user"):
-            st.text(entry["prompt"])
-        with st.chat_message("assistant"):
-            _render_answer(entry, index)
-
     reply = None
-    if message and message.strip():
-        with st.chat_message("user"):
-            st.text(message)
-        with st.chat_message("assistant"):
-            with st.spinner("답을 준비하고 있습니다…"):  # 답이 올 때까지 말풍선 안에 진행 표시를 둔다
-                try:
-                    reply = chat.handle_message(
-                        conversation, message,
-                        job=job, sidebar_skills=sidebar_skills, session=session, sidebar_levels=sidebar_levels,
-                        architecture=architecture,
-                    )
-                    # 실험용 항목은 없을 수도 있다(없으면 평가 위젯을 붙이지 않는다)
-                    entry = {"answer": reply.text, "courses": reply.courses,
-                             "turn_id": getattr(reply, "turn_id", ""), "model": getattr(reply, "model", ""),
-                             "action": getattr(reply, "action", ""),
-                             "alternatives": getattr(reply, "alternatives", [])}
-                except Exception:
-                    # 예외에 닉네임, 프로필 또는 원문이 포함될 수 있다.
-                    entry = {"answer": "메시지 처리 결과를 확인할 수 없습니다.", "courses": [], "turn_id": "",
-                             "model": "", "action": "", "alternatives": []}
-            history.append({"prompt": message, "job": job, "session_id": conversation.usage.session_id,
-                            "architecture": architecture, **entry})
-            chat_history.record_reply(nickname, conversation.usage.session_id, message, reply)  # 저장 여부는 backend 가 정한다
-            _render_answer(history[-1], len(history) - 1)
-        # 대화에서 목표 직무가 정해지거나 바뀌면 마이페이지와 다른 화면도 그 직무를 따른다
-        if conversation.job in JOBS and conversation.job != st.session_state.get("job"):
-            st.session_state.job = conversation.job
-            st.session_state.job_picked = conversation.job
-            # 다시 그리면 이번 답(reply)이 사라지므로, 이번 턴에 말한 기술의 수준 문항을 먼저 맡겨 둔다
-            mentioned = list(getattr(reply, "assessment_skills", None) or [])
-            if mentioned and getattr(reply, "assessment_job", "") == conversation.job:
-                st.session_state.chat_assessment = (conversation.job, mentioned, set())
-            st.rerun()
+    # 대화가 화면보다 길어지면 아래로 늘어나지 않고 이 상자 안에서 스크롤한다(새 메시지가 오면 맨 아래로 따라간다)
+    with _scroll_area(bool(history) or bool(message and message.strip())):
+        for index, entry in enumerate(history):
+            if isinstance(entry, tuple):  # 평가 기능 이전의 열린 세션에는 턴 ID가 없다.
+                prompt, answer, courses = entry
+                entry = {"prompt": prompt, "answer": answer, "courses": courses, "alternatives": [], "turn_id": ""}
+            with st.chat_message("user"):
+                st.text(entry["prompt"])
+            with st.chat_message("assistant"):
+                _render_answer(entry, index)
+
+        if message and message.strip():
+            with st.chat_message("user"):
+                st.text(message)
+            with st.chat_message("assistant"):
+                with st.spinner("답을 준비하고 있습니다…"):  # 답이 올 때까지 말풍선 안에 진행 표시를 둔다
+                    try:
+                        reply = chat.handle_message(
+                            conversation, message,
+                            job=job, sidebar_skills=sidebar_skills, session=session, sidebar_levels=sidebar_levels,
+                            architecture=architecture,
+                        )
+                        # 실험용 항목은 없을 수도 있다(없으면 평가 위젯을 붙이지 않는다)
+                        entry = {"answer": reply.text, "courses": reply.courses,
+                                 "turn_id": getattr(reply, "turn_id", ""), "model": getattr(reply, "model", ""),
+                                 "action": getattr(reply, "action", ""),
+                                 "alternatives": getattr(reply, "alternatives", [])}
+                    except Exception:
+                        # 예외에 닉네임, 프로필 또는 원문이 포함될 수 있다.
+                        entry = {"answer": "메시지 처리 결과를 확인할 수 없습니다.", "courses": [], "turn_id": "",
+                                 "model": "", "action": "", "alternatives": []}
+                history.append({"prompt": message, "job": job, "session_id": conversation.usage.session_id,
+                                "architecture": architecture, **entry})
+                chat_history.record_reply(nickname, conversation.usage.session_id, message, reply)  # 저장 여부는 backend 가 정한다
+                _render_answer(history[-1], len(history) - 1)
+            # 대화에서 목표 직무가 정해지거나 바뀌면 마이페이지와 다른 화면도 그 직무를 따른다
+            if conversation.job in JOBS and conversation.job != st.session_state.get("job"):
+                st.session_state.job = conversation.job
+                st.session_state.job_picked = conversation.job
+                # 다시 그리면 이번 답(reply)이 사라지므로, 이번 턴에 말한 기술의 수준 문항을 먼저 맡겨 둔다
+                mentioned = list(getattr(reply, "assessment_skills", None) or [])
+                if mentioned and getattr(reply, "assessment_job", "") == conversation.job:
+                    st.session_state.chat_assessment = (conversation.job, mentioned, set())
+                st.rerun()
     _assessment_panel(conversation, job, session, sidebar_levels, reply)
 
     if not fresh:
