@@ -49,6 +49,9 @@ _recommend_cache_lock = Lock()
 logger = logging.getLogger(__name__)
 
 UNCLASSIFIED = "미분류"
+# Gap 에 넣는 기술은 공고의 이 비율 이상이 요구한 것만이다. 소수 공고에만 나오는 기술(기술이 100개가 넘으면 대부분)은
+# 부족 여부를 따져도 의미가 없다. AI 직무는 10% 에서 12개 안팎이 된다(2026-11-20). 시장 수요 화면은 전체를 보여 준다.
+GAP_MIN_SHARE = 0.10
 
 # 가짜 모드에서만 쓰는 최소 별칭 표. 실제 표준화는 pipeline 의 별칭 사전(#13)이 맡는다.
 _MOCK_ALIASES = {
@@ -117,7 +120,7 @@ def _area_of(skill: str, job_category: str = DEFAULT_JOB) -> tuple[str, str]:
     return (area_id, table["areas"][area_id]) if area_id else ("UNCLASSIFIED", UNCLASSIFIED)
 
 
-def get_gap(job_category: str, owned_skills, min_ratio: float = 0.2) -> list[dict]:
+def get_gap(job_category: str, owned_skills, min_ratio: float = GAP_MIN_SHARE) -> list[dict]:
     """공고 비율이 min_ratio 이상인 기술을 수요 높은 순으로 돌려주고, 내 단계와 보유 여부를 표시한다.
 
     대시보드와 상담은 owned_skills에 {세부 능력 ID 또는 custom:기술명: 0~5}를 전달한다.
@@ -195,6 +198,12 @@ def get_level_radar(job_category: str, owned_skills) -> list[dict]:
     return rows
 
 
+def _representative(demand: dict) -> dict:
+    """Gap 에 쓸 기술만 남긴다(공고 비율 GAP_MIN_SHARE 이상). 입력은 고치지 않는다."""
+    total = demand["total_postings"]
+    return {**demand, "skills": [s for s in demand["skills"] if total and s["postings"] / total >= GAP_MIN_SHARE]}
+
+
 def get_area_gap(job_category: str, owned_skills) -> list[dict]:
     """영역(능력 범주)마다 공고 수요와 그중 내가 채운 몫을 돌려준다. 계산은 전부 코드로 한다.
 
@@ -203,7 +212,7 @@ def get_area_gap(job_category: str, owned_skills) -> list[dict]:
       coverage = owned / demand (demand 가 0이면 0). 기준 단계에 못 미친 기술은 missing_skills 에 남는다.
     영역 순서는 data/skill_areas.json 의 순서이고, 사전에 없는 기술은 마지막의 미분류에 모은다.
     """
-    demand = get_demand(job_category)
+    demand = _representative(get_demand(job_category))
     skills = [s["skill"] for s in demand["skills"]]
     return _area_rows(demand, skill_levels(owned_skills, skills, job_category), job_category)
 
@@ -237,7 +246,7 @@ def get_area_gap_after(job_category: str, owned_skills, recommendations: list[di
     지금 단계가 더 높으면 그대로 둔다. 형식은 get_area_gap 과 같고, 영역마다 raised 가 더 붙는다:
     [{"skill", "from", "to"}] 단계가 오르는 기술. 과정을 마친다고 그 단계가 된다는 보장은 없다. 화면에는 "예상"이라고 적는다.
     """
-    demand = get_demand(job_category)
+    demand = _representative(get_demand(job_category))
     skills = [s["skill"] for s in demand["skills"]]
     now = skill_levels(owned_skills, skills, job_category)
     after = dict(now)

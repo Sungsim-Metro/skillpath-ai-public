@@ -14,6 +14,44 @@ def _rec(skill, *levels_and_matches):
         {"title": f"{skill}-{i}", "level": lv, "match": m} for i, (lv, m) in enumerate(levels_and_matches)]}
 
 
+def _demand(total, **postings):
+    return {"total_postings": total, "skills": [
+        {"skill": name, "postings": n, "required": n, "preferred": 0, "evidence_samples": []}
+        for name, n in postings.items()]}
+
+
+class RepresentativeSkillsTest(unittest.TestCase):
+    """Gap 에는 공고의 GAP_MIN_SHARE 이상이 요구한 기술만 들어간다(경계 포함)."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _area_skills(self, demand):
+        with mock.patch.object(api, "get_demand", return_value=demand):
+            return {s for row in api.get_area_gap(JOB, ()) for s in row["skills"]}
+
+    def test_exactly_the_minimum_share_stays_and_below_it_drops(self):
+        demand = _demand(100, AWS=10, Docker=9, Kubernetes=50)  # 10% 는 남고 9% 는 빠진다
+        self.assertEqual(api.GAP_MIN_SHARE, 0.10)
+        self.assertEqual(self._area_skills(demand), {"AWS", "Kubernetes"})
+
+    def test_no_postings_means_no_skills(self):
+        self.assertEqual(self._area_skills(_demand(0, AWS=0)), set())
+
+    def test_gap_list_and_area_gap_use_the_same_skills(self):
+        demand = _demand(100, AWS=10, Docker=9, Kubernetes=50)
+        with mock.patch.object(api, "get_demand", return_value=demand):
+            listed = {r["skill"] for r in api.get_gap(JOB, ())}
+        self.assertEqual(listed, self._area_skills(demand))
+
+    def test_representative_does_not_change_its_input(self):
+        demand = _demand(100, AWS=10, Docker=9)
+        api._representative(demand)
+        self.assertEqual([s["skill"] for s in demand["skills"]], ["AWS", "Docker"])
+
+
 class AreaAfterTest(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1"})

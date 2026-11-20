@@ -4,6 +4,8 @@ import streamlit as st
 
 from app.common import ACCENT, EMPTY, Ctx, Pending, empty_metrics, md_escape, notice
 
+CHART_TOP = 15  # 막대그래프에 그리는 기술 수
+
 
 def _render_demand(ctx: Ctx):
     demand, skill_options = ctx.demand, ctx.skill_options
@@ -18,12 +20,16 @@ def _render_demand(ctx: Ctx):
         st.info("이 직무의 공고에서 추출한 기술이 없습니다.")
         return
 
-    df = pd.DataFrame(
-        [{"기술": s["skill"], "필수": s["required"], "우대": s["preferred"]} for s in demand["skills"]]
-    )
+    rows = [{"기술": s["skill"], "필수": s["required"], "우대": s["preferred"]} for s in demand["skills"]]
+    shown = rows[:CHART_TOP]  # 백엔드가 공고 수 순으로 준 목록의 앞쪽만 그린다(기술이 100개가 넘으면 막대가 빼곡해 읽을 수 없다)
     st.subheader("이 직무가 요구하는 기술")
-    st.bar_chart(df, x="기술", y=["필수", "우대"], horizontal=True, sort=False,
-                 color=[ACCENT, "#B9CBEA"], height=380, x_label="", y_label="요구한 공고 수 (건)")
+    if len(rows) > len(shown):
+        st.caption(f"요구한 공고가 많은 상위 {len(shown)}개만 그렸습니다. 전체 {len(rows)}개는 아래 표에서 봅니다.")
+    st.bar_chart(pd.DataFrame(shown), x="기술", y=["필수", "우대"], horizontal=True, sort=False,
+                 color=[ACCENT, "#B9CBEA"], height=max(240, 26 * len(shown)), x_label="", y_label="요구한 공고 수 (건)")
+    if len(rows) > len(shown):
+        with st.expander(f"전체 {len(rows)}개 기술 보기"):
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
     st.subheader("근거 보기")
     pick = st.selectbox("기술을 고르면 공고 원문 근거를 보여줍니다", skill_options, key="evidence_skill")

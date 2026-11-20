@@ -603,7 +603,18 @@ class ChatScreenTest(unittest.TestCase):
         at = self.open_screen()
         suggestions = [b for b in at.button if b.key and b.key.startswith("suggest_")]
         self.assertEqual(len(suggestions), 4)
+        self.assertEqual(suggestions[3].label, "AI 직무로 보기")  # 클라우드를 보고 있으면 AI 로 바꾸는 버튼
         self.assertTrue(any("목표 직무 클라우드 엔지니어" in c.value and "수준 진단 전" in c.value for c in at.caption))
+        suggestions[3].click().run()  # 누르면 직무가 바뀌고, 이제는 반대로 클라우드로 돌아가는 버튼이 나온다
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["job"], "ai_engineer")
+        back = [b for b in at.button if b.key and b.key.startswith("suggest_")]
+        self.assertEqual(back[3].label, "클라우드 직무로 보기")
+        back[3].click().run()
+        self.assertEqual(at.session_state["job"], "cloud_engineer")
+        self.assertEqual([b for b in at.button if b.key and b.key.startswith("suggest_")][3].label, "AI 직무로 보기")
+        at = self.open_screen()  # 이어지는 확인은 새 화면에서
+        suggestions = [b for b in at.button if b.key and b.key.startswith("suggest_")]
         next(b for b in suggestions if "부족" in b.label).click().run()  # 추천 질문을 누르면 그 글이 메시지로 들어간다
         self.assertFalse(at.exception)
         self.assertEqual(len(at.chat_message), 2)

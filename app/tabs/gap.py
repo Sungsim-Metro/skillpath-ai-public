@@ -23,6 +23,7 @@ from app.common import (
 )
 from app.tabs.radar import render_radar
 from backend import api
+from backend.api import GAP_MIN_SHARE
 from backend.industry_gap import job_gap_csv
 from backend.jobs import JOBS
 from pipeline.market_gap import PROGRAM_CATALOGS
@@ -166,7 +167,7 @@ def _render_gap(ctx: Ctx):
     have = [r for r in gap_rows if r["owned"]]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("분석한 공고", f"{demand['total_postings']}건", border=True)
-    c2.metric("주요 요구 기술", f"{len(gap_rows)}개", help="공고의 20% 이상이 요구한 기술", border=True)
+    c2.metric("주요 요구 기술", f"{len(gap_rows)}개", help=f"공고의 {GAP_MIN_SHARE:.0%} 이상이 요구한 기술", border=True)
     c3.metric("그중 보유", f"{len(have)}개", help="내 단계가 기준 단계 이상인 기술", border=True)
     c4.metric("부족", f"{len(missing)}개", border=True)
     st.caption("사이드바의 목표 직무와 수준 진단으로 계산한 값입니다. 학습 상담의 답은 대화에서 말한 경험까지 반영해 다를 수 있습니다.")

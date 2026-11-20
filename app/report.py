@@ -15,6 +15,8 @@ from datetime import date, datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from backend.api import GAP_MIN_SHARE
+
 BAR_WIDTH = 10
 
 
@@ -65,7 +67,7 @@ def build_report(*, job_title: str, demand: dict, gap_rows: list[dict], area_row
                  plan: list[dict], uncovered: list[dict], market_rows: list[dict] | None = None,
                  market_source: str | None = None, level_names: dict | None = None,
                  mock: bool = False, today: date | None = None,
-                 recommend_failed: bool = False, min_ratio: float = 0.2) -> str:
+                 recommend_failed: bool = False, min_ratio: float = GAP_MIN_SHARE) -> str:
     """진단 보고서 마크다운 문자열. 인자는 모두 화면과 backend 가 이미 계산한 값이다.
 
     plan, uncovered: backend.plan.study_order / uncovered_skills 결과.

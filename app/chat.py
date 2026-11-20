@@ -130,7 +130,8 @@ SHORTCUTS = {"gap": ("gap", "부족 역량 자세히 보기"), "courses": ("reco
 
 # 상담 화면 아래에 늘 보여 주는 추천 질문 (버튼 글자, 보낼 메시지). 좁은 화면에서도 잘리지 않게 버튼 글자는 짧게 둔다
 SUGGESTIONS = (("내 경험 정리", "내 경험을 정리해줘"), ("부족한 기술", "지금 뭐가 부족해?"),
-               ("교육과정 추천", "먼저 들을 교육과정을 추천해줘"), ("AI 직무로 보기", "AI 엔지니어 기준으로 다시 봐줘"))
+               ("교육과정 추천", "먼저 들을 교육과정을 추천해줘"))
+JOB_SHORT = {"cloud_engineer": "클라우드", "ai_engineer": "AI"}  # 직무 전환 버튼의 글자
 THANKS = "의견 주셔서 감사합니다!"
 
 
@@ -148,6 +149,14 @@ def _go(view: str) -> None:
 
 def back_to_chat() -> None:
     _go("chat")
+
+
+def _suggestions(target: str) -> tuple[tuple[str, str], ...]:
+    """추천 질문 넷. 마지막은 지금 보고 있는 직무가 아닌 다른 직무로 바꾸는 버튼이다(직무가 둘이라 서로 바뀐다)."""
+    other = next((job for job in JOBS if job != target), None)
+    if other is None:
+        return SUGGESTIONS
+    return SUGGESTIONS + ((f"{JOB_SHORT.get(other, JOBS[other])} 직무로 보기", f"{JOBS[other]} 기준으로 다시 봐줘"),)
 
 
 def _suggest(text: str) -> None:
@@ -449,7 +458,8 @@ def _render_current_chat(chat, conversation, history: list, message: str | None,
     with survey:
         levels_screen.survey_button(session, target if target in JOBS else job)
     st.caption("이렇게 물어보세요")
-    for number, (column, (label, text)) in enumerate(zip(st.columns(len(SUGGESTIONS)), SUGGESTIONS)):
+    suggestions = _suggestions(target if target in JOBS else job)
+    for number, (column, (label, text)) in enumerate(zip(st.columns(len(suggestions)), suggestions)):
         column.button(label, key=f"suggest_{number}", on_click=_suggest, args=(text,), width="stretch", help=text)
 
 
