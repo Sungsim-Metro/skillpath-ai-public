@@ -5,9 +5,9 @@
 import streamlit as st
 
 from app.common import COMMON_AREA, PENDING, Ctx, load, md_escape, notice
-from app.course_card import RATING_NOTE, render_course_list
+from app.course_card import RATING_NOTE, duration_text, render_course_list
 from backend import api
-from backend.plan import study_order
+from backend.plan import plan_minutes, study_order
 
 CARDS_PER_ROW = 3
 
@@ -22,7 +22,11 @@ def _render_order(recs: list[dict]) -> None:
         for item in plan:
             level = f" · 난이도 {item['level']}" if item["level"] else ""
             st.text(f"{item['step']}. {item['title']} ({item['skill']}{level})")
-        st.caption("공고 수요가 높은 기술부터 놓고, 선수지식이 필요한 과정은 뒤로 미뤘습니다.")
+        total, unknown = plan_minutes(plan)
+        if total:  # 얼마나 걸릴지 알아야 계획을 세운다. 합계는 backend/plan.py 가 낸 값이다
+            rest = f" (소요 시간을 모르는 과정 {unknown}개 제외)" if unknown else ""
+            st.markdown(f":material/schedule: 과정 {len(plan)}개 · **모두 들으면 {duration_text(total)}**{rest}")
+        st.caption("공고 수요가 높은 기술부터 놓고, 선수지식이 필요한 과정은 뒤로 미뤘습니다. 순서는 권장이며 건너뛰어도 됩니다.")
 
 
 def _render_recommendations(ctx: Ctx):

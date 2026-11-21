@@ -194,6 +194,13 @@ def _render_gap(ctx: Ctx):
     c2.metric("주요 요구 기술", f"{len(gap_rows)}개", help=f"공고의 {GAP_MIN_SHARE:.0%} 이상이 요구한 기술", border=True)
     c3.metric("그중 보유", f"{len(have)}개", help="내 단계가 기준 단계 이상인 기술", border=True)
     c4.metric("부족", f"{len(missing)}개", border=True)
+    # 부족한 것만 앞세우지 않고 이미 갖춘 기술을 먼저 한 줄로 보여 준다(강점과 부족을 함께)
+    if have:
+        unsure = [r for r in have if r["required_level_confidence"] == "uncertain"]
+        every = len(unsure) == len(have)  # 전부 추정이면 기술마다 붙이지 않고 한 번만 적는다
+        owned = ", ".join(md_escape(r["skill"]) + (" (불확실)" if r in unsure and not every else "") for r in have)
+        st.markdown(f":green-badge[:material/check_circle: 이미 갖춘 기술 {len(have)}개] {owned}"
+                    + (" · 모두 기준 단계가 추정값이라 '불확실'" if every else ""))
     # 숫자 바로 아래에 '먼저 채울 기술'을 둔다. 안내문과 표는 그 뒤로 미루고 접어, 한 화면에서 볼 것을 줄인다(설문 2026-11-20)
     _render_priorities(missing)
     guessed = [r for r in gap_rows if r["required_level_confidence"] == "uncertain"]
@@ -243,9 +250,6 @@ def _render_gap(ctx: Ctx):
                 "내 단계는 '수준 진단 설문'의 답, 기준 단계는 공고 문장으로 정한 값입니다. "
                 "충족도 = 필수 비중 × (기준 이상이면 1) + 우대 비중 × 내 단계/5."
             )
-        if have:
-            st.caption("이미 보유: " + ", ".join(
-                r["skill"] + (" (불확실)" if r["required_level_confidence"] == "uncertain" else "") for r in have))
 
 
 def render(ctx: Ctx):

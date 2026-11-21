@@ -43,6 +43,18 @@ class StudyOrderTest(unittest.TestCase):
         recs = [_rec("AWS", _course("A", prerequisites="Google 계정")), _rec("Go", _course("B"))]
         self.assertEqual([p["title"] for p in study_order(recs)], ["A", "B"])
 
+    def test_plan_minutes_sums_known_durations_and_counts_unknown(self):
+        """수강 순서의 총 소요 시간은 backend 가 낸다. 소요 시간이 없는 과정은 합에서 빼고 몇 개인지 알린다."""
+        from backend.plan import plan_minutes, study_order
+
+        recs = [_rec("AWS", {**_course("A"), "duration_min": 90}, {**_course("B"), "duration_min": 60}),
+                _rec("Go", _course("C"), {**_course("D", match="uncertain"), "duration_min": 600})]
+        plan = study_order(recs)
+        self.assertEqual([p.get("duration_min") for p in plan], [90, 60, None])  # 불확실 과정은 순서에 없다
+        self.assertEqual(plan_minutes(plan), (150, 1))
+        self.assertEqual(plan_minutes([]), (0, 0))
+        self.assertEqual(plan_minutes([{"duration_min": "90"}, {"duration_min": True}]), (0, 2))
+
     def test_mutual_prerequisites_keep_original_order(self):
         from backend.plan import study_order
 

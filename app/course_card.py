@@ -41,6 +41,8 @@ NO_PREREQ = re.compile(r"^(none|n/a|없음|no prerequisites?( (needed|required))
 UNKNOWN_PREREQ = {"", "표기 없음"}  # 과정 페이지에 선수지식 항목이 없는 경우(ai.recommend 의 NO_PREREQ). 없다고 단정하지 않는다(원칙 4)
 LANGUAGES = {"English": "영어", "Korean": "한국어", "한국어": "한국어"}
 SERVICES_SHOWN = 3  # 카드에 적는 AWS 서비스 수. 나머지는 "외 n개"로 줄인다
+# 난이도 옆에 붙이는 한마디. 과정 표의 난이도(기초·중급)를 풀어 쓴 것이고 과정마다 따로 판단한 값이 아니다
+LEVEL_NOTE = {"기초": "입문 단계", "중급": "기초를 익힌 뒤"}
 
 
 def duration_text(minutes) -> str:
@@ -60,12 +62,13 @@ def prerequisite_text(course: dict) -> str:
 
 
 def services_text(course: dict) -> str:
-    """'다루는 서비스: A, B, C 외 2개'. 없으면 빈 글자."""
+    """다루는 AWS 서비스를 배지로: '다루는 서비스 [A] [B] [C] 외 2개'. 없으면 빈 글자. 이름은 마크다운 기호를 지워 넣는다."""
     names = course.get("aws_services")
     if not isinstance(names, list) or not names:
         return ""
     more = f" 외 {len(names) - SERVICES_SHOWN}개" if len(names) > SERVICES_SHOWN else ""
-    return "다루는 서비스: " + ", ".join(str(name) for name in names[:SERVICES_SHOWN]) + more
+    tags = " ".join(f":blue-badge[{md_escape(str(name))}]" for name in names[:SERVICES_SHOWN])
+    return f"다루는 서비스 {tags}{more}"
 
 
 def _https(url: str) -> bool:
@@ -133,7 +136,8 @@ def render_course_card(course: dict, *, rank: int | None = None, key: str = "", 
         if match:
             badges.append(SIMILAR_BADGE if match == "uncertain" else CERTAIN_BADGE)
         if course.get("level"):
-            badges.append(f":gray-badge[난이도 {md_escape(course['level'])}]")
+            note = LEVEL_NOTE.get(course["level"])
+            badges.append(f":gray-badge[난이도 {md_escape(course['level'])}{' · ' + note if note else ''}]")
         if duration_text(course.get("duration_min")):
             badges.append(f":gray-badge[:material/schedule: {duration_text(course['duration_min'])}]")
         if isinstance(course.get("language"), str) and course["language"].strip():
@@ -150,7 +154,7 @@ def render_course_card(course: dict, *, rank: int | None = None, key: str = "", 
         if details:
             st.caption(md_escape(" · ".join(details)))
         if services_text(course):
-            st.caption(md_escape(services_text(course)))
+            st.caption(services_text(course))
         rating = rating_text(course)
         if rating and linked:
             st.link_button(rating, course["url"], type="tertiary", icon=":material/open_in_new:",

@@ -22,6 +22,7 @@ def study_order(recommendations: list[dict]) -> list[dict]:
     """[{"step", "skill", "title", "url", "level", "after"}] 를 들을 순서대로 돌려준다.
 
     after 는 선수 보정으로 이 과정을 뒤로 미루게 한 기술 이름 목록이다(없으면 빈 목록).
+    과정에 소요 시간(③ 의 선택 필드 duration_min)이 있으면 그 값도 함께 싣는다.
     """
     items, seen = [], set()
     for rec in recommendations:
@@ -31,7 +32,8 @@ def study_order(recommendations: list[dict]) -> list[dict]:
                 continue
             seen.add(key)
             items.append({"skill": rec["gap_skill"], "title": c["title"], "url": c.get("url", ""),
-                          "level": c.get("level", ""), "prerequisites": c.get("prerequisites", "")})
+                          "level": c.get("level", ""), "prerequisites": c.get("prerequisites", ""),
+                          **({"duration_min": c["duration_min"]} if _minutes(c.get("duration_min")) else {})})
     skills = {it["skill"] for it in items}
     for it in items:
         it["after"] = [s for s in sorted(skills) if s != it["skill"] and _mentions(it["prerequisites"], s)]
@@ -45,7 +47,18 @@ def study_order(recommendations: list[dict]) -> list[dict]:
         rest.remove(ready)
         ordered.append(ready)
     return [{"step": i, "skill": it["skill"], "title": it["title"], "url": it["url"], "level": it["level"],
-             "after": it["after"]} for i, it in enumerate(ordered, start=1)]
+             "after": it["after"], **({"duration_min": it["duration_min"]} if "duration_min" in it else {})}
+            for i, it in enumerate(ordered, start=1)]
+
+
+def _minutes(value) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def plan_minutes(plan: list[dict]) -> tuple[int, int]:
+    """(수강 순서에 든 과정의 소요 시간 합(분), 소요 시간이 없는 과정 수). 합은 화면이 아니라 여기서 낸다(원칙 2)."""
+    minutes = [_minutes(item.get("duration_min")) for item in plan]
+    return sum(minutes), sum(1 for m in minutes if not m)
 
 
 def uncovered_skills(recommendations: list[dict]) -> list[dict]:

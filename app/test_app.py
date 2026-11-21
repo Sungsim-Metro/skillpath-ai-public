@@ -178,8 +178,11 @@ class CourseCardTextTest(unittest.TestCase):
         self.assertNotIn("recommend", card.prerequisite_text({"prerequisites": sentence}))
         self.assertTrue(card.prerequisite_text({"prerequisites": sentence}).startswith("선수지식 있음"))
         self.assertEqual(card.prerequisite_text({}), "")  # 담은 과정 카드에는 값이 없다
-        self.assertEqual(card.services_text({"aws_services": ["A", "B", "C", "D", "E"]}), "다루는 서비스: A, B, C 외 2개")
-        self.assertEqual(card.services_text({"aws_services": ["A"]}), "다루는 서비스: A")
+        self.assertEqual(card.services_text({"aws_services": ["A", "B", "C", "D", "E"]}),
+                         "다루는 서비스 :blue-badge[A] :blue-badge[B] :blue-badge[C] 외 2개")
+        self.assertEqual(card.services_text({"aws_services": ["A"]}), "다루는 서비스 :blue-badge[A]")
+        # 서비스 이름의 마크다운 기호는 지워져 링크로 그려지지 않는다
+        self.assertIn(r"\[x\]", card.services_text({"aws_services": ["[x](https://example.com)"]}))
         self.assertEqual(card.services_text({}), "")
 
     def test_recommend_cards_show_course_info_from_the_sample_data(self):
@@ -188,6 +191,10 @@ class CourseCardTextTest(unittest.TestCase):
         text = " ".join(m.value for m in at.markdown)
         self.assertIn("약 1시간", text)
         self.assertIn("영어 강의", text)
+        self.assertIn("난이도 기초 · 입문 단계", text)
+        # 먼저 들을 순서에 총 소요 시간(backend.plan.plan_minutes 의 합)과 건너뛰어도 된다는 안내가 있다
+        self.assertIn("모두 들으면 약", text)
+        self.assertTrue(any("건너뛰어도 됩니다" in c.value for c in at.caption))
         self.assertTrue(any("다루는 서비스" in c.value for c in at.caption))
         self.assertTrue(any("선수지식" in c.value and "내 단계" in c.value for c in at.caption))
 
