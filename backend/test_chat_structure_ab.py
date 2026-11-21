@@ -44,6 +44,21 @@ class ChatStructureABTest(unittest.TestCase):
         self.assertFalse(self.send("reviewed,3", "지금 뭐가 부족해?")[1].alternatives)
         self.assertFalse(self.send("")[1].alternatives)
 
+    def test_harder_followup_uses_levels_shown_by_both_structures(self):
+        handle_turn = chat._handle_turn
+
+        def compare(state, message, *args, supervised=False):
+            reply = handle_turn(state, message, *args, supervised=supervised)
+            if supervised:
+                reply.courses = [{**card, "level": "중급"} for card in reply.courses]
+            return reply
+
+        with patch.object(chat, "_handle_turn", side_effect=compare):
+            state, first = self.send("reviewed,3", "EC2 교육과정을 추천해줘")
+        self.assertEqual({card["level"] for side in first.alternatives for card in side["courses"]}, {"기초", "중급"})
+        _, harder = self.send("reviewed,3", "더 어려운 걸로", state)
+        self.assertEqual({(c["gap_skill"], c["level"]) for c in harder.courses}, {("EC2", "고급")})
+
     def test_failed_rival_leaves_the_default_answer_alone(self):
         with patch("ai.supervisor.interpret_turn", side_effect=RuntimeError("boom")):
             _, reply = self.send("reviewed,3")

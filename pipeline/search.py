@@ -20,6 +20,7 @@
   ai/recommend.py 의 candidate_courses 는 sid 가 None 이면 행 조회를 건너뛰고 match 를 uncertain 으로 둔다.
 - 방식(mode): rules(위 규칙만), keyword(본문 키워드), embedding(Bedrock KB 의미 검색), hybrid(키워드와 KB 순위를 RRF로 합침),
   final(기본: certain 과정부터 추천하고 각 그룹 내에서는 키워드와 KB 순위를 반영). 비교표는 pipeline/eval_search.py.
+  희망 난이도가 있으면 확장 목록에서 해당 단계의 과정만 남기고 주제 근거와 KB 관련도로 후보를 고른다.
   가짜 모드의 final은 규칙만 사용한다.
   AWS처럼 사람이 지정한 입문 과정은 KB에 있는 지정 과정만 원래 순서로 준다. Reranking은 하지 않는다(2026-11-16 결정).
   실제 모드에서 KB 검색이 실패하면 호출자에게 오류를 전달한다.
@@ -47,7 +48,8 @@ QUERY_FILES = {  # 직무별 세부 능력 검색어
 }
 COURSES = ROOT / "data" / "courses" / "courses.csv"
 LINKS = ROOT / "data" / "courses" / "course_subskill.csv"
-LEVEL_ORDER = {"기초": 0, "중급": 1}  # 신입 대상이라 기초부터
+COURSE_LEVELS = ("기초", "중급", "고급")
+LEVEL_ORDER = {level: index for index, level in enumerate(COURSE_LEVELS)}
 
 
 def _read(path: Path) -> list[dict]:
@@ -86,6 +88,17 @@ def _links_by_course() -> dict[str, list[dict]]:
 @lru_cache(maxsize=1)
 def _courses() -> dict[str, dict]:
     return {r["course_id"]: r for r in _read(COURSES)}
+
+
+@lru_cache(maxsize=2)
+def expanded_course_catalog(base: Path) -> dict[str, dict]:
+    """Load course details shared by difficulty search and the recommendation writer."""
+    expanded = base.with_name("catalog_all.csv")
+    primary = _read(base) if base.is_file() or not expanded.is_file() else []
+    rows = {row["course_id"]: row for row in primary}
+    if expanded.is_file():
+        rows.update((row["course_id"], row) for row in _read(expanded))
+    return rows
 
 
 def _usable(course: dict) -> bool:
@@ -135,14 +148,16 @@ def _pick_subskill(course_id: str, subskills: list[str]) -> str | None:
     return pool[0]["subskill_id"] if pool else None
 
 
-def _rules(skill: str, k: int) -> list[dict]:
+def _rules(skill: str, k: int, *, catalog: dict[str, dict] | None = None) -> list[dict]:
     """규칙만으로 찾은 과정 후보 최대 k개(세부 능력 연결, 이름이 본문에 나오는 과정)."""
     canon = normalize_skill(skill) or skill
     names = _names(canon)
     subskills = subskills_of(skill)
-    if not subskills:  # 세부 능력이 없는 넓은 기술은 지정한 입문 과정(없으면 빈 목록)
+    if not subskills and catalog is None:  # 넓은 기술의 기본 추천은 지정한 입문 과정
         return [{"course_id": cid, "subskill_id": None, "match": "uncertain"}
                 for cid in _foundation().get(canon, [])[:k]]
+    if catalog is None:
+        catalog = _courses()
 
     out: list[dict] = []
     seen: set[str] = set()
@@ -154,7 +169,7 @@ def _rules(skill: str, k: int) -> list[dict]:
     #    학습 목표에 한 번 스친 것(예: 데이터 과정이 IaC 를 한 줄 언급)은 주제가 아니라서 세우지 않는다.
     #    정렬: 그 기술의 세부 능력에 연결된 과정 먼저 → 기초 먼저 → 제목에 나오는 과정 먼저
     named = []
-    for c in _courses().values():
+    for c in catalog.values():
         if not _usable(c):
             continue
         in_title = _mentions(c["title"], names)
@@ -175,7 +190,7 @@ def _rules(skill: str, k: int) -> list[dict]:
         if len(out) == k:
             break
         cid = r["course_id"]
-        if cid in seen or not _usable(_courses()[cid]):
+        if cid in seen or cid not in catalog or not _usable(catalog[cid]):
             continue
         seen.add(cid)
         out.append({"course_id": cid, "subskill_id": r["subskill_id"], "match": "uncertain"})
@@ -269,7 +284,8 @@ def _bm25_ranking(skill: str) -> list[str]:
     return sorted(scores, key=lambda cid: (-scores[cid], *_tie_key(cid)))
 
 
-def _kb_scores(skill: str, course_ids: list[str] | None = None) -> dict[str, float]:
+def _kb_scores(skill: str, course_ids: list[str] | None = None, *,
+               catalog: dict[str, dict] | None = None) -> dict[str, float]:
     """추천 가능한 KB 문서를 조회하고 과정마다 가장 높은 청크 점수를 반환한다."""
     kb_id = os.getenv("BEDROCK_KB_ID", "").strip()
     if not kb_id:
@@ -291,7 +307,8 @@ def _kb_scores(skill: str, course_ids: list[str] | None = None) -> dict[str, flo
         }},
     )
     scores: dict[str, float] = {}
-    catalog = _courses()
+    if catalog is None:
+        catalog = _courses()
     for hit in response["retrievalResults"]:
         cid = hit.get("metadata", {}).get("course_id")
         score = hit.get("score", 0.0)
@@ -336,12 +353,31 @@ def _linked_subskill(cid: str, subskills: list[str]) -> str | None:
     return next((sid for sid in subskills if any(r["subskill_id"] == sid for r in links)), None)
 
 
-def search_courses(skill: str, k: int = 3, mode: str = "final") -> list[dict]:
+def search_courses(skill: str, k: int = 3, mode: str = "final", *,
+                   course_levels: tuple[str, ...] | None = None) -> list[dict]:
     """기술 이름(대표명이나 별칭)으로 과정 후보 최대 k개. 없으면 빈 목록. mode 는 모듈 설명 참고."""
     if mode not in MODES:
         raise ValueError(f"지원하지 않는 mode: {mode!r} (가능: {', '.join(MODES)})")
     if not skill.strip() or k <= 0:
         return []
+    if course_levels is not None:
+        if not course_levels:
+            return []
+        if mode not in ("rules", "final", "final_bm25"):
+            raise ValueError("난이도 지정은 과정 추천 검색에서 지원합니다.")
+        eligible = {
+            cid: course for cid, course in expanded_course_catalog(COURSES).items()
+            if course["level"] in course_levels and course.get("status", "ACTIVE") == "ACTIVE"
+            and course["title"].strip() and course["url"].strip() and _usable(course)
+        }
+        candidates = _rules(skill, len(eligible), catalog=eligible)
+        scores = {}
+        if candidates and mode != "rules" and _semantic_ready():
+            # The deployed KB has no level metadata. Only rank locally eligible topic matches.
+            scores = _kb_scores(skill, catalog=eligible)
+        candidates.sort(key=lambda c: (c["match"] != "certain", course_levels.index(eligible[c["course_id"]]["level"]),
+                                       -scores.get(c["course_id"], 0)))
+        return candidates[:k]
     if mode == "rules":
         return _rules(skill, k)
     subskills = subskills_of(skill)

@@ -24,6 +24,22 @@ class MockIntakeTest(unittest.TestCase):
         self.assertEqual(turn.action, "note")
         self.assertFalse(turn.save)
 
+    def test_conversational_tool_experience_uses_canonical_skills(self):
+        for spelling in ["랭크래프", "랭그래프"]:
+            message = f"랭체인 {spelling} RAG도 다뤄봤어"
+            with self.subTest(spelling=spelling):
+                self.assertEqual(chat.interpret(message, {}),
+                                 chat.Turn(add_skills=["LangChain", "LangGraph", "RAG"]))
+        self.assertEqual(chat.interpret("LangChain은 다뤄봤는데", {}), chat.Turn(add_skills=["LangChain"]))
+        for message in ["Docker를 써봤는데 뭐가 부족해?", "제가 Docker로 배포했어요. 뭐가 부족할까요?",
+                        "Docker는 다뤄봤어, 이제 뭐가 부족해?"]:
+            with self.subTest(message=message):
+                self.assertEqual(chat.interpret(message, {}).add_skills, ["Docker"])
+        for message in ["랭체인도 다뤄봤어?", "랭체인은 못 다뤄봤어", "팀원이 랭체인을 다뤄봤어",
+                        "랭체인도 다뤄봤어야 하나?", "랭체인을 다뤄본 적이 없어"]:
+            with self.subTest(message=message):
+                self.assertEqual(chat.interpret(message, {}).add_skills, [])
+
     def test_known_skill_is_repeated_only_for_a_new_personal_use_statement(self):
         context = {"skills": ["Docker"], "experiences": ["전에 제가 Docker로 API를 배포했어요"]}
         repeated = chat.interpret("이번에도 제가 도커를 사용했어요.", context)
@@ -33,6 +49,35 @@ class MockIntakeTest(unittest.TestCase):
                         "Docker를 더 배우고 싶어요", "팀원이 Docker를 사용했어요"]:
             with self.subTest(message=message):
                 self.assertEqual(chat.interpret(message, context).add_skills, [])
+
+    def test_personal_experience_can_qualify_a_followup_in_the_same_sentence(self):
+        for message in [
+            "제가 Docker로 직접 배포한 경험을 기준으로 다음엔 뭘 준비하면 좋을까요?",
+            "저는 Docker를 실무에서 씁니다만 다음에는 Kubernetes를 배우고 싶어요.",
+        ]:
+            with self.subTest(message=message):
+                turn = chat.interpret(message, {})
+                self.assertEqual(turn.add_skills, ["Docker"])
+                self.assertFalse(turn.save)
+                chat._validate(asdict(chat.Turn(add_skills=["Docker"])), message, {})
+                with self.assertRaises(ValueError):
+                    chat._validate(asdict(chat.Turn(add_skills=["Docker"], save=True, save_skills=["Docker"])),
+                                   message, {})
+
+    def test_embedded_question_does_not_itself_supply_personal_experience(self):
+        for message in [
+            "Docker로 배포한 경험이 필요한가요?",
+            "Docker로 배포한 경험을 기준으로 제가 지원자를 평가해야 하나요?",
+            "제가 Docker를 소개한 경험을 기준으로 다음에 뭘 공부하면 좋을까요?",
+            "팀원이 Docker로 배포한 경험을 기준으로 다음에 뭘 준비하면 좋을까요?",
+            "제가 Docker로 배포해본 적은 없는데 다음엔 뭘 준비하면 좋을까요?",
+            "만약 제가 Docker로 직접 배포한 경험을 기준으로 직무를 고른다면 뭐가 좋을까요?",
+            "제가 Docker로 배포를 해보고 싶습니다만 무엇부터 시작해야 하나요?",
+        ]:
+            with self.subTest(message=message):
+                self.assertEqual(chat.interpret(message, {}).add_skills, [])
+                with self.assertRaises(ValueError):
+                    chat._validate(asdict(chat.Turn(add_skills=["Docker"])), message, {})
 
     def test_negative_experience_is_removed_from_confirmed_state(self):
         experience = "제가 Docker로 API를 배포했어요"
@@ -148,6 +193,10 @@ class MockIntakeTest(unittest.TestCase):
 
     def test_requests_and_deferrals(self):
         for text, action in [
+            ("RAG에서 검색이 왜 필요해?", "note"),
+            ("Docker에서 볼륨이 왜 필수인가요?", "note"),
+            ("채용 공고에서 RAG를 왜 요구해?", "requirements"),
+            ("RAG는 써봤고 채용 요건에 TensorFlow가 있는지 알려줘", "requirements"),
             ("내 상태 좀 봐줘", "summary"), ("부족한 게 뭐야?", "gap"),
             ("클라우드 엔지니어 기준으로 무엇부터 공부할까?", "gap"),
             ("그중 먼저 들을 교육과정을 추천해줘", "courses"),
@@ -162,6 +211,60 @@ class MockIntakeTest(unittest.TestCase):
         ]:
             with self.subTest(text=text):
                 self.assertEqual(chat.interpret(text, {}).action, action)
+
+    def test_requested_course_difficulty_and_followups_are_not_skill_assessments(self):
+        context = {"last_course_skills": ["EC2"], "last_course_levels": {"EC2": ["기초"]}}
+        for text, action, difficulty in [
+            ("AWS 고급 과정을 추천해줘", "courses", "고급"),
+            ("Docker 중급 과정 추천해줘", "courses", "중급"),
+            ("기초부터 볼래", "courses", "기초"),
+            ("난이도 높은 걸로 알려줘", "courses", "harder"),
+            ("난이도 높은걸 알려줘", "courses", "harder"),
+            ("좀 더 어려운 걸로", "courses", "harder"),
+            ("조금 더 높은 단계로 부탁해", "courses", "harder"),
+            ("다시 기초로 추천해줘", "courses", "기초"),
+            ("아니 고급 말고 중급으로 다시 추천해줘", "courses", "중급"),
+            ("기초 말고", "courses", "above_basic"),
+            ("중급 이상 과정으로", "courses", "above_basic"),
+            ("중급 이하만 보여줘", "courses", "below_advanced"),
+            ("그럼 중급 수준으로 듣고 싶어", "courses", "중급"),
+            ("그런데 중급으로 듣고 싶지는 않아", "note", None),
+            ("이번엔 LLM 난이도 높은 강의로 알려줘", "courses", "고급"),
+            ("더 쉬운 강좌를 찾아줘", "courses", "easier"),
+            ("중급 말고 기초 과정으로", "courses", "기초"),
+            ("고급은 아니고 중급으로 바꿔줘", "courses", "중급"),
+            ("고급 과정 추천은 나중에 해줘", "note", None),
+            ("EC2와 S3 중 EC2가 더 어려운 이유가 궁금해", "note", None),
+            ("고급 과정이 어렵게 느껴졌어", "note", None),
+            ("이 강의의 난이도가 높은 이유가 뭐야?", "note", None),
+            ("고급 과정은 관심 없고 이번에는 Docker 강의 추천해줘", "courses", None),
+            ("기초 단계는 아닌걸로 추천해줘", "courses", "above_basic"),
+            ("저는 EC2 중급이에요", "note", None),
+            ("제가 중급인데 AWS 강의 추천해줘", "courses", None),
+            ("RAG의 기초 개념을 설명해줘", "note", None),
+        ]:
+            with self.subTest(text=text):
+                turn = chat.interpret(text, context)
+                self.assertEqual((turn.action, turn.course_difficulty), (action, difficulty))
+                self.assertEqual((turn.add_skills, turn.save), ([], False))
+
+    def test_course_targets_come_from_the_request_clause(self):
+        self.assertEqual(chat.explicit_course_skills("RAG는 써봤는데 EC2 고급 과정 추천해줘"), ["EC2"])
+        self.assertEqual(chat.explicit_course_skills("Docker 말고 파이썬 중급 강의 추천해줘"), ["Python"])
+        self.assertEqual(chat.explicit_course_skills("EC2 기초 말고 고급으로"), ["EC2"])
+        self.assertEqual(chat.explicit_course_skills("난이도 높은 걸로 알려줘"), [])
+        self.assertEqual(chat.explicit_course_skills("EC2는 써봤고 부족 역량 기준으로 과정 추천해줘"), [])
+        self.assertTrue(chat.requests_gap_courses("EC2는 써봤고 부족 역량 기준으로 중급 과정 추천해줘"))
+
+    def test_course_topic_separators_preserve_compound_skill_names(self):
+        for words, expected in [
+            ("AI/ LLM", ["AI", "LLM"]), ("AI/LLM", ["AI", "LLM"]),
+            ("AI / LLM", ["AI", "LLM"]), ("ai／llm", ["AI", "LLM"]),
+            ("AI", ["AI"]), ("CI/CD / LLM", ["CI/CD", "LLM"]),
+            ("AI 엔지니어 기준으로 LLM", ["LLM"]),
+        ]:
+            with self.subTest(words=words):
+                self.assertEqual(chat.explicit_course_skills(f"{words} 심화 교육과정을 추천받고 싶어"), expected)
 
     def test_goal_is_distinct_from_experience(self):
         for text, status in [
@@ -248,6 +351,36 @@ class MockIntakeTest(unittest.TestCase):
 
 
 class RealBoundaryTest(unittest.TestCase):
+    def test_course_difficulty_schema_remains_compatible_with_old_turns(self):
+        previous = asdict(chat.Turn(action="courses"))
+        del previous["course_difficulty"]
+        chat._validate(previous, "교육과정 추천해줘", {})
+        self.assertIsNone(chat.parsed_turn(previous).course_difficulty)
+        for action, difficulty in [("note", "고급"), ("summary", "harder"), ("courses", "전문가")]:
+            with self.subTest(action=action, difficulty=difficulty), self.assertRaises(ValueError):
+                chat._validate(dict(previous, action=action, course_difficulty=difficulty), "교육과정 추천해줘", {})
+
+    @patch("ai.bedrock._client")
+    def test_live_intake_keeps_individually_grounded_skill_additions(self, client):
+        text = "랭체인과 RAG는 다뤄봤어. Docker는 팀원이 사용했어요."
+        proposed = chat.Turn(add_skills=["LangChain", "Docker", "RAG"])
+        client.return_value.converse.return_value = {
+            "output": {"message": {"content": [{"text": json.dumps(asdict(proposed))}]}}}
+        with patch.dict(os.environ, BEDROCK_MODEL_ID="test"):
+            self.assertEqual(chat.interpret(text, {}, screened=True), chat.Turn(add_skills=["LangChain", "RAG"]))
+        self.assertEqual(client.return_value.converse.call_count, 1)
+
+    @patch("ai.bedrock._client")
+    def test_live_intake_accepts_canonical_names_for_spoken_aliases(self, client):
+        expected = chat.Turn(add_skills=["LangChain", "LangGraph", "RAG"])
+        client.return_value.converse.return_value = {
+            "output": {"message": {"content": [{"text": json.dumps(asdict(expected))}]}}}
+        with patch.dict(os.environ, BEDROCK_MODEL_ID="test"):
+            self.assertEqual(chat.interpret("랭체인 랭크래프 RAG도 다뤄봤어", {}, screened=True), expected)
+        self.assertEqual(client.return_value.converse.call_count, 1)
+        payload = json.loads(client.return_value.converse.call_args.kwargs["messages"][0]["content"][0]["text"])
+        self.assertEqual(payload["skill_spellings"], {"랭체인": "LangChain", "랭크래프": "LangGraph", "RAG": "RAG"})
+
     @patch("ai.bedrock._client")
     def test_model_receives_the_restatement_rule_and_retains_distinct_turns(self, client):
         context = {"skills": ["Docker"], "experiences": ["제가 Docker로 API를 배포했어요"]}

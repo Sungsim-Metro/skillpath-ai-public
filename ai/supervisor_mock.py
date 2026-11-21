@@ -19,10 +19,11 @@ _GAP_SCOPE = re.compile(r"부족|미달|격차|갭|\bgap\b", re.I)
 _ORDINAL = re.compile(r"(첫|한|두|두번|세|네|다섯|마지막|\d+)\s*(?:번\s*째|번째|위|순위)|맨\s*(?:위|처음)|마지막")
 _ORDINALS = {"첫": 1, "한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5}
 _ALL = re.compile(r"전부|모두|둘\s*다|두\s*기술|각각|(?:이|그)\s*기술들")
-_GENERIC = re.compile(r"^(?:AWS\s+Skill\s+Builder|API|AI|AWS\s+Training|Gap)$", re.I)
+_GENERIC = re.compile(r"^(?:AWS\s+Skill\s+Builder|API|AWS\s+Training|Gap)$", re.I)
 _KOREAN_TOPIC = re.compile(r"([가-힣]{2,})(?:\s*(?:관련|입문|기초|심화|기술))?\s*(?:강의|교육\s*과정|강좌)")
 _GENERIC_TOPICS = {"관련", "입문", "기초", "심화", "기술", "부족한", "맞는", "관한", "위한", "그중", "추천", "좋은",
-                   "연결된", "어떤", "위의", "맞춤", "온라인", "첫번째", "번째", "들을", "맞춘", "배울", "실습"}
+                   "연결된", "어떤", "위의", "맞춤", "온라인", "첫번째", "번째", "들을", "맞춘", "배울", "실습",
+                   "초급", "중급", "고급", "상급", "어려운", "쉬운", "높은", "낮은", "난이도"}
 _REPORTED = re.compile(r"뜻했|의미했|가리켰|말했|언급했|원했|희망했|요청했|추천했|선택했")
 _PERSONAL_USE = re.compile(r"사용|활용|썼|써\s*봤|배포|운영|구축|실습|이용|개발|설계|담당|구현")
 
@@ -31,11 +32,13 @@ def _labels(text: str) -> list[str]:
     """명시적으로 등장한 사전 기술, 영문·따옴표 기술명을 찾는다."""
     # AWS 교육 플랫폼·직무 이름은 강의 검색의 주제와 구분한다.
     text = re.sub(r"AWS\s*(?:Skill\s*Builder|Training)|(?:AI|클라우드)\s*엔지니어", " ", text, flags=re.I)
-    names = chat.mentioned_skills(text)
-    for match in chat_mock._LABEL.finditer(text):
-        name = match[0].strip('`"“”‘’\' ')
-        if name and not _GENERIC.fullmatch(name) and not chat.mentioned_skills(name):
-            names.append(name)
+    names = []
+    for part in chat.course_topic_parts(text):
+        names.extend(chat.mentioned_skills(part))
+        for match in chat_mock._LABEL.finditer(part):
+            name = match[0].strip('`"“”‘’\' ')
+            if name and not _GENERIC.fullmatch(name) and not chat.mentioned_skills(name):
+                names.append("AI" if name.casefold() == "ai" else name)
     return _canonical(names)
 
 
@@ -176,6 +179,12 @@ def mock_plan(message: str, context: dict) -> SupervisedTurn:
     if turn.action != "courses":
         return SupervisedTurn(turn, wishes, decisions=["continue"])
     targets, unclear = _targets(message, context, wishes, pending)
+    if turn.course_difficulty and not pending:
+        named = chat.explicit_course_skills(message, [*wishes, *context.get("last_course_skills", [])])
+        if named:
+            targets, unclear = named, False
+        elif context.get("last_course_skills") and not chat.requests_gap_courses(message) and not _ORDINAL.search(message):
+            targets, unclear = list(context["last_course_skills"]), False
     if unclear:
         return SupervisedTurn(chat.Turn(), prior, question=COURSE_QUESTION, decisions=["clarify"])
     return SupervisedTurn(turn, wishes, targets, decisions=["continue"])

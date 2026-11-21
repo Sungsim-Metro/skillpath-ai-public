@@ -49,22 +49,22 @@ def pick_model(rng: random.Random | None = None) -> str | None:
 
 # ---------- 실험 2: 추천 구조 ----------
 
-def _single(skill: str, demand: dict) -> dict:
+def _single(skill: str, demand: dict, **search_options: tuple[str, ...]) -> dict:
     """한 번에 쓰기: 모델 호출 한 번으로 추천 이유를 쓴다(코드 검사만)."""
     from ai.recommend import build_recommendation
 
-    return build_recommendation(skill, demand)[0]
+    return build_recommendation(skill, demand, **search_options)[0]
 
 
-def _reviewed(skill: str, demand: dict) -> dict:
+def _reviewed(skill: str, demand: dict, **search_options: tuple[str, ...]) -> dict:
     """쓰기 → 검토 → 고치기: 별도 호출이 초안을 학습 목표로 검토하고 한 번 고친다(지금 상담의 기본)."""
     from ai.recommend import build_recommendation
 
-    return build_recommendation(skill, demand, review=True)[0]
+    return build_recommendation(skill, demand, review=True, **search_options)[0]
 
 
 # 과정 카드 비교에 쓰는 구조는 (기술, 수요 숫자)를 받아 추천 1건(③ 형식)을 돌려준다.
-STRUCTURES: dict[str, Callable[[str, dict], dict]] = {"single": _single, "reviewed": _reviewed}
+STRUCTURES: dict[str, Callable[..., dict]] = {"single": _single, "reviewed": _reviewed}
 DEFAULT_STRUCTURE = "reviewed"
 # 상담 구조는 사용자 메시지를 받는 시점에 선택한다. 값은 backend.chat.handle_message의 architecture다.
 CHAT_STRUCTURES = {"3": "supervised"}
@@ -105,16 +105,20 @@ def pick_pair(rng: random.Random | None = None) -> tuple[str, str] | None:
     return left, right
 
 
-def recommend_with(structure: str, job_category: str, gap_skills: list[str]) -> list[dict]:
+def recommend_with(structure: str, job_category: str, gap_skills: list[str], *,
+                   evidence: dict[str, dict] | None = None, levels: dict[str, float] | None = None,
+                   course_levels: tuple[str, ...] | None = None) -> list[dict]:
     """지정한 구조로 기술마다 추천을 만든다. 한 기술이 검사에 실패하면 그 기술만 빼고, 전부 실패하면 그 오류를 낸다."""
-    from ai.bedrock import BedrockJSONError
-
     build = STRUCTURES[structure]
     out, failed = [], None
-    for skill, demand in api.demand_pairs(job_category, gap_skills):
+    pairs = (api.demand_pairs(job_category, gap_skills) if evidence is None
+             else [(skill, evidence[skill]) for skill in gap_skills])
+    search_options = {} if course_levels is None else {"course_levels": course_levels}
+    for skill, demand in pairs:
         try:
-            out.append(build(skill, demand))
-        except (BedrockJSONError, KeyError, TypeError, ValueError) as exc:
+            rec = build(skill, demand, **search_options)
+            out.append(api.with_recommendation_level(rec, levels, course_levels))
+        except Exception as exc:
             failed = exc
     if failed is not None and not any(rec["courses"] for rec in out):
         raise failed

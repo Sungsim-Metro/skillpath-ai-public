@@ -32,3 +32,16 @@ class ProgramDocumentTest(unittest.TestCase):
                 self.assertEqual(metadata["metadataAttributes"], {
                     "type": "program", "provider": "sample", "course_id": course_id, "recommendable": recommendable,
                 })
+
+    def test_maintenance_courses_are_kept_but_not_recommendable(self):
+        with TemporaryDirectory() as directory:
+            catalog = Path(directory) / "catalog.csv"
+            output = Path(directory) / "programs"
+            with catalog.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["course_id", "title", "description", "objectives", "retiring", "status"])
+                writer.writerow(["one", "Course", "Description", "Objectives", "", "MAINTENANCE"])
+            self.assertEqual(build_documents(catalog, output, "sample"), 1)
+            metadata = json.loads((output / "one.md.metadata.json").read_text(encoding="utf-8"))
+            self.assertFalse(metadata["metadataAttributes"]["recommendable"])
+            self.assertIn("Objectives", (output / "one.md").read_text(encoding="utf-8"))

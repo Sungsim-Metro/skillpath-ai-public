@@ -41,6 +41,21 @@ class Base(unittest.TestCase):
 
 
 class ExperimentsTest(Base):
+    def test_both_recommendation_structures_search_the_requested_level(self):
+        requested = ("고급",)
+        built = rec("검토")
+        built["courses"][0]["level"] = "고급"
+        with patch("ai.recommend.build_recommendation", return_value=(built, None)) as build:
+            for name in ("single", "reviewed"):
+                with self.subTest(name=name):
+                    rows = experiments.recommend_with(name, "cloud_engineer", ["Docker"],
+                                                      evidence={"Docker": built["demand"]}, levels={"Docker": 1},
+                                                      course_levels=requested)
+                    self.assertEqual(build.call_args.kwargs["course_levels"], requested)
+                    self.assertEqual(build.call_args.kwargs.get("review", False), name == "reviewed")
+                    self.assertEqual(rows[0]["user_level"], 1)
+                    self.assertEqual([card["level"] for card in rows[0]["courses"]], ["고급"])
+
     def test_off_by_default_and_mock_mode_never_assigns_a_model(self):
         self.assertIsNone(experiments.pick_model())
         self.assertIsNone(experiments.pick_pair())
@@ -181,12 +196,31 @@ class ChatExperimentTest(Base):
         self.assertEqual([c["reason"] for c in reply.courses], ["기본 추천"])
         self.assertEqual((reply.alternatives, reply.action, reply.failed), ([], "courses", False))
         self.assertTrue(reply.turn_id)
-        self.recs.assert_called_once_with("cloud_engineer", ["Docker"], review=True)
+        self.assertTrue(self.recs.call_args.kwargs["review"])
+
+    def test_both_structures_rank_for_the_diagnosis_from_the_same_gap_snapshot(self):
+        gap = {**GAP[0], "user_level": 3, "required_level": 4}
+        self.start("backend.api.get_gap", return_value=[gap])
+        self.env({"AB_STRUCTURES": "single,reviewed"})
+
+        def build(skill, demand):
+            return {"gap_skill": skill, "demand": demand, "courses": [
+                dict(COURSE, level="기초"), dict(COURSE, level="중급"),
+            ]}
+
+        self.intake.return_value = Turn(action="courses")
+        with patch.dict(experiments.STRUCTURES, single=build, reviewed=build), \
+                patch("backend.api.get_demand", side_effect=AssertionError("gap snapshot already available")):
+            reply = chat.handle_message(self.state, "과정 추천해줘", job="cloud_engineer",
+                                        sidebar_skills=[], sidebar_levels={"custom:Docker": 3})
+        self.assertEqual(len(reply.alternatives), 2)
+        for side in reply.alternatives:
+            self.assertEqual([c["level"] for c in side["courses"]], ["중급", "기초"])
 
     def test_two_structures_are_shown_side_by_side_with_the_same_checks(self):
         built = {"single": [rec("한 번에 쓴 이유")], "reviewed": [rec("검토한 이유")]}
         self.start("backend.experiments.pick_pair", return_value=("single", "reviewed"))
-        made = self.start("backend.experiments.recommend_with", side_effect=lambda name, job, skills: built[name])
+        made = self.start("backend.experiments.recommend_with", side_effect=lambda name, *args, **kwargs: built[name])
         reply = self.send(Turn(action="courses"))
         self.assertEqual([a["structure"] for a in reply.alternatives], ["single", "reviewed"])
         self.assertEqual([a["courses"][0]["reason"] for a in reply.alternatives], ["한 번에 쓴 이유", "검토한 이유"])
@@ -197,7 +231,7 @@ class ChatExperimentTest(Base):
         self.assertIn("더 도움이 되는 쪽", reply.text)
 
     def test_one_failed_structure_falls_back_to_the_other_without_a_choice(self):
-        def build(name, job, skills):
+        def build(name, job, skills, **kwargs):
             if name == "single":
                 raise ValueError("검사 실패")
             return [rec("검토한 이유")]
@@ -209,7 +243,7 @@ class ChatExperimentTest(Base):
         self.assertEqual(reply.courses[0]["reason"], "검토한 이유")
         self.assertFalse(reply.failed)
         empty = {"gap_skill": "Docker", "demand": rec("")["demand"], "courses": []}
-        made.side_effect = lambda name, job, skills: [rec("한 번에 쓴 이유")] if name == "single" else [empty]
+        made.side_effect = lambda name, *args, **kwargs: [rec("한 번에 쓴 이유")] if name == "single" else [empty]
         reply = self.send(Turn(action="courses"))                      # 검토한 쪽이 비면 검토 안 한 쪽만 혼자 나가지 않는다
         self.assertEqual((reply.alternatives, reply.courses, reply.failed), ([], [], False))
         made.side_effect = ValueError("검사 실패")                      # 둘 다 실패하면 과정을 보여 주지 않는다
@@ -221,12 +255,14 @@ class ChatExperimentTest(Base):
         self.env({"BEDROCK_MOCK": "0", "BEDROCK_MODEL_ID": "default-model", "EXPERIMENT_MODELS": "cheap-model",
                   "DYNAMODB_FEEDBACK_TABLE": "feedback"})
         seen = []
-        self.intake.side_effect = lambda *a, **k: seen.append(bedrock.current_model()) or Turn(action="summary")
+        self.intake.side_effect = lambda *a, **k: seen.append(bedrock.current_model()) or Turn(action="note")
+        self.start("ai.chat_reply.write_reply",
+                   side_effect=lambda *a, **k: seen.append(bedrock.current_model()) or k["draft"])
         save = self.start("backend.experiments.save_feedback")
-        reply = chat.handle_message(self.state, "상태", job="cloud_engineer", sidebar_skills=[])
-        self.assertEqual((seen, reply.model), (["cheap-model"], "cheap-model"))
+        reply = chat.handle_message(self.state, "Docker는 어떻게 연습할까?", job="cloud_engineer", sidebar_skills=[])
+        self.assertEqual((seen, reply.model), (["cheap-model", "cheap-model"], "cheap-model"))
         recorded = save.call_args.kwargs                               # 평가가 없어도 턴의 배정과 토큰은 남긴다
-        self.assertEqual((recorded["model"], recorded["action"], recorded["failed"]), ("cheap-model", "summary", None))
+        self.assertEqual((recorded["model"], recorded["action"], recorded["failed"]), ("cheap-model", "note", None))
         self.assertEqual(set(recorded["turn_tokens"]), {"input", "output"})
         self.intake.side_effect = ChatIntakeError("해석 실패")
         reply = chat.handle_message(self.state, "상태", job="cloud_engineer", sidebar_skills=[])

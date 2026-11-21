@@ -81,6 +81,27 @@ class RealRecommendationsTest(unittest.TestCase):
                 api.get_recommendations("cloud_engineer", GAP)
         self.assertEqual(self.build.call_count, 6)
 
+    def test_requested_difficulty_has_its_own_cache_and_does_not_replace_the_diagnosis(self) -> None:
+        def choose(skill, demand, *, review=False, course_levels=None):
+            rec, _ = fake_build(skill, demand)
+            card = rec["courses"][0]
+            rec["courses"] = [dict(card, level=value) for value in course_levels or ("기초",)]
+            return rec, None
+
+        self.build.side_effect = choose
+        def request(course_levels=None):
+            return api.get_recommendations("cloud_engineer", ["AWS"], review=True,
+                                           levels={"AWS": 4}, course_levels=course_levels)[0]
+        default = request()
+        advanced = request(("고급",))
+        mixed = request(("고급", "중급"))
+        self.assertEqual([card["level"] for card in default["courses"]], ["기초"])
+        self.assertEqual([card["level"] for card in advanced["courses"]], ["고급"])
+        self.assertEqual([card["level"] for card in mixed["courses"]], ["고급", "중급"])
+        self.assertEqual(advanced["user_level"], 4)
+        self.assertEqual(request(("고급",)), advanced)
+        self.assertEqual(self.build.call_count, 3)
+
     def test_cache_keeps_only_recent_entries(self) -> None:
         with patch.object(api, "RECOMMEND_CACHE_MAX", 2):
             for total in (12, 13, 14):  # 수요 숫자가 달라 서로 다른 키 3개
@@ -111,6 +132,17 @@ class RealRecommendationsTest(unittest.TestCase):
 
 
 class MockModeTest(unittest.TestCase):
+    def test_explicit_level_uses_the_search_instead_of_fixed_mock_cards(self) -> None:
+        api._recommend_cache.clear()
+        self.addCleanup(api._recommend_cache.clear)
+        rec, _ = fake_build("AWS", {})
+        rec["courses"][0]["level"] = "고급"
+        with patch.dict(os.environ, {"BEDROCK_MOCK": "1"}), \
+                patch("ai.recommend.build_recommendation", return_value=(rec, None)) as build:
+            rows = api.get_recommendations("cloud_engineer", ["AWS"], course_levels=("고급",))
+        self.assertEqual(build.call_args.kwargs["course_levels"], ("고급",))
+        self.assertEqual([c["level"] for c in rows[0]["courses"]], ["고급"])
+
     def test_mock_mode_is_unchanged(self) -> None:
         api._recommend_cache.clear()
         with patch.dict(os.environ, {"BEDROCK_MOCK": "1"}):

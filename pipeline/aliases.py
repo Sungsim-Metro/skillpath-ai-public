@@ -23,10 +23,15 @@ def skill_aliases() -> dict[str, list[str]]:
     except FileNotFoundError:
         if os.getenv("BEDROCK_MOCK", "1") != "1":
             raise
-    areas = json.loads(ALIAS_FILE.with_name("skill_areas.json").read_text(encoding="utf-8"))
     demo = {"Docker": ["도커"], "Python": ["파이썬"], "Linux": ["리눅스"],
-            "Kubernetes": ["쿠버네티스", "k8s"], "Git": ["깃"]}
-    return {name: demo.get(name, []) for name in areas["skills"]}
+            "Kubernetes": ["쿠버네티스", "k8s"], "Git": ["깃"],
+            "LangChain": ["랭체인"], "LangGraph": ["랭그래프", "랭크래프"],
+            "TensorFlow": ["텐서플로", "텐서플로우"], "PyTorch": ["파이토치"]}
+    areas = json.loads(ALIAS_FILE.with_name("skill_areas.json").read_text(encoding="utf-8"))["skills"]
+    ai_areas = ALIAS_FILE.with_name("skill_areas_ai_engineer.json")
+    if ai_areas.is_file():
+        areas.update(json.loads(ai_areas.read_text(encoding="utf-8"))["skills"])
+    return {name: demo.get(name, []) for name in areas}
 
 
 def _key(s: str) -> str:

@@ -1,7 +1,7 @@
-"""가드레일 (#24). 상담 입력과 답을 검사한다. 화면 상담(ai.chat.guard_input)과 상담 에이전트(ai.agent)가 같이 쓴다.
+"""가드레일 (#24). 화면 상담과 상담 에이전트(ai.agent)의 입력·생성 답변을 검사한다.
 
   check_input(text)  -> GuardResult   사용자 입력. 결과는 통과 / 안전상 차단 / 검사 실패(is_check_failure) 셋
-  check_output(text) -> GuardResult   모델 답(상담 에이전트만). 막히면 OUTPUT_BLOCK_MESSAGE
+  check_output(text) -> GuardResult   화면 답변 작성기(ai.chat_reply)와 상담 에이전트가 생성한 문장.
 
 팀 결정 (11/10, 11/18 #24)
 - 성별·학력·인종(국적)·지역을 근거로 능력이나 채용 가능성을 판단하거나 차별하는 요청은 막는다. 나이는 막지 않는다.
@@ -270,7 +270,7 @@ def is_check_failure(result: GuardResult) -> bool:
 
 
 def message_for(result: GuardResult, blocked_message: str) -> str:
-    """상담 에이전트가 막혔을 때 보여줄 문장. 검사 실패는 UNAVAILABLE, 개인정보 가리기는 PII, 나머지는 blocked_message."""
+    """상담에서 차단될 때 표시할 문장. 검사 실패는 UNAVAILABLE, 개인정보 가리기는 PII, 나머지는 blocked_message."""
     if is_check_failure(result):
         return UNAVAILABLE_MESSAGE
     if result.category in ("가리기", "개인정보"):
@@ -284,6 +284,9 @@ def check_input(text: str) -> GuardResult:
 
 
 def check_output(text: str) -> GuardResult:
-    """모델 답 검사. 상담 에이전트만 부른다(화면 상담은 답 검사를 하지 않음).
-    코드 검사는 하지 않고, 실제 모드이고 GUARDRAIL_OUTPUT=1 일 때 Bedrock Guardrails 만. 꺼져 있으면 늘 통과."""
+    """화면 답변 작성기와 상담 에이전트가 생성한 문장을 검사한다.
+
+    실제 모드에서 GUARDRAIL_OUTPUT=1이면 Bedrock Guardrails를 호출한다.
+    화면은 차단되거나 검사를 완료하지 못한 생성 문장을 사용자에게 표시하지 않는다.
+    """
     return _check(text or "", "OUTPUT")

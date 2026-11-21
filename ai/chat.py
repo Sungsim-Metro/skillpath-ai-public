@@ -12,7 +12,7 @@ from backend.jobs import JOBS
 from pipeline.aliases import normalize_skill, skill_aliases
 
 STATUSES = ("ok", "blocked", "unsupported", "clarify_role", "incomplete", "out_of_scope")
-ACTIONS = ("note", "summary", "gap", "courses")
+ACTIONS = ("note", "summary", "gap", "requirements", "courses")
 INTAKE_MAX_TOKENS = 2400  # 경험 문장을 그대로 인용하므로 발화가 길면 답도 길다. 1200에서는 여러 줄 발화의 JSON이 잘릴 수 있었다
 LIST_FIELDS = ("add_skills", "remove_skills", "add_experiences", "remove_experiences",
                "save_skills", "save_experiences", "experience_skills")
@@ -34,6 +34,7 @@ class Turn:
     save_experiences: list[str] = field(default_factory=list)
     save_job: bool = False
     experience_skills: list[str] = field(default_factory=list)
+    course_difficulty: str | None = None
 
 
 class ChatIntakeError(RuntimeError):
@@ -48,26 +49,45 @@ def _alias_pattern() -> re.Pattern:
     return re.compile(r"(?<![a-z0-9])(?:" + alternatives + r")(?![a-z0-9])", re.I)
 
 
+def skill_spellings(text: str) -> dict[str, str]:
+    """Map skill spellings in the user's words to their dictionary names."""
+    names = {}
+    for match in _alias_pattern().finditer(text):
+        if canonical := normalize_skill(match[0]):
+            names[match[0]] = canonical
+    return names
+
+
 def mentioned_skills(text: str) -> list[str]:
     """문장에 실제로 나타난 기술의 별칭을 대표명으로 변환한다."""
-    return list(dict.fromkeys(normalize_skill(match[0]) for match in _alias_pattern().finditer(text)))
+    return list(dict.fromkeys(skill_spellings(text).values()))
 
 
 # 완료된 서술과 주체가 바뀌는 지점만 나눠 기술과 그 행동을 함께 둔다.
 _CLAUSES = re.compile(
-    r"\.(?![a-zA-Z0-9])|[!?。！？\n]+|(?:고|지만|는데),\s*|,\s*(?=(?:그리고|저는|제가|나는|내가|팀|동료))|"
-    r"(?<=고)\s+(?!(?:있|싶))|(?<=지만)\s+|(?<=는데)\s+|(?<=으며)\s+|"
+    r"\.(?![a-zA-Z0-9])|[!?。！？\n]+|(?:(?<=고)|(?<=지만)|(?<=는데)),\s*|"
+    r"(?:(?<=어요)|(?<=습니다)|(?<=했어)|(?<=봤어)|(?<=했다)|(?<=봤다)),?\s+|"
+    r",\s*(?=(?:그리고|저는|제가|나는|내가|팀|동료))|"
+    r"(?<=고)\s+(?!(?:있|싶))|(?<=지만)\s+|(?<=니다만),?\s+|(?<=는데)\s+|(?<=으며)\s+|"
     r"\s+(?=반면|하지만|그리고)"
 )
 THIRD_PARTY = re.compile(r"(?:팀(?:원|장)?|동료|친구|다른\s*사람|선배|회사)(?:들)?(?:이|가|은|는|에서|의)")
 SELF = re.compile(r"(?:제가|저는|나는|내가|저의|내\s*담당|제가\s*직접)")
+_EXPERIENCE_BASIS = re.compile(
+    r"(?:(?:사용|활용|이용|설계|구현|개발|배포|구축|운영|테스트)(?:한|했던|해\s*본)|"
+    r"(?:다뤄|써)\s*본|쓴|만든)\s*경험(?P<basis>을\s*(?:기준|바탕|토대)으로)\s+"
+)
 WISH = re.compile(r"싶|예정|계획|희망|배우려|배워야|익히려|해야\s*할|해보고자|해보려고|할\s*까")
-NEGATION = re.compile(r"아니|아닌|않|안\s*(?:썼|써|했|해|사용)|못\s*(?:했|해|썼|써)|"
+NEGATION = re.compile(r"아니|아닌|않|안\s*(?:썼|써|했|해|사용|다뤄)|못\s*(?:했|해|썼|써|다뤄)|"
                        r"(?:경험|적|사용한\s*적)(?:이|은|는)?\s*없|(?:빼|제외|지워|삭제)\s*(?:줘|해)")
 COURSE = re.compile(r"강의|강좌|교육\s*과정|코스|수강|과정")
+COURSE_DIFFICULTIES = ("기초", "중급", "고급", "harder", "easier", "above_basic", "below_advanced")
+_COURSE_LEVEL = r"입문|초급|기초|중급|심화|상급|고급"
+_REPLACE_COURSE = re.compile(r"말고|대신(?:에)?|아니라|빼고|제외하고")
+_GAP_COURSE = re.compile(r"부족|미달|격차|갭|\bgap\b", re.I)
 
 
-def owned_clauses(message: str) -> Iterator[str]:
+def owned_clauses(message: str, *, statements_only: bool = False) -> Iterator[str]:
     """원문에서 제삼자 주어가 지배하는 절을 제외한다."""
     third_party = False
     boundary = 0
@@ -90,7 +110,13 @@ def owned_clauses(message: str) -> Iterator[str]:
             continue
         if actor and speaker:
             clause = clause[speaker[-1].start():]
-        yield clause
+        if statements_only and (basis := _EXPERIENCE_BASIS.search(clause)):
+            fact = clause[:basis.start("basis")]
+            if SELF.search(fact) and not re.search(r"만약|가정", fact):
+                yield fact
+            clause = clause[basis.end():]
+        if not (statements_only and delimiter and re.search(r"[?？]", delimiter[0])):
+            yield clause
 
 
 def skill_source(clause: str) -> str:
@@ -135,9 +161,10 @@ _SAVE_COMMAND = re.compile(
 )
 
 
+_SENTENCE_BREAK = r"(?<=[!?。！？])\s*|(?<=\.)(?![a-zA-Z0-9])\s*|\n+"
 # "Docker 말고 Python만"처럼 정정한 대상은 마지막 긍정 요청에만 속한다.
-_REQUEST_BREAK = re.compile(r"(?<=[!?。！？])\s*|(?<=\.)(?![a-zA-Z0-9])\s*|\n+|(?:말고|아니라|빼고|제외하고|"
-                            r"했지만|했는데|었는데|았는데|썼고|했고)\s*")
+_REQUEST_BREAK = re.compile(_SENTENCE_BREAK + r"|(?:말고|아니라|빼고|제외하고|했지만|했는데|었는데|았는데|썼고|했고)\s*")
+_EXPERIENCE_BREAK = re.compile(_SENTENCE_BREAK + r"|[았었했봤썼](?:어(?:요)?|습니다|고|는데(?:요)?|지만|다)(?=[,\s]|$),?\s*")
 _SAVE_REFUSAL = re.compile(r"^\s*(?:은|는|도|을|를)?\s*(?:아직|나중|보류|안|말|해\s*(?:주|두|놓)지|"
                            r"하지|해도\s*되나|해\s*줘야|해야\s*(?:하|해))")
 _EXPERIENCE_TARGET = re.compile(r"경험|작업|프로젝트|맡은\s*일")
@@ -165,6 +192,78 @@ def save_target_names(scope: str, known: list[str]) -> list[str]:
 
 def request_clauses(message: str) -> list[str]:
     return [clause.strip() for clause in _REQUEST_BREAK.split(message) if clause.strip()]
+
+
+def requirement_question(message: str) -> str:
+    """Keep the questions or trailing request after a description of prior experience."""
+    clauses = [part.strip() for part in _EXPERIENCE_BREAK.split(message) if part.strip()]
+    questions = [clause for clause in clauses if clause.endswith(("?", "？"))]
+    return " ".join(questions or clauses[-1:])
+
+
+def _course_scope(message: str) -> str:
+    clauses = [part.strip() for part in _EXPERIENCE_BREAK.split(message) if part.strip()]
+    return clauses[-1] if clauses else ""
+
+
+def excluded_course_skills(message: str, previous: list[str]) -> set[str]:
+    """Find previous topics explicitly named as exclusions in a course revision."""
+    scope = _course_scope(message)
+    if not previous or not _REPLACE_COURSE.search(scope):
+        return set()
+    aliases = skill_aliases()
+    spellings = {spelling.casefold(): name.casefold() for name in previous
+                 for spelling in (name, *aliases.get(name, []))}
+    alternatives = "|".join(re.escape(name) for name in sorted(spellings, key=len, reverse=True))
+    topic = rf"(?<![a-z0-9])(?:{alternatives})(?![a-z0-9])"
+    exclusions = re.compile(
+        rf"(?P<topics>{topic}(?:\s*(?:[,/·]|와|과|하고|및|이?랑)\s*{topic})*)"
+        rf"(?:\s*(?:강의|교육\s*과정|과정))?\s*(?:은|는|을|를|도|만)?\s*(?:{_REPLACE_COURSE.pattern})", re.I,
+    )
+    return {spellings[name.casefold()] for match in exclusions.finditer(scope)
+            for name in re.findall(topic, match["topics"], re.I)}
+
+
+def requests_gap_courses(message: str) -> bool:
+    """Check whether the recommendation request explicitly refers to skill gaps."""
+    return bool(_GAP_COURSE.search(_course_scope(message)))
+
+
+def course_topic_parts(text: str) -> Iterator[str]:
+    """Split slash-delimited topics, keeping registered names such as CI/CD intact."""
+    text = text.replace("／", "/")
+    start = 0
+    if "/" in text:
+        for match in re.finditer(_alias_pattern().pattern + r"|/", text, re.I):
+            if match[0] == "/":
+                if part := text[start:match.start()].strip():
+                    yield part
+                start = match.end()
+    if part := text[start:].strip():
+        yield part
+
+
+def explicit_course_skills(message: str, known: Iterable[str] = ()) -> list[str]:
+    """Read named topics from the course request, preserving its final correction."""
+    scope = _course_scope(message)
+    # A level correction can follow the topic, as in "EC2 기초 말고 중급".
+    scope = re.sub(rf"(?:{_COURSE_LEVEL})(?:\s*(?:과정|강의|단계|수준))?\s*(?:말고|대신|빼고|제외하고)", " ", scope)
+    scope = _REPLACE_COURSE.split(scope)[-1]
+    scope = re.sub(r"AWS\s*(?:Skill\s*Builder|Training)|(?:AI|클라우드)\s*엔지니어", " ", scope, flags=re.I)
+    known = list(known)
+    topics = {}
+    for part in course_topic_parts(scope):
+        names = target_skills(part, known)
+        remaining = _alias_pattern().sub(" ", part)
+        for name in names:
+            remaining = _literal_skill(name).sub(" ", remaining)
+        for quoted, latin in re.findall(r'[`"“‘\']([^`"”’\'\n]+)[`"”’\']|([A-Za-z][A-Za-z0-9.+#_-]*)', remaining):
+            topic = (quoted or latin).strip()
+            if topic and topic.casefold() not in {"gap", "api", "advanced", "intermediate", "beginner"}:
+                names.append(topic)
+        for name in names:
+            topics.setdefault(name.casefold(), "AI" if name.casefold() == "ai" else name)
+    return list(topics.values())
 
 
 def _target_answer(message: str, context: dict) -> bool:
@@ -228,6 +327,8 @@ _SYSTEM = """사용자의 클라우드·AI 직무 학습 상담 발화를 읽고
 status: 학습 상담이면 ok. 사용자가 목표로 지정한 직무가 미지원이면 unsupported로 끝낸다.
 AI 인프라처럼 지원 직무 중 어느 쪽인지 모호한 목표는 clarify_role이다. 과거 직무, 팀원의 직무, AI 모델 배포 등
 경험 속 단어는 현재 목표가 아니다. 명시한 지원 목표만 job에 코드로 적고 그 외에는 null.
+기술 경험만 말한 경우 context.job을 복사하지 않는다. skill_spellings는 원문에 등장한 기술 표기의
+사전 이름이며, 보유 여부나 경험의 증거는 사용자가 직접 한 행동에서 판단한다.
 needs_role=true이면 기존 직무를 묵시적으로 선택할 수 없다. 직전 상담이 직무 확인을 요청했고
 사용자가 동의하면 확인받은 직무와 원래 요청(action)을 되살린다.
 아직 말하는 중인 미완성 입력은 incomplete, 무관한 요청은 out_of_scope. ok 이외는 기본값으로 끝낸다.
@@ -235,8 +336,22 @@ needs_role=true이면 기존 직무를 묵시적으로 선택할 수 없다. 직
 action: 경험 제공/정정은 note. 강의 추천 앱을 만들었다, 강의를 듣고 싶다, 네트워크 경험이 부족하다
 같은 서술도 note. 실제 자신의 행동만 기록하고 강의 제목에 들어간 기술은 보유로 추측하지 않는다.
 내 상태나 요약은 summary. 부족 역량 또는 무엇부터 공부할지 묻는
-경우 gap. 강의/교육과정을 실제로 찾아 달라고 할 때 courses. 추천은 나중에 등 보류 요청을 지킨다.
+경우 gap. 특정 기술이 필수인지, 어느 정도의 경험이 필요한지, 다른 도구 경험으로도 충분한지를
+물으면 requirements. 'TensorFlow도 따로 경험이 많아야 하나?'는 requirements이고 질문 자체는 보유 경험이 아니다.
+기술 자체의 원리·사용법을 묻는 개념 질문은 note다. 예를 들어 'RAG에서 검색이 왜 필요해?'는
+검색의 역할을 묻는 질문이다. 채용 요건에 해당 기술이 포함되는지를 물으면 requirements다.
+강의/교육과정을 실제로 찾아 달라고 할 때 courses. 추천은 나중에 등 보류 요청을 지킨다.
 직전 상담을 이어서 요청할 때만 history를 사용한다. 추천을 이미 받았다는 이유로 다시 수행하지 않는다.
+course_difficulty는 사용자가 이번에 듣고 싶다고 지정한 과정 난이도이다. 정확한 단계는 기초/중급/고급,
+직전에 추천한 과정보다 어렵게/쉽게는 harder/easier, 기초 제외 또는 중급 이상은 above_basic,
+고급 제외 또는 중급 이하는 below_advanced이다. 예를 들어 직전 추천 뒤 '난이도 높은 걸로 알려줘'는
+action=courses, course_difficulty=harder이다. 비교할 직전 과정 없이 '난이도 높은 강의'를 원하면 고급이다.
+직전 과정의 난이도를 '그럼 중급 수준으로 듣고 싶어'라고 고르면 courses, 중급으로 이어간다.
+이번에 새 기술을 명시하면 이전의 다른 기술은 난이도 비교 기준이 아니다. AWS를 추천한 뒤
+'이번엔 LLM 난이도 높은 강의로 알려줘'라면 LLM의 고급 과정을 요청한 것이다.
+last_course_skills는 지난 추천의 주제, last_course_levels는 실제로 표시된 주제별 과정 단계이다.
+사용자의 숙련도·진단값이나 수강 이력에서 희망 난이도를 추측하지 않는다. 보류·취소·정정에서 마지막 요청만
+반영한다. 희망 난이도가 없거나 과정 요청이 아니면 null이다. 이 필드는 기술·경험·프로필 저장과 무관하다.
 
 add_skills: 이번 발화에서 본인이 실제 사용했다고 밝힌 기술을 원문 표기 또는 대표명으로 적는다.
 그 기술이 context.skills나 context.experiences에 이미 있어도 add_skills에 포함한다.
@@ -273,16 +388,30 @@ def _items(group: str, values: Iterable[str]) -> set[str]:
 def _supported_experience_skills(experiences: list[str], candidates: list[str]) -> set[str]:
     supported = set()
     for text in experiences:
-        for clause in owned_clauses(text):
+        for clause in owned_clauses(text, statements_only=True):
             supported.update(target_skills(skill_source(clause), candidates))
     return _items("skills", supported)
 
 
+def _grounded_skills(claimed: list[str], supported: set[str], error: str, *, saving: bool) -> list[str]:
+    """Keep independently grounded skills in a note without partially approving a profile write."""
+    grounded = [name for name in claimed if (normalize_skill(name) or name.strip()).casefold() in supported]
+    if len(grounded) != len(claimed) and (saving or not grounded):
+        raise ValueError(error)
+    return grounded
+
+
 def _validate(data: dict, message: str, context: dict, *, check_save_scope: bool = True) -> None:
+    data.setdefault("course_difficulty", None)
     if set(data) != set(Turn.__dataclass_fields__):
         raise ValueError("필수 필드가 올바르지 않습니다.")
     if data["status"] not in STATUSES or data["action"] not in ACTIONS:
         raise ValueError("상태 또는 요청 종류가 올바르지 않습니다.")
+    difficulty = data["course_difficulty"]
+    if difficulty is not None and (
+        difficulty not in COURSE_DIFFICULTIES or data["status"] != "ok" or data["action"] != "courses"
+    ):
+        raise ValueError("과정 난이도는 교육과정 요청의 유효한 희망 단계여야 합니다.")
     job = data["job"]
     if job is not None and (not isinstance(job, str) or job not in JOBS):
         raise ValueError("지원 직무 코드가 올바르지 않습니다.")
@@ -328,16 +457,21 @@ def _validate(data: dict, message: str, context: dict, *, check_save_scope: bool
     if FRAGMENT.search(previous):
         sources.append(previous)
     supported = _supported_experience_skills(sources, data["add_skills"])
-    if not _items("skills", data["add_skills"]) <= supported:
-        raise ValueError("보유 기술은 사용자 본인의 발화에서 확인해야 합니다.")
+    data["add_skills"] = _grounded_skills(data["add_skills"], supported,
+                                         "보유 기술은 사용자 본인의 발화에서 확인해야 합니다.", saving=data["save"])
     if any(not any(item in text for text in sources) for item in data["add_experiences"]):
         raise ValueError("추가할 경험은 사용자 발화에서 그대로 인용해야 합니다.")
 
     projected = _items("skills", data["experience_skills"])
     excluded = _items("skills", [*context.get("excluded_skills", []), *data["remove_skills"]])
     active = active_experiences(context, data["add_experiences"], data["remove_experiences"])
-    if projected and not projected <= _supported_experience_skills(active, list(projected)) - excluded:
-        raise ValueError("경험 기반 기술은 현재 확인된 본인 작업에서 직접 사용한 기술만 지정해야 합니다.")
+    if projected:
+        supported = _supported_experience_skills(active, data["experience_skills"]) - excluded
+        data["experience_skills"] = _grounded_skills(
+            data["experience_skills"], supported, "경험 기반 기술은 현재 확인된 본인 작업에서 직접 사용한 기술만 지정해야 합니다.",
+            saving=data["save"],
+        )
+        projected = _items("skills", data["experience_skills"])
 
     last = context.get("last_changes") or {}
     for group in ("skills", "experiences"):
@@ -360,7 +494,8 @@ def _validate(data: dict, message: str, context: dict, *, check_save_scope: bool
 
 
 def intake_context(context: dict) -> dict:
-    keys = ("job", "skills", "experiences", "history", "last_changes", "needs_role", "pending_save", "excluded_skills")
+    keys = ("job", "skills", "experiences", "history", "last_changes", "needs_role", "pending_save", "excluded_skills",
+            "last_course_skills", "last_course_levels")
     return {key: context[key] for key in keys if key in context}
 
 
@@ -440,7 +575,8 @@ def _prune(data: dict, message: str, context: dict) -> None:
         for candidate in (name, _VENDOR_PREFIX.sub("", name)):
             if candidate.strip() and _items("skills", [candidate]) <= _supported_experience_skills(sources, [candidate]):
                 return candidate
-        return None
+        # Retain ungrounded claims on a profile write so validation can reject the whole write.
+        return name if data.get("save") is True else None
 
     data["add_skills"] = list(dict.fromkeys(n for n in map(grounded, data["add_skills"]) if n))
     quotes = []
@@ -461,8 +597,9 @@ def _prune(data: dict, message: str, context: dict) -> None:
                                   if e in confirmed or e in data["add_experiences"]]
     # 경험 기반 기술은 지금 확인된 본인 작업으로 설명되는 것만 둔다
     active = active_experiences(context, data["add_experiences"], data["remove_experiences"])
-    data["experience_skills"] = [n for n in data["experience_skills"]
-                                 if _items("skills", [n]) <= _supported_experience_skills(active, [n])]
+    if data.get("save") is not True:
+        data["experience_skills"] = [n for n in data["experience_skills"]
+                                     if _items("skills", [n]) <= _supported_experience_skills(active, [n])]
 
 
 def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
@@ -479,7 +616,8 @@ def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
     try:
         result = bedrock.converse_json(
             intake_prompt(),
-            json.dumps({"message": message, "context": state}, ensure_ascii=False),
+            json.dumps({"message": message, "context": state, "skill_spellings": skill_spellings(message)},
+                       ensure_ascii=False),
             mock_file="", mock_key="chat_intake", usage_stage="chat_intake", max_tokens=INTAKE_MAX_TOKENS,
             validate=lambda data: (_prune(data, message, state), _validate(data, message, state)),
         )

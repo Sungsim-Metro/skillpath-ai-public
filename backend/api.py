@@ -165,11 +165,19 @@ def get_saved_course_cards(saved: list[dict]) -> list[dict]:
     saved 는 backend.chat_profiles 가 보관하는 [{"title", "url", "level"}] 이다. 주소가 과정 표에 있으면
     rating_avg, rating_count 와 duration_min, language, aws_services 를 더하고 없으면 받은 그대로 둔다. 순서는 바꾸지 않는다.
     """
-    from ai.recommend import _courses, course_info, course_rating
+    from ai.recommend import COURSES_CSV, _courses, course_info, course_rating
+    from pipeline.search import expanded_course_catalog
 
-    by_url = {row["url"]: row for row in _courses().values()}
-    return [{**course, **course_rating(by_url.get(course["url"], {})), **course_info(by_url.get(course["url"], {}))}
-            for course in saved]
+    by_url = {row["url"]: row for row in _courses().values()} if COURSES_CSV.is_file() else {}
+    missing = {course["url"] for course in saved} - by_url.keys()
+    if missing and COURSES_CSV.with_name("catalog_all.csv").is_file():
+        expanded = expanded_course_catalog(COURSES_CSV)
+        by_url.update((row["url"], row) for row in expanded.values() if row["url"] in missing)
+    cards = []
+    for course in saved:
+        row = by_url.get(course["url"], {})
+        cards.append({**course, **course_rating(row), **course_info(row)})
+    return cards
 
 
 def get_level_radar(job_category: str, owned_skills) -> list[dict]:
@@ -358,12 +366,13 @@ def demand_pairs(job_category: str, gap_skills: list[str]) -> list[tuple[str, di
 
 def get_recommendations(job_category: str, gap_skills: list[str], *, review: bool = False,
                         levels: dict[str, float] | None = None,
-                        review_evidence: dict[str, dict] | None = None) -> list[dict]:
+                        review_evidence: dict[str, dict] | None = None,
+                        course_levels: tuple[str, ...] | None = None) -> list[dict]:
     """부족 기술마다 추천(③)을 돌려준다. 찾은 과정이 없으면 courses 가 빈 목록이다.
 
     levels 는 부족 기술의 내 단계 {기술: 0~5}(get_gap 의 user_level)다. 주면 추천마다 user_level 을 적고,
     0~2단계는 기초, 3단계 이상은 중급 과정을 앞에 놓는다(확실한 과정이 불확실한 과정보다 먼저).
-    과정을 새로 찾거나 빼지 않고 순서만 바꾼다. 주지 않으면 전과 같다.
+    course_levels가 있으면 요청한 난이도로 후보를 검색하며, 사용자 단계는 진단 정보로만 표시한다.
 
     가짜 모드는 data/sample 의 추천을 읽는다. 실제 모드는 수요 숫자를 코드로 만들고(get_demand),
     ai.recommend 는 교육과정 KB 검색 결과로 후보를 고르고 Bedrock 모델로 추천 이유를 작성한다.
@@ -374,7 +383,7 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
     이 내부 결과의 demand는 None이며, 검토한 과정 목표만 사유에 쓴다.
     """
     mock = is_mock()
-    if not mock or review:
+    if not mock or review or course_levels is not None:
         gap_skills = gap_skills[:RECOMMEND_TOP_N]  # 기술별 모델 호출 비용과 화면 길이를 제한한다
     if review_evidence is None:
         pairs = demand_pairs(job_category, gap_skills)
@@ -382,25 +391,26 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
         if not review:
             raise ValueError("수요 근거 지정은 검토를 거치는 추천에서만 지원합니다.")
         pairs = [(skill, review_evidence.get(skill)) for skill in gap_skills]
-    if mock and not review:
+    if mock and not review and course_levels is None:
         by_skill = {r["gap_skill"]: r for r in _load("recommendations.json", job_category)}
-        return [_with_level(by_skill[skill] if skill in by_skill else {"gap_skill": skill, "demand": demand, "courses": []},
-                            levels)
-                for skill, demand in pairs]
+        return [
+            with_recommendation_level(by_skill.get(skill, {"gap_skill": skill, "demand": demand, "courses": []}), levels)
+            for skill, demand in pairs
+        ]
 
     from ai.bedrock import current_model
 
     kb_scope = None if mock else (os.getenv("AWS_REGION", "ap-northeast-2"), os.getenv("BEDROCK_KB_ID", ""))
     # 모델도 키에 넣는다. 상담 실험은 메시지마다 모델이 달라서, 다른 모델이 쓴 이유가 섞여 나오면 안 된다
-    key = (job_category, review, mock, kb_scope, None if mock else current_model(),
+    key = (job_category, review, mock, kb_scope, None if mock else current_model(), course_levels,
            tuple((skill, (d["postings"], d["of"], d["required_ratio"]) if d is not None else None)
                  for skill, d in pairs))
     with _recommend_cache_lock:
         cached = _recommend_cache.get(key)
         if cached is not None:
             _recommend_cache.move_to_end(key)  # 방금 쓴 것으로 표시
-    if cached is not None:  # 단계는 캐시 키에 넣지 않는다. 과정과 이유는 단계와 무관하고 순서만 바꾼다
-        return [_with_level(rec, levels) for rec in deepcopy(cached)]
+    if cached is not None:
+        return [with_recommendation_level(rec, levels, course_levels) for rec in deepcopy(cached)]
 
     from ai.bedrock import BedrockJSONError
     from ai.recommend import build_recommendation
@@ -408,10 +418,11 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
     out = []
     failed_review = None
     unavailable = None
+    search_options = {} if course_levels is None else {"course_levels": course_levels}
     for skill, demand in pairs:
         if review:
             try:
-                rec, result = build_recommendation(skill, demand, review=True)
+                rec, result = build_recommendation(skill, demand, review=True, **search_options)
             except (BedrockJSONError, KeyError, TypeError, ValueError) as exc:
                 failed_review = exc
                 continue
@@ -419,13 +430,15 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
                 unavailable = exc
                 continue
         else:
-            rec, result = build_recommendation(skill, demand)
+            rec, result = build_recommendation(skill, demand, **search_options)
         out.append(rec)
         if result is not None:
             logger.info("추천 %s: 시도 %d회, 토큰 %s", skill, result.attempts, result.usage.get("totalTokens", 0))
+            if review and result.data.get("incomplete_review"):
+                failed_review = ValueError("일부 과정의 추천 근거를 검증하지 못했습니다.")
     if unavailable is not None or failed_review is not None:
         if any(rec["courses"] for rec in out):
-            return [_with_level(rec, levels) for rec in out]
+            return [with_recommendation_level(rec, levels, course_levels) for rec in out]
         if unavailable is not None:
             raise unavailable
         raise failed_review
@@ -434,17 +447,19 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
         _recommend_cache.move_to_end(key)
         while len(_recommend_cache) > RECOMMEND_CACHE_MAX:
             _recommend_cache.popitem(last=False)
-    return [_with_level(rec, levels) for rec in deepcopy(out)]
+    return [with_recommendation_level(rec, levels, course_levels) for rec in deepcopy(out)]
 
 
-def _with_level(rec: dict, levels: dict[str, float] | None) -> dict:
-    """추천 1건에 user_level 을 적고, 단계에 맞는 난이도의 과정을 앞으로 옮긴다. levels 가 없으면 그대로 둔다.
-
-    "불확실" 과정이 "확실" 과정을 앞지르지 않는다. 같은 조건 안의 순서는 그대로 둔다(정렬은 안정적이다).
-    """
+def with_recommendation_level(rec: dict, levels: dict[str, float] | None,
+                              course_levels: tuple[str, ...] | None = None) -> dict:
+    """Attach the user's assessed level. Apply assessment-based ordering only without a course preference."""
+    if course_levels is not None:
+        rec = {**rec, "courses": [card for card in rec["courses"] if card["level"] in course_levels]}
     if levels is None or rec["gap_skill"] not in levels:
         return rec
     level = levels[rec["gap_skill"]]
+    if course_levels is not None:
+        return {**rec, "user_level": whole(level)}
     first = course_level_first(level)
     courses = sorted(rec["courses"], key=lambda c: (c.get("match") == "uncertain", c.get("level") != first))
     return {**rec, "user_level": whole(level), "courses": courses}

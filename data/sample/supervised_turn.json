@@ -2,6 +2,7 @@
   "turn": {
     "status": "ok",
     "action": "courses",
+    "course_difficulty": "고급",
     "job": null,
     "add_skills": [],
     "remove_skills": [],

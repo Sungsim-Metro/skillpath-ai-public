@@ -190,7 +190,7 @@ uv run --python 3.11 --with boto3 python -m unittest ai.test_extract backend.tes
 export AWS_PROFILE=kosa AWS_DEFAULT_REGION=ap-northeast-2
 stack=skillpath-learning-programs-kb
 program_dir=$(mktemp -d)
-python -m pipeline.build_program_documents --output "$program_dir"
+uv run --python 3.11 python -m pipeline.build_program_documents --catalog data/courses/catalog_all.csv --output "$program_dir"
 aws s3 sync "$program_dir/" "s3://${PROGRAM_BUCKET:?}/skillpath/learning-programs/programs/"
 kb=$(aws cloudformation describe-stacks --stack-name "$stack" --query "Stacks[0].Outputs[?OutputKey=='KnowledgeBaseId'].OutputValue | [0]" --output text)
 source_id=$(aws cloudformation describe-stacks --stack-name "$stack" --query "Stacks[0].Outputs[?OutputKey=='DataSourceId'].OutputValue | [0]" --output text)
@@ -199,6 +199,10 @@ aws bedrock-agent get-ingestion-job --knowledge-base-id "$kb" --data-source-id "
 ```
 
 마지막 명령에서 `COMPLETE`와 실패 0건을 확인한다. 카탈로그에서 삭제한 과정은 해당 문서와 메타데이터 객체도 S3에서 제거해야 다음 동기화에 반영된다. 로컬 앱의 `.env`에는 스택 출력 `KnowledgeBaseId`를 `BEDROCK_KB_ID`로 설정한다.
+
+2026-11-20 UTC에는 확장 목록 1,270개를 위 KB에 반영했다. 기존에만 있던 추천 불가 과정 2개를 보존해
+총 1,272개 문서이며, 동기화 실패·삭제는 0건이다. 앱의 로컬 `data/courses/courses.csv`는 아직 216개로 유지했다.
+기본 추천은 이 파일을 사용한다. 상담에서 난이도를 지정하면 같은 폴더의 `catalog_all.csv`도 조회해 해당 단계에서 후보를 고른다.
 
 ## 기준 단계 (#90)
 

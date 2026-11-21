@@ -4,14 +4,16 @@ from __future__ import annotations
 import re
 
 from ai.chat import (
-    COURSE, FRAGMENT, NEGATION, SELF, THIRD_PARTY, WISH, Turn, active_experiences, mentioned_skills,
+    COURSE, FRAGMENT, NEGATION, SELF, THIRD_PARTY, WISH, Turn, _course_scope, active_experiences, explicit_course_skills,
+    mentioned_skills,
     owned_clauses, request_clauses, save_scope, save_target_names, skill_source, target_skills,
 )
 from backend.jobs import JOBS
 from pipeline.aliases import normalize_skill
 
-_DONE = re.compile(r"했|했어|했다|했고|했습니다|썼|써\s*(?:봤|왔)|사용해\s*(?:봤|왔)|"
-                   r"해\s*(?:봤|왔|본)|맡았|만들었|다뤘|구축한|개발한|배포한|경험이?\s*있|"
+_DONE = re.compile(r"했|했어|했다|했고|했습니다|썼|씁니다|써\s*(?:봤|왔)|사용해\s*(?:봤|왔)|"
+                   r"해\s*(?:봤|왔|본)|다뤄\s*봤(?:어(?:요)?|는데(?:요)?|습니다|다|고|지만)(?!\w)|"
+                   r"맡았|만들었|다뤘|구축한|개발한|배포한|경험이?\s*있|"
                    r"(?:사용|운영|개발|배포|관리|구현|담당|구축|설계|작업|다룹|다룰\s*수)\s*(?:해요|합니다|중|있)")
 _WORK = re.compile(r"개발|배포|구축|구현|설계|운영|자동화|수집|모니터링|관리|분석|"
                    r"구성|만들|작성|담당|프로젝트|실습|수강|테스트|마이그레이션")
@@ -39,6 +41,20 @@ _ASK = re.compile(r"추천\s*(?:해(?:\s*(?:줘|주세요|줄래)|$)|부탁|좀(
                   r"뭐|무엇|뭘|어디부터|어떤.{0,15}(?:들|좋|있|할)|있을까|궁금|\?|"
                   r"(?:공부|준비|들으?)(?:해?야|을까|할까)|부탁")
 _SUMMARY = re.compile(r"정리|요약|내\s*(?:상태|현황)|지금까지.{0,12}(?:경험|기술)|보유\s*기술.{0,8}(?:보여|알려)")
+_REQUIREMENT = re.compile(r"필수|우대|대체|충분|필요|중\s*하나|(?:많아|알아|써|해|배워|익혀)야")
+_JOB_REQUIREMENT = re.compile(r"(?:채용|공고|직무|취업|지원\s*자격).{0,40}(?:필요|필수|우대|요건|요구|조건|대체|충분)")
+_EXPLANATION = re.compile(r"왜|어떻게|원리|동작|작동|용도|사용법|무슨\s*역할")
+_QUESTION_END = re.compile(r"(?:인가|한가|하나|되나|일까|할까|될까)(?:요)?[.\s]*$")
+_LEVEL_NAME = re.compile(r"기초|입문|초급|중급|고급|상급|심화|\b(?:beginner|intermediate|advanced)\b", re.I)
+_COURSE_LEVELS = {"입문": "기초", "초급": "기초", "beginner": "기초", "intermediate": "중급",
+                  "심화": "고급", "상급": "고급", "advanced": "고급"}
+_HARDER = re.compile(r"어려운|어렵게|고난도|높은\s*(?:난이도|단계)|(?:난이도|단계)[가를]?\s*(?:좀\s*)?(?:더\s*)?(?:높은|높게|높여|올려)|"
+                     r"한\s*단계\s*(?:위|높|올)")
+_EASIER = re.compile(r"쉬운|쉽게|낮은\s*(?:난이도|단계)|(?:난이도|단계)[가를]?\s*(?:좀\s*)?(?:더\s*)?(?:낮은|낮게|낮춰|내려)|"
+                     r"한\s*단계\s*(?:아래|낮|내)")
+_LEVEL_REPLY = re.compile(r"걸로|것으로|단계로|과정으로|(?:고급|중급|기초|초급|입문|심화|상급)"
+                          r"(?:으로|로|만|부터|\s*(?:말고|이상|이하)|[.!?]*$)")
+_LEVEL_QUESTION = re.compile(r"왜|이유|무슨\s*뜻|어떤\s*뜻")
 _ROLE = re.compile(r"(?:[A-Za-z가-힣]+\s*)?(?:엔지니어|개발자|기획자|분석가|과학자|디자이너|연구원)|"
                    r"AI\s*인프라|인공지능\s*인프라|(?:클라우드|AI|백엔드|데이터)\s*직무|"
                    r"백엔드|프론트엔드", re.I)
@@ -89,10 +105,13 @@ def _action(text: str) -> str:
     for clause in request_clauses(text):
         if _SUMMARY.search(clause):
             action = "summary"
-        if _ASK.search(clause):
+        if _ASK.search(clause) or _QUESTION_END.search(clause):
             if _GAP.search(clause) and not _deferred(clause, _GAP):
                 action = "gap"
-            if COURSE.search(clause) and not _deferred(clause, COURSE) and not _deferred(clause, re.compile("추천")):
+            elif _JOB_REQUIREMENT.search(clause) or (_REQUIREMENT.search(clause) and not _EXPLANATION.search(clause)):
+                action = "requirements"
+            if (COURSE.search(clause) and not _LEVEL_QUESTION.search(clause)
+                    and not _deferred(clause, COURSE) and not _deferred(clause, re.compile("추천"))):
                 action = "courses"
     return action
 
@@ -117,8 +136,48 @@ def _used_skills(clause: str) -> list[str]:
     return list(dict.fromkeys(skills))
 
 
+def _course_difficulty(message: str, action: str, context: dict) -> str | None:
+    """Recognize an explicit level request or an elliptical revision to the last recommendations."""
+    if action not in ("courses", "note"):
+        return None
+    scope = re.split(r"(?:인데|이고|이지만|입니다만|이라서|이니까|싫고|관심\s*없고)[,\s]+", _course_scope(message))[-1].strip()
+    previous = bool(context.get("last_course_skills"))
+    if re.search(r"나중|보류|필요\s*없|하지\s*마|하지\s*말|안\s*(?:볼|들을|찾)|(?:원하|싶)지(?:는)?\s*않|싫어", scope):
+        return None
+    if action == "note":
+        # A level in a statement about one's skills or a conceptual question is not a course request.
+        if not (previous or COURSE.search(scope)) or _LEVEL_QUESTION.search(scope):
+            return None
+        requested = _LEVEL_REPLY.search(scope) or re.search(
+            r"추천|찾아|보여|알려|부탁|바꿔|(?:듣|수강하)고\s*싶|(?:어렵게|쉽게|높여|올려|낮춰|내려)(?:\s*(?:해|줘|주세요)?[.!?\s]*)$", scope)
+        if not requested or re.search(r"내\s*수준|자격|문제|문항|퀴즈|설명|개념|공부|배포|경험", scope):
+            return None
+    matches = list(_LEVEL_NAME.finditer(scope))
+    if matches:
+        last = matches[-1]
+        level = _COURSE_LEVELS.get(last[0].lower(), last[0])
+        tail = scope[last.end():].strip()
+        if re.match(r"(?:단계|수준)?\s*이상", tail):
+            return {"중급": "above_basic", "고급": "고급"}.get(level)
+        if re.match(r"(?:단계|수준)?\s*이하", tail):
+            return {"중급": "below_advanced", "기초": "기초"}.get(level)
+        if re.match(r"(?:(?:과정|강의|단계|수준)(?:은|는|을|를)?\s*)?(?:(?:은|는)\s*)?(?:말고|빼고|제외|아니|아닌|대신)", tail):
+            return {"기초": "above_basic", "고급": "below_advanced"}.get(level)
+        if re.match(r"(?:이에요|예요|입니다|인\s*(?:개발자|엔지니어)|자격)", tail):
+            return None
+        return level
+    if _HARDER.search(scope) or _EASIER.search(scope):
+        previous_topics = set(context.get("last_course_skills", []))
+        requested_topics = set(explicit_course_skills(scope, previous_topics))
+        comparable = previous and requested_topics <= previous_topics
+        if _HARDER.search(scope):
+            return "harder" if comparable else "고급"
+        return "easier" if comparable else "기초"
+    return None
+
+
 def _facts(turn: Turn, message: str, context: dict) -> None:
-    for clause in owned_clauses(message):
+    for clause in owned_clauses(message, statements_only=True):
         if WISH.search(clause) or _deferred(clause, COURSE):
             continue
         if NEGATION.search(clause):
@@ -212,6 +271,9 @@ def mock_turn(message: str, context: dict) -> Turn:
         turn.action = _action(user)
     if (turn.action == "note" and re.search(r"(?:그럼|그중|이제).{0,12}추천해", message)
             and _GAP.search(user) and not _DEFER.search(message)):
+        turn.action = "courses"
+    turn.course_difficulty = _course_difficulty(message, turn.action, context)
+    if turn.course_difficulty:
         turn.action = "courses"
     if FRAGMENT.search(user) and _DONE.search(message):
         fragment = user.rstrip(".… ").strip()

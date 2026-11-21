@@ -3,7 +3,8 @@
 - 과정 후보: pipeline.search.search_courses(skill) (#14). 반환 [{"course_id", "subskill_id", "match"}]
 - match: search_courses 가 돌려준 값을 그대로 쓴다(그 과정이 '이 기술'을 다루는지를 search 가 판단한다).
   course_subskill.csv 의 match 는 '세부 능력'을 다룬다는 증거라 쓰지 않는다.
-  subskill_id 가 None 이면(AWS 처럼 넓은 기술에 지정한 과정 등) 규칙으로 찾은 연결이 아니므로 uncertain 으로 둔다
+  기본 검색에서 subskill_id 가 None 인 지정 입문 과정 등은 uncertain 으로 둔다.
+  난이도를 지정하면 확장 목록의 제목·목표로 확인한 직접 매칭에 세부 능력 연결표가 없을 수 있다.
 - retiring 과정과 학습 목표(objectives)가 빈 과정은 제외한다 (근거로 삼을 내용이 없음)
 - 입력 숫자는 ③ demand 그대로. 지금은 건수로 가정한다 (건수인지 가중 합인지 미정: docs/development.md)
 - 공고 원문과 근거 문장은 넣지 않는다 (CLAUDE.md 원칙 3, 2026-11-12)
@@ -22,7 +23,7 @@ from typing import Optional
 from ai.bedrock import SAMPLE_DIR, USAGE_KEYS, ConverseResult, converse_json, is_mock
 from ai.prompts import recommend_v1 as prompt
 from pipeline.aliases import normalize_skill
-from pipeline.search import search_courses
+from pipeline.search import expanded_course_catalog, search_courses
 
 ROOT = Path(__file__).resolve().parent.parent
 COURSES_CSV = ROOT / "data" / "courses" / "courses.csv"
@@ -118,19 +119,30 @@ def course_info(course: dict) -> dict:
     return info
 
 
-def candidate_courses(skill: str, *, rules_only: bool = False) -> list[dict]:
+def candidate_courses(skill: str, *, rules_only: bool = False,
+                      course_levels: tuple[str, ...] | None = None) -> list[dict]:
     """search_courses 결과에서 과정 후보를 고른다. 결과가 과정 데이터와 맞지 않으면 오류를 낸다."""
-    if rules_only and is_mock() and not COURSES_CSV.exists():
+    if course_levels == ():
+        return []
+    if rules_only and is_mock() and not COURSES_CSV.exists() and (
+        course_levels is None or not COURSES_CSV.with_name("catalog_all.csv").is_file()
+    ):
         demo = json.loads((SAMPLE_DIR / "chat_courses.json").read_text(encoding="utf-8"))
-        return demo["courses"].get(skill, [])
+        return [c for c in demo["courses"].get(skill, []) if course_levels is None or c["level"] in course_levels]
     out = []
-    links = search_courses(skill, mode="rules") if rules_only else search_courses(skill)
+    options = {"course_levels": course_levels} if course_levels is not None else {}
+    if rules_only:
+        options["mode"] = "rules"
+    links = search_courses(skill, **options)
+    if not links:
+        return []
+    catalog = _courses() if course_levels is None else expanded_course_catalog(COURSES_CSV)
     for link in links:
         cid, sid = link["course_id"], link["subskill_id"]
-        course = _courses().get(cid)
+        course = catalog.get(cid)
         if course is None:
             raise KeyError(f"search_courses 가 준 과정 {cid} 가 courses.csv 에 없습니다")
-        if sid is None:
+        if sid is None and course_levels is None:
             match = "uncertain"  # 세부 능력 규칙으로 찾은 연결이 아니라 지정한 과정
         else:
             match = link.get("match")
@@ -222,7 +234,7 @@ def _mock_fallback(llm_input: dict) -> ConverseResult:
 
 
 def build_recommendation(
-    skill: str, demand: dict | None, *, review: bool = False,
+    skill: str, demand: dict | None, *, review: bool = False, course_levels: tuple[str, ...] | None = None,
 ) -> tuple[dict, Optional[ConverseResult]]:
     """③ 추천 1건과 LLM 호출 결과(시도 횟수·usage)를 돌려준다. 과정이 없으면 LLM 을 부르지 않는다.
 
@@ -234,7 +246,10 @@ def build_recommendation(
     if demand is None and not review:
         raise ValueError("공고 수요 근거가 없으면 과정 목표 검토가 필요합니다.")
     rec = {"gap_skill": skill, "demand": None if demand is None else dict(demand), "courses": []}
-    courses = candidate_courses(skill, rules_only=True) if review and is_mock() else candidate_courses(skill)
+    options = {"course_levels": course_levels} if course_levels is not None else {}
+    if review and is_mock():
+        options["rules_only"] = True
+    courses = candidate_courses(skill, **options)
     if not courses:
         return rec, None
     llm_input = llm_input_of(skill, demand, courses)
@@ -244,7 +259,7 @@ def build_recommendation(
         for item, course in zip(llm_input["courses"], courses):
             item["match"] = course["match"]
         result = reviewed_reasons(llm_input)
-    elif is_mock() and skill not in _mock_skills():
+    elif is_mock() and (course_levels is not None or skill not in _mock_skills()):
         result = _mock_fallback(llm_input)
     else:
         result = converse_json(

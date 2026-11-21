@@ -225,6 +225,25 @@ class ChatScreenTest(unittest.TestCase):
         row = session_table.iloc[0]
         self.assertEqual((row["입력 토큰"], row["출력 토큰"], row["합계 토큰"], row["재시도"]), (100, 10, 110, 2))
 
+    def test_mixed_experience_and_uncertainty_gets_a_reply_without_adding_an_unclaimed_skill(self):
+        at = set_job(self.open_screen(), "ai_engineer")
+        message = "랭체인이랑 RAG는 써봤고 그래프 쪽은 아직 헷갈려"
+        answer = "LangChain과 RAG를 써 보셨군요. 그래프에서 어떤 부분이 헷갈리셨나요?"
+        parsed = asdict(Turn(add_skills=["LangChain", "RAG"]))
+        responses = [(json.dumps(body, ensure_ascii=False), "end_turn", {})
+                     for body in (parsed, {"reply": answer})]
+        with (patch("ai.chat.guard_input", return_value=True), patch("ai.bedrock.is_mock", return_value=False),
+              patch("ai.bedrock._call", side_effect=responses) as call):
+            at.chat_input[0].set_value(message).run()
+            at.run()
+        self.assertFalse(at.exception)
+        self.assertIn(answer, at.chat_message[-1].text[0].value)
+        state = at.session_state["chat_conversation"]
+        self.assertEqual(state.skills, {"LangChain": True, "RAG": True})
+        self.assertEqual(set(at.session_state["chat_assessment"][1]), {"LangChain", "RAG"})
+        self.assertEqual(state.history[-1]["content"], at.chat_message[-1].text[0].value)
+        self.assertEqual(call.call_count, 2)
+
     def test_in_progress_chat_starts_tracking_with_existing_history(self):
         at = self.open_screen()
         at.chat_input[0].set_value("제가 Docker로 API를 배포했어요.").run()

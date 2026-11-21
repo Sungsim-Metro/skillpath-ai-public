@@ -9,6 +9,22 @@ from ai import chat
 
 
 class SupervisedLearningTest(unittest.TestCase):
+    def test_course_difficulty_reuses_last_targets_or_switches_to_a_new_skill(self):
+        context = {"last_course_skills": ["EC2", "Docker"], "last_course_levels": {"EC2": ["기초"]},
+                   "wishes": ["Git"]}
+        for text, targets, difficulty in [
+            ("난이도 높은 강의를 추천해줘", ["EC2", "Docker"], "harder"),
+            ("고급만", ["EC2", "Docker"], "고급"),
+            ("RAG 고급 과정 추천해줘", ["RAG"], "고급"),
+            ("그럼 중급 수준으로 듣고 싶어", ["EC2", "Docker"], "중급"),
+            ("이번엔 LLM 난이도 높은 강의로 알려줘", ["LLM"], "고급"),
+        ]:
+            with self.subTest(text=text):
+                plan = self.supervisor.interpret_turn(text, context)
+                self.assertEqual((plan.turn.action, plan.targets, plan.turn.course_difficulty),
+                                 ("courses", targets, difficulty))
+                self.assertEqual(plan.wishes, ["Git"])
+
     def setUp(self):
         from ai import supervisor
         self.supervisor = supervisor
@@ -114,6 +130,24 @@ class SupervisedLearningTest(unittest.TestCase):
 
 
 class RealSupervisorBoundaryTest(unittest.TestCase):
+    def test_slash_delimited_model_targets_are_split_before_review(self):
+        for labels in (["AI/", "LLM", "CI/CD"], ["AI/LLM", "CI/CD"]):
+            with self.subTest(labels=labels):
+                self.respond(self.intake(targets=labels, course_difficulty="고급"),
+                             {"decision": "continue", "issue": "none"})
+                plan = self.supervisor.interpret_turn("AI/LLM, CI/CD 심화 과정을 추천해줘", {})
+                self.assertEqual(plan.targets, ["AI", "LLM", "CI/CD"])
+                self.assertEqual(self.requests()[-1]["candidate"]["targets"], plan.targets)
+
+    def test_supervisor_accepts_difficulty_referring_to_previous_course_results(self):
+        context = {"last_course_skills": ["EC2", "Docker"], "last_course_levels": {"EC2": ["기초"]}}
+        self.respond(self.intake(targets=["EC2", "Docker"], course_difficulty="harder"),
+                     {"decision": "continue", "issue": "none"})
+        plan = self.supervisor.interpret_turn("아까보다 좀 더 어려운 걸로", context)
+        self.assertEqual(plan.targets, ["EC2", "Docker"])
+        self.assertEqual(plan.turn.course_difficulty, "harder")
+        self.assertEqual(self.requests()[0]["context"], context)
+
     def setUp(self):
         from ai import supervisor
         self.supervisor = supervisor
@@ -138,6 +172,14 @@ class RealSupervisorBoundaryTest(unittest.TestCase):
     def requests(self):
         return [json.loads(call.kwargs["messages"][0]["content"][0]["text"])
                 for call in self.converse.call_args_list]
+
+    def test_only_grounded_skill_additions_reach_plan_review(self):
+        message = "랭체인과 RAG는 다뤄봤어. Docker는 팀원이 사용했어요."
+        self.respond(self.intake(action="note", scope="none", add_skills=["LangChain", "Docker", "RAG"]),
+                     {"decision": "continue", "issue": "none"})
+        plan = self.supervisor.interpret_turn(message, {})
+        self.assertEqual(plan.turn, chat.Turn(add_skills=["LangChain", "RAG"]))
+        self.assertEqual(self.requests()[-1]["candidate"]["turn"]["add_skills"], ["LangChain", "RAG"])
 
     def test_manager_uses_original_message_and_repairs_wrong_course_scope_once(self):
         raw = "  그 기술 강의 추천해줘  "

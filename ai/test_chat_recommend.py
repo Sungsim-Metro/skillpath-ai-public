@@ -20,14 +20,14 @@ COURSE = {
 DEMAND = {"postings": 8, "of": 12, "required_ratio": 0.25}
 OBJECTIVE = COURSE["objectives"][0]
 DRAFT = {"reasons": [{
-    "course_id": "CATALOG1", "reason": "Docker 컨테이너를 설명하는 과정입니다.", "objective": OBJECTIVE,
+    "course_id": "CATALOG1", "reason": "Docker 컨테이너를 설명하는 과정입니다.", "objective_id": "O1",
 }]}
 
 
 def verdict(decision: str) -> dict:
     return {"reviews": [{
         "course_id": "CATALOG1", "decision": decision, "feedback": "근거를 확인하세요.",
-        "supported_objectives": [OBJECTIVE],
+        "supported_objective_ids": ["O1"],
     }]}
 
 
@@ -65,7 +65,7 @@ class ReviewTest(unittest.TestCase):
 
     def test_repair_uses_only_an_exact_objective_and_source_demand(self):
         unsupported = {"reasons": [{**DRAFT["reasons"][0], "reason": "이 과정이 취업을 보장합니다."}]}
-        fixed = {"corrections": [{"course_id": "CATALOG1", "objective": OBJECTIVE}]}
+        fixed = {"corrections": [{"course_id": "CATALOG1", "objective_id": "O1"}]}
         rec, result = self.build(unsupported, verdict("revise"), fixed)
         self.assertEqual(self.model.call_count, 3)
         self.assertEqual(result.usage["totalTokens"], 9)
@@ -75,7 +75,7 @@ class ReviewTest(unittest.TestCase):
         self.assertNotIn("보장", reason)
 
     def test_bad_correction_is_never_retried_or_shown(self):
-        for correction in ({"corrections": [{"course_id": "CATALOG1", "objective": "Invented."}]},
+        for correction in ({"corrections": [{"course_id": "CATALOG1", "objective_id": "O999"}]},
                            "not valid JSON"):
             with self.subTest(correction=correction):
                 self.model.reset_mock()
@@ -87,19 +87,39 @@ class ReviewTest(unittest.TestCase):
         self.search.return_value = [{**COURSE, "objectives": [OBJECTIVE, "Switch accounts."]}]
         with self.assertRaises(ValueError):
             self.build(DRAFT, verdict("revise"), {
-                "corrections": [{"course_id": "CATALOG1", "objective": "Switch accounts."}],
+                "corrections": [{"course_id": "CATALOG1", "objective_id": "O2"}],
             })
         self.assertEqual(self.model.call_count, 3)
 
-    def test_approval_cannot_override_evidence_ids_or_numbers(self):
-        for change in ({"objective": "Invented."}, {"course_id": "invented"},
-                       {"reason": "구직자 500명에게 추천합니다."}, {"reason": "Azure 실습 과정입니다."},
-                       {"reason": "Explain Docker containers."}):
+    def test_approval_cannot_override_unknown_course_or_objective_id(self):
+        for change in ({"objective_id": "O999"}, {"course_id": "invented"}):
             with self.subTest(change=change):
-                self.model.reset_mock()
                 draft = {"reasons": [{**DRAFT["reasons"][0], **change}]}
                 with self.assertRaises((bedrock.BedrockJSONError, ValueError)):
                     self.build(draft, verdict("approve"))
+
+    def test_invalid_prose_uses_only_the_approved_catalog_objective_and_source_demand(self):
+        for reason in ("구직자 500명에게 추천합니다.", "Azure 실습 과정입니다.", "Learn containers."):
+            with self.subTest(reason=reason):
+                draft = {"reasons": [{**DRAFT["reasons"][0], "reason": reason}]}
+                rec, _ = self.build(draft, verdict("approve"))
+                shown = rec["courses"][0]["reason"]
+                self.assertIn(OBJECTIVE, shown)
+                self.assertIn("12건 중 8건", shown)
+                self.assertNotIn(reason, shown)
+
+    def test_broken_correction_preserves_approved_course_and_suppresses_revised_draft(self):
+        self.search.return_value = [COURSE, {**COURSE, "course_id": "CATALOG2", "title": "다른 과정"}]
+        first = DRAFT["reasons"][0]
+        second = {**first, "course_id": "CATALOG2"}
+        approved = verdict("approve")["reviews"][0]
+        revise = {**approved, "course_id": "CATALOG2", "decision": "revise"}
+        for correction in ("not JSON", {"corrections": [{**second, "objective_id": "O404"}]}):
+            with self.subTest(correction=correction):
+                rec, result = self.build({"reasons": [first, second]}, {"reviews": [approved, revise]}, correction)
+                self.assertEqual([row["title"] for row in rec["courses"]], [COURSE["title"]])
+                self.assertTrue(result.data["incomplete_review"])
+                self.assertEqual(result.usage["totalTokens"], 9)
 
     def test_empty_search_and_failed_review_produce_different_outcomes(self):
         self.search.return_value = []
@@ -164,6 +184,24 @@ class ChatRecommendationApiTest(unittest.TestCase):
                   patch.object(recommend, "search_courses", side_effect=FileNotFoundError)):
                 with self.assertRaises(FileNotFoundError):
                     recommend.build_recommendation("Docker", DEMAND, review=True)
+
+    def test_incomplete_review_is_retried_on_next_request(self):
+        second = {**COURSE, "course_id": "CATALOG2", "title": "다른 과정"}
+        draft = {"reasons": [DRAFT["reasons"][0], {**DRAFT["reasons"][0], "course_id": "CATALOG2"}]}
+        approved = verdict("approve")["reviews"][0]
+        revise = {**approved, "course_id": "CATALOG2", "decision": "revise"}
+        reviews = {"reviews": [approved, revise]}
+        fixed = {"corrections": [{"course_id": "CATALOG2", "objective_id": "O1"}]}
+        responses = (draft, reviews, "invalid", draft, reviews, fixed)
+        with (patch.dict(os.environ, {"BEDROCK_MOCK": "0", "USAGE_LOG": "off"}),
+              patch.object(recommend, "candidate_courses", return_value=[COURSE, second]),
+              patch.object(bedrock, "_call", side_effect=[model_response(r) for r in responses])):
+            def request():
+                return api.get_recommendations("ai_engineer", ["Docker"], review=True,
+                                               review_evidence={"Docker": DEMAND})[0]["courses"]
+
+            self.assertEqual([r["title"] for r in request()], [COURSE["title"]])
+            self.assertEqual([r["title"] for r in request()], [COURSE["title"], second["title"]])
 
     def test_dashboard_cache_cannot_bypass_review(self):
         demand = {"total_postings": 12, "skills": [{"skill": "Docker", "postings": 8, "required": 2}]}

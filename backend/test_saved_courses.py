@@ -63,6 +63,17 @@ class SavedCoursesTest(unittest.TestCase):
         self.assertIn("duration_min", cards[0])  # 과정 표의 소요 시간도 함께 붙는다(2026-11-21)
         self.assertEqual(cards[1], A)  # 과정 표에 없는 주소는 받은 그대로
 
+    def test_saved_advanced_course_recovers_details_from_the_expanded_catalog(self):
+        from ai.recommend import candidate_courses
+
+        course = candidate_courses("LLM", rules_only=True, course_levels=("고급",))[0]
+        saved = chat_profiles.update_saved_courses(self.session, add=[A, course])
+        self.assertEqual(saved[1], {k: course[k] for k in ("title", "url", "level")})
+        unknown, restored = api.get_saved_course_cards(chat_profiles.load_saved_courses(self.session))
+        self.assertEqual(unknown, A)
+        for key in ("title", "level", "duration_min", "language", "rating_avg", "rating_count"):
+            self.assertEqual(restored[key], course[key])
+
 
 if __name__ == "__main__":
     unittest.main()

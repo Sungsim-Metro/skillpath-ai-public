@@ -43,6 +43,15 @@ class SupervisedChatTest(unittest.TestCase):
         self.assertNotIn("Amazon EKS", self.state.history[-1]["content"])
         self.assertIn("result_rejected", result.supervisor_decisions)
 
+    def test_manager_reviews_the_wording_that_reaches_the_user(self):
+        with patch("ai.chat_reply.write_reply") as writer, \
+                patch("ai.supervisor.approve_result", return_value=True) as reviewer:
+            result = self.send("Docker 강의를 보여줘")
+        writer.assert_not_called()
+        self.assertIn("Docker", result.text)
+        self.assertEqual(reviewer.call_args.args[3], result.text)
+        self.assertEqual(self.state.history[-1]["content"], result.text)
+
     def test_manager_clarification_leads_back_to_original_course_request(self):
         self.send("Docker와 Kubernetes를 배우고 싶어요.")
         ambiguous = self.send("그 기술의 교육과정을 보여줘")
@@ -63,6 +72,8 @@ class SupervisedChatTest(unittest.TestCase):
         self.assertNotIn("저장", choice.text)
 
     def test_generic_courses_always_use_review_and_known_levels(self):
+        self.state.last_gap_job = "cloud_engineer"
+        self.state.last_gap_skills = ["Docker", "Linux"]
         with patch.object(api, "get_recommendations", wraps=api.get_recommendations) as recommend, \
                 patch("backend.experiments.pick_pair", side_effect=AssertionError("mixed experiments")):
             result = chat.handle_message(
@@ -72,6 +83,7 @@ class SupervisedChatTest(unittest.TestCase):
         self.assertEqual(result.action, "courses")
         self.assertTrue(recommend.call_args.kwargs["review"])
         self.assertEqual(recommend.call_args.kwargs["levels"], {"AWS": 1})
+        self.assertEqual(self.state.last_gap_skills, ["Docker", "Linux"])
 
     def test_partial_worker_failure_keeps_only_approved_cards_and_names_missing_skill(self):
         from ai import recommend

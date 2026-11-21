@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from ai.chat import Turn
-from backend import chat, chat_profiles
+from backend import api, chat, chat_profiles
 from backend.api import get_gap as dashboard_gap
 
 
@@ -61,6 +61,48 @@ class ChatTest(unittest.TestCase):
         self.gap.assert_not_called()
         self.recs.assert_not_called()
         self.write.assert_not_called()
+
+    def test_skill_note_does_not_turn_an_echoed_role_into_a_job_choice(self):
+        self.intake.return_value = Turn(job="ai_engineer", add_skills=["LangChain"])
+        reply = chat.handle_message(self.state, "LangChain은 다뤄봤는데", job="ai_engineer", sidebar_skills=[])
+        self.assertIn("LangChain", reply.text)
+        self.assertNotIn("목표 직무", reply.text)
+        self.assertIsNone(self.state.job)
+
+    def test_offline_acknowledgement_names_the_experience_without_a_generic_receipt(self):
+        reply = self.send(Turn(add_skills=["LangChain", "RAG"]), "랭체인이랑 RAG는 써봤어")
+        self.assertIn("LangChain", reply.text)
+        self.assertIn("RAG", reply.text)
+        self.assertNotIn("이번 상담에 반영했습니다", reply.text)
+        self.assertEqual(reply.assessment_skills, ["LangChain", "RAG"])
+
+    def test_general_learning_question_can_be_answered_without_analysis_or_profile_actions(self):
+        answer = "검색은 질문에 필요한 자료를 찾고, 생성은 그 자료를 바탕으로 답을 만드는 역할이에요."
+        with patch("ai.chat_reply.write_reply", return_value=answer) as writer:
+            reply = self.send(Turn(), "RAG에서 검색과 생성을 왜 나눠?")
+        self.assertEqual(reply.text, answer)
+        self.assertEqual(self.state.history[-1]["content"], answer)
+        self.assertEqual(writer.call_args.kwargs["action"], "note")
+        self.assertEqual(self.state.skills, {})
+        self.gap.assert_not_called()
+        self.recs.assert_not_called()
+        self.write.assert_not_called()
+
+    def test_profile_save_result_is_never_rewritten(self):
+        with patch("ai.chat_reply.write_reply") as writer:
+            result = self.send(Turn(add_skills=["Docker"], save=True, save_skills=["Docker"]),
+                               "Docker 썼어. 프로필에도 저장해줘")
+        self.assertIn("로그인", result.text)
+        writer.assert_not_called()
+
+    def test_blocked_generated_answer_does_not_reach_history_or_the_next_turn_offer(self):
+        from ai.chat_reply import ReplyBlocked
+
+        with patch("ai.chat_reply.write_reply", side_effect=ReplyBlocked("답변을 표시할 수 없습니다.")):
+            result = self.send(Turn(), "RAG에서 검색은 왜 필요해?")
+        self.assertEqual((result.action, result.courses), ("blocked", []))
+        self.assertEqual(self.state.history, [])
+        self.assertFalse(self.state.offered_gap)
 
     def test_unknown_skill_keeps_its_spelling_across_jobs_and_can_be_corrected(self):
         self.read.return_value = {"job": None, "skills": ["OpenTofu"], "experiences": ["배포 API", "배포 api"]}
@@ -149,7 +191,8 @@ class ChatTest(unittest.TestCase):
         self.assertIn("수준 미입력", reply.text)
         self.assertIn("Docker", reply.text)
         self.assertNotIn("Docker · 공고", reply.text)
-        self.recs.assert_called_once_with("cloud_engineer", ["Git"], review=True)
+        self.assertEqual(self.recs.call_args.args, ("cloud_engineer", ["Git"]))
+        self.assertTrue(self.recs.call_args.kwargs["review"])
         self.gap.return_value = [docker]
         self.recs.reset_mock()
         reply = self.send(Turn(action="courses", add_skills=["Docker"]))
@@ -161,7 +204,9 @@ class ChatTest(unittest.TestCase):
         saved = {"custom:Docker": 4}
         self.read.return_value = {"skills": ["Docker"], "levels": saved}
         self.gap.side_effect = lambda job, data: [r for r in dashboard_gap(job, data) if r["skill"] == "Docker"]
-        self.recs.return_value = []
+        self.recs.side_effect = lambda job, skills, **kw: [
+            {"gap_skill": skill, "demand": kw["review_evidence"][skill], "courses": []} for skill in skills
+        ]
         for ui, missing in [(None, False), ({}, None), ({"custom:Docker": 0}, True), ({"custom:Docker": 2}, True),
                             ({"custom:Docker": 4}, False), ({"C1-4": 4}, False),
                             ({"C1-4": 4, "custom:Docker": 2}, True)]:
@@ -170,7 +215,7 @@ class ChatTest(unittest.TestCase):
                 reply = self.send(Turn(action="courses"), session=self.first, levels=ui)
                 self.gap.assert_called_with("cloud_engineer", saved if ui is None else ui)
                 self.assertEqual("수준 미입력" in reply.text, missing is None)
-                self.assertEqual("Docker · 공고" in reply.text, missing is True)
+                self.assertEqual("Docker에 연결할 교육과정을 찾지 못했습니다." in reply.text, missing is True)
                 self.assertEqual(self.recs.called, missing is True)
 
     def test_denied_skill_with_a_positive_score_is_deferred_only_in_this_chat(self):
@@ -214,7 +259,29 @@ class ChatTest(unittest.TestCase):
         reply = self.send(Turn(action="courses"))
         self.assertEqual(reply.courses[0]["match"], "uncertain")
         self.assertEqual(reply.courses[0]["gap_skill"], "Docker")
-        self.recs.assert_called_once_with("cloud_engineer", ["Docker"], review=True)
+        self.assertEqual(self.recs.call_args.kwargs["review_evidence"], {
+            "Docker": {"postings": 20, "of": 40, "required_ratio": 0.45},
+        })
+        self.assertTrue(self.recs.call_args.kwargs["review"])
+
+    def test_partial_recommendation_names_the_failed_skill_after_the_outcome(self):
+        demand = {"postings": 20, "of": 40, "required_ratio": 0.45}
+        self.gap.return_value = [
+            {"skill": name, "owned": False, "user_level": 2, "required_level": 3, **demand}
+            for name in ("AWS", "FastAPI")
+        ]
+        self.recs.return_value = [{
+            "gap_skill": "AWS", "demand": demand, "courses": [{
+                "title": "AWS 입문", "url": "https://example.com/aws", "prerequisites": "없음",
+                "reason": "클라우드 기초 학습", "level": "기초", "match": "uncertain",
+            }],
+        }]
+        reply = self.send(Turn(action="courses"), "교육과정 추천해줘", levels={"custom:AWS": 2})
+        self.assertEqual([c["title"] for c in reply.courses], ["AWS 입문"])
+        self.assertIn("추천", reply.text.splitlines()[0])
+        self.assertIn("확인하지 못한 기술 · FastAPI", reply.text)
+        self.assertTrue(reply.failed)
+        self.assertEqual(self.recs.call_args.kwargs["levels"], {"AWS": 2})
 
     def test_verification_and_data_failures_are_distinct_from_empty(self):
         self.gap.return_value = [{"skill": "Git", "owned": False, "postings": 2, "of": 3,
@@ -230,7 +297,10 @@ class ChatTest(unittest.TestCase):
         self.assertIn("Git", invalid.text)
         self.assertFalse(invalid.courses)
         self.gap.side_effect = LookupError("테스트 내부 오류")
-        unavailable = self.send(Turn(action="courses"))
+        with patch("ai.chat_reply.write_reply") as writer:
+            unavailable = self.send(Turn(action="courses"))
+        writer.assert_not_called()
+        self.assertTrue(unavailable.failed)
         self.assertIn("수요", unavailable.text)
         self.assertNotIn("내부 오류", unavailable.text)
         self.assertEqual(self.recs.call_count, 2)
@@ -271,6 +341,150 @@ class ChatTest(unittest.TestCase):
         self.send(Turn(job="cloud_engineer", action="courses"), "그럼 클라우드 기준으로 추천해줘")
         self.gap.assert_called_once()
         self.recs.assert_not_called()
+
+
+class SkillRequirementsTest(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ, BEDROCK_MOCK="1", AB_STRUCTURES="", EXPERIMENT_MODELS=""))
+
+    def test_framework_question_uses_job_demand_without_changing_profile_or_running_a_gap(self):
+        message = "그런데 TensorFlow도 따로 경험이 많아야하나? 다른 AI 프레임워크로 충분하지는 않아?"
+        for architecture in ("screen", "supervised"):
+            with self.subTest(architecture=architecture), patch("backend.api.get_gap") as gap:
+                state = chat.Conversation()
+                reply = chat.handle_message(state, message, job="ai_engineer", sidebar_skills=[], architecture=architecture)
+                self.assertEqual(reply.action, "requirements")
+                self.assertIn("TensorFlow", reply.text)
+                self.assertIn("필수 7건", reply.text)
+                self.assertIn("우대 8건", reply.text)
+                self.assertIn("중 하나", reply.text)
+                self.assertEqual((state.skills, reply.assessment_skills, reply.courses), ({}, [], []))
+                gap.assert_not_called()
+                if architecture == "supervised":
+                    self.assertIn("result_approved", reply.supervisor_decisions)
+
+    def test_compared_skills_keep_separate_counts_even_below_the_personal_gap_cutoff(self):
+        snapshot = {"total_postings": 100, "skills": [
+            {"skill": "PyTorch", "postings": 31, "required": 21, "preferred": 10},
+            {"skill": "TensorFlow", "postings": 3, "required": 1, "preferred": 2},
+        ]}
+        with patch("backend.api.get_demand", return_value=snapshot):
+            reply = chat.handle_message(chat.Conversation(), "파이토치랑 텐서플로우 중 하나만 할 줄 알아도 돼?",
+                                        job="ai_engineer", sidebar_skills=[])
+        self.assertIn("TensorFlow · 3건", reply.text)
+        self.assertIn("PyTorch · 31건", reply.text)
+        self.assertNotIn("부족", reply.text)
+
+    def test_requirement_question_does_not_need_a_question_mark(self):
+        state = chat.Conversation()
+        reply = chat.handle_message(state, "텐서플로우가 꼭 필요한가요", job="ai_engineer", sidebar_skills=[])
+        self.assertEqual(reply.action, "requirements")
+        next_reply = chat.handle_message(state, "부족한 기술 중 하나만 알려줘", job="ai_engineer", sidebar_skills=[])
+        self.assertEqual(next_reply.action, "gap")
+
+    def test_mixed_experience_and_question_compare_only_the_requested_skill(self):
+        state = chat.Conversation()
+        reply = chat.handle_message(state, "랭체인이랑 RAG는 써봤는데, TensorFlow는 얼마나 필요해?",
+                                    job="ai_engineer", sidebar_skills=[])
+        self.assertEqual(state.skills, {"LangChain": True, "RAG": True})
+        self.assertEqual(reply.action, "requirements")
+        self.assertIn("TensorFlow · 15건", reply.text)
+        self.assertNotIn("RAG ·", reply.text)
+
+    def test_experience_before_a_comparison_is_not_a_third_comparison_target(self):
+        message = "저는 RAG를 써봤어요, 그런데 TensorFlow하고 PyTorch 중 하나만 알아도 충분한가요?"
+        for architecture in ("screen", "supervised"):
+            with self.subTest(architecture=architecture):
+                state = chat.Conversation()
+                reply = chat.handle_message(state, message, job="ai_engineer", sidebar_skills=[],
+                                            architecture=architecture)
+                self.assertEqual(state.skills, {"RAG": True})
+                self.assertEqual(reply.action, "requirements")
+                self.assertIn("TensorFlow · 15건", reply.text)
+                self.assertIn("PyTorch · 30건", reply.text)
+                self.assertNotIn("RAG ·", reply.text)
+
+
+class CourseDifficultyTest(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ, BEDROCK_MOCK="1", AB_STRUCTURES="", USAGE_LOG="off"))
+
+    def send(self, state, text, architecture="screen", job="cloud_engineer"):
+        return chat.handle_message(state, text, job=job, sidebar_skills=[], architecture=architecture)
+
+    def test_slash_separated_advanced_topics_have_independent_courses_and_demand(self):
+        for mode in ("screen", "supervised"):
+            with self.subTest(mode=mode):
+                state = chat.Conversation()
+                reply = self.send(state, "AI/ LLM 심화 교육과정을 추천받고 싶어", mode, "ai_engineer")
+                for topic in ("AI", "LLM"):
+                    cards = [card for card in reply.courses if card["gap_skill"] == topic]
+                    self.assertEqual([card["level"] for card in cards], ["고급"] * 3)
+                    line = next(line for line in reply.text.splitlines() if line.startswith(topic + " · "))
+                    self.assertIn("고급 교육과정 3개", line)
+                self.assertNotIn("AI/", reply.text)
+                self.assertEqual(list(state.last_course_levels), ["AI", "LLM"])
+
+    def test_relative_request_excludes_named_prior_topics(self):
+        for mode in ("screen", "supervised"):
+            with self.subTest(mode=mode):
+                state = chat.Conversation()
+                first = self.send(state, "LLM과 RAG 고급 과정을 추천해줘", mode, "ai_engineer")
+                self.assertEqual({c["gap_skill"] for c in first.courses}, {"LLM", "RAG"})
+                easier = self.send(state, "LLM은 빼고 더 쉬운 걸로 추천해줘", mode, "ai_engineer")
+                self.assertEqual({c["gap_skill"] for c in easier.courses}, {"RAG"})
+                self.assertNotIn("고급", {c["level"] for c in easier.courses})
+                self.assertEqual(list(state.last_course_levels), ["RAG"])
+                skipped = self.send(state, "RAG도 제외하고 더 쉬운 걸로 추천해줘", mode, "ai_engineer")
+                self.assertFalse(skipped.courses)
+                self.assertEqual(skipped.action, "clarify")
+
+    def test_relative_request_uses_displayed_skill_and_does_not_change_user_level(self):
+        for mode in ("screen", "supervised"):
+            with self.subTest(mode=mode):
+                state = chat.Conversation()
+                first = self.send(state, "EC2 기초 교육과정을 추천해줘", mode)
+                self.assertEqual({(c["gap_skill"], c["level"]) for c in first.courses}, {("EC2", "기초")})
+                harder = self.send(state, "난이도 높은 걸로 알려줘", mode)
+                self.assertTrue(harder.courses, harder.text)
+                self.assertEqual({c["gap_skill"] for c in harder.courses}, {"EC2"})
+                self.assertLessEqual({c["level"] for c in harder.courses}, {"중급", "고급"})
+                basic = self.send(state, "다시 기초로 추천해줘", mode)
+                self.assertEqual({(c["gap_skill"], c["level"]) for c in basic.courses}, {("EC2", "기초")})
+                self.assertEqual(state.skills, {})
+                self.assertFalse(state.profile)
+
+    def test_advanced_results_and_upper_bound_do_not_fall_back_to_basic(self):
+        for mode in ("screen", "supervised"):
+            with self.subTest(mode=mode):
+                state = chat.Conversation()
+                advanced = self.send(state, "AWS 고급 과정만 추천해줘", mode)
+                self.assertEqual({(c["gap_skill"], c["level"]) for c in advanced.courses}, {("AWS", "고급")})
+                with patch.object(api, "get_recommendations") as recs:
+                    beyond = self.send(state, "그보다 더 어려운 걸로", mode)
+                self.assertFalse(beyond.courses)
+                self.assertIn("고급", beyond.text)
+                recs.assert_not_called()
+
+    def test_multiple_skill_followups_offer_a_vote_only_for_complete_alternatives(self):
+        pair = ("single", "reviewed")
+        rows = [{"skill": skill, "postings": 3, "required": 2} for skill in ("AWS", "EC2")]
+        for ec2_has_demand in (True, False):
+            observed = {"total_postings": 4, "skills": rows if ec2_has_demand else rows[:1]}
+            state = chat.Conversation(last_course_job="cloud_engineer",
+                                      last_course_levels={"AWS": ["기초"], "EC2": ["중급"]})
+            with self.subTest(ec2_has_demand=ec2_has_demand), \
+                    patch("backend.experiments.pick_pair", return_value=pair), \
+                    patch.object(api, "get_demand", return_value=observed):
+                harder = self.send(state, "더 어려운 걸로 추천해줘")
+                self.assertEqual({(c["gap_skill"], c["level"]) for c in harder.courses},
+                                 {("AWS", "중급"), ("EC2", "고급")})
+                self.assertEqual(bool(harder.alternatives), ec2_has_demand)
+                self.assertEqual(harder.text.count("더 도움이 되는 쪽"), int(ec2_has_demand))
+                intermediate = self.send(state, "이번에는 중급 과정만 추천해줘")
+                self.assertEqual({(c["gap_skill"], c["level"]) for c in intermediate.courses},
+                                 {("AWS", "중급"), ("EC2", "중급")})
+                self.assertEqual(intermediate.text.count("더 도움이 되는 쪽"), int(ec2_has_demand))
 
 
 class CourseRatingPassThroughTest(unittest.TestCase):

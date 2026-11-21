@@ -27,7 +27,7 @@ def build_documents(catalog: Path, output: Path, provider: str) -> int:
                 sections.append(f"## {heading}\n\n{value}")
         files[filename] = "\n\n".join(sections) + "\n"
         metadata = {"type": "program", "course_id": course_id, "provider": provider,
-                    "recommendable": _usable(course)}
+                    "recommendable": _usable(course) and course.get("status", "ACTIVE") == "ACTIVE"}
         files[f"{filename}.metadata.json"] = json.dumps({"metadataAttributes": metadata}, ensure_ascii=False) + "\n"
 
     output.mkdir(parents=True, exist_ok=True)

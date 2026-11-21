@@ -16,7 +16,8 @@ from ai.usage import log_path
 PRICING = Path(__file__).resolve().parent.parent / "data" / "pricing.json"
 STAGE_LABEL = {
     "extract": "기술 추출", "recommend": "추천 이유", "review": "추천 검증", "judge": "평가 채점",
-    "coffeechat": "커피챗 초안", "chat_intake": "상담 발화 분석", "agent": "상담 에이전트", "embedding": "임베딩",
+    "coffeechat": "커피챗 초안", "chat_intake": "상담 발화 분석", "chat_reply": "상담 답변 작성",
+    "agent": "상담 에이전트", "embedding": "임베딩",
 }
 
 

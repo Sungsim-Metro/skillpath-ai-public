@@ -4,17 +4,20 @@ from __future__ import annotations
 import copy
 import random
 from dataclasses import dataclass, field, replace
+from itertools import groupby
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 from ai import chat as intake
+from ai import chat_reply
 from ai.bedrock import BedrockJSONError, current_model, use_model
 from ai.usage import SessionUsage, current_session, track_session
 from backend import api, chat_profiles, experiments
 from backend.jobs import JOBS
 from backend.levels import has_skill_rating
 from pipeline.aliases import normalize_skill
+from pipeline.search import COURSE_LEVELS
 
 if TYPE_CHECKING:
     from ai.supervisor import SupervisedTurn
@@ -39,6 +42,8 @@ class Conversation:
     pending_course_question: bool = False
     last_gap_skills: list[str] = field(default_factory=list)
     last_gap_job: str | None = None
+    last_course_job: str | None = None
+    last_course_levels: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -60,6 +65,7 @@ class Reply:
     assessment_job: str = ""
     supervisor_decisions: list[str] = field(default_factory=list)
     gap_skills: list[str] = field(default_factory=list)
+    course_targets: list[str] = field(default_factory=list)
 
 
 def _skill(name: str) -> str:
@@ -75,6 +81,8 @@ def _effective(base: list[str], edits: dict[str, bool]) -> list[str]:
 def _context(state: Conversation, sidebar_job: str, base_skills: list[str]) -> dict:
     profile = state.profile or {}
     job = state.job or profile.get("job") or sidebar_job
+    course_levels = (getattr(state, "last_course_levels", {})
+                     if job == getattr(state, "last_course_job", None) and not state.needs_role else {})
     return {
         "job": job if job in JOBS and not state.needs_role else None,
         "needs_role": state.needs_role,
@@ -84,6 +92,8 @@ def _context(state: Conversation, sidebar_job: str, base_skills: list[str]) -> d
         "experiences": _effective(profile.get("experiences", []), state.experiences),
         "history": state.history,
         "last_changes": state.last_changes,
+        "last_course_skills": list(course_levels),
+        "last_course_levels": course_levels,
     }
 
 
@@ -199,8 +209,22 @@ def _verified_course_cards(skill: str, candidates: list[dict]) -> list[dict]:
     return courses
 
 
-def _compare_structures(pair: tuple[str, str], job: str, requested: list[str],
-                        missing: list[dict]) -> tuple[list[dict], list[dict]]:
+def _gap_course_cards(recs: list[dict], rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """Keep verified skills when another worker omits a result or returns invalid data."""
+    cards = []
+    verified = set()
+    for rec in recs:
+        try:
+            cards.extend(_verified_courses([rec], rows))
+            verified.add(rec["gap_skill"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return cards, [row["skill"] for row in rows if row["skill"] not in verified]
+
+
+def _compare_structures(pair: tuple[str, str], job: str, rows: list[dict], evidence: dict[str, dict],
+                        levels: dict[str, float], *,
+                        course_levels: tuple[str, ...] | None = None) -> tuple[list[dict], list[dict], list[str]]:
     """추천 구조 두 개로 각각 추천을 만들고 같은 검사를 한다. (나란히 보여 줄 두 결과, 기본으로 보여 줄 과정)을 돌려준다.
 
     둘 다 과정을 냈을 때만 A/B 로 보여 준다. 그렇지 않으면 기본 구조(검토를 거친 쪽)의 결과만 보여 준다.
@@ -208,27 +232,34 @@ def _compare_structures(pair: tuple[str, str], job: str, requested: list[str],
     구조별 토큰은 세션 사용량의 앞뒤 차이로 잰다.
     """
     usage = current_session()
-    results, error = [], None
+    results, unavailable = [], {}
+    default_error = None
     for name in pair:
         before = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
         try:
-            found = _verified_courses(experiments.recommend_with(name, job, requested), missing)
-        except (BedrockJSONError, KeyError, TypeError, ValueError) as exc:
-            found, error = [], exc
+            options = {"course_levels": course_levels} if course_levels is not None else {}
+            recs = experiments.recommend_with(name, job, list(evidence), evidence=evidence, levels=levels, **options)
+            found, unavailable[name] = _gap_course_cards(recs, rows)
+        except Exception as exc:
+            found, unavailable[name] = [], list(evidence)
+            if name == experiments.DEFAULT_STRUCTURE:
+                default_error = exc
         after = (usage.input_tokens, usage.output_tokens) if usage else (0, 0)
         results.append({"structure": name, "courses": found,
                         "tokens": {"input": after[0] - before[0], "output": after[1] - before[1]}})
     default = next((r for r in results if r["structure"] == experiments.DEFAULT_STRUCTURE), None)
     if all(r["courses"] for r in results):
-        return results, (default or results[0])["courses"]
+        failed = [skill for skill in evidence if any(skill in missing for missing in unavailable.values())]
+        return results, (default or results[0])["courses"], failed
     if default is None:  # 기본 구조가 비교 대상에 없으면 A/B 가 성립할 때만 보여 준다
-        default = {"courses": []}
-    if not default["courses"] and error is not None:
-        raise error
-    return [], default["courses"]
+        return [], [], list(evidence)
+    if default_error is not None:
+        raise default_error
+    return [], default["courses"], unavailable[experiments.DEFAULT_STRUCTURE]
 
 
-def _analyze(facts: dict, levels: dict[str, int], *, courses: bool, supervised: bool = False) -> Reply:
+def _analyze(facts: dict, levels: dict[str, int], *, courses: bool, supervised: bool = False,
+             course_levels: tuple[str, ...] | None = None) -> Reply:
     job = facts["job"]
     try:
         rows = api.get_gap(job, levels)
@@ -239,7 +270,7 @@ def _analyze(facts: dict, levels: dict[str, int], *, courses: bool, supervised: 
                        else "수요 데이터가 없어 현재 역량과 비교할 수 없습니다.")
             return Reply("\n".join([message, *notes]))
     except Exception:
-        return Reply("채용공고 수요를 불러오지 못해 부족 역량을 비교할 수 없습니다.", failed=supervised)
+        return Reply("채용공고 수요를 불러오지 못해 부족 역량을 비교할 수 없습니다.", failed=True)
     excluded = {name.casefold() for name in facts["excluded_skills"]}
     conflicts = [r["skill"] for r in rows if _skill(r["skill"]).casefold() in excluded and r.get("user_level", 0) > 0]
     if conflicts:
@@ -254,57 +285,172 @@ def _analyze(facts: dict, levels: dict[str, int], *, courses: bool, supervised: 
         if not notes:
             return Reply("입력한 보유 수준이 현재 공고의 기술 기준을 모두 충족합니다.")
         return Reply("\n".join(["현재 비교한 항목 중 기준에 미달한 기술은 없습니다.", *notes]))
-    lines = [f"{JOBS[job]} 공고의 기준 단계에 미달한 기술입니다."]
-    for row in missing:
-        line = f"• {row['skill']} · 공고 {row['of']}건 중 {row['postings']}건"
-        if "user_level" in row and "required_level" in row and has_skill_rating(levels, row["skill"], job):
-            line += f" · 내 수준 {row['user_level']}단계 / 기준 {row['required_level']}단계"
-        lines.append(line)
-    lines.extend(notes)
-    reply = Reply("\n".join(lines), gap_skills=[row["skill"] for row in missing])
-    if courses:
-        try:
-            requested = [r["skill"] for r in missing][:api.RECOMMEND_TOP_N]
-            pair = None if supervised else experiments.pick_pair()
-            unavailable_skills = []
-            if pair:
-                reply.alternatives, reply.courses = _compare_structures(pair, job, requested, missing[:len(requested)])
-            else:
-                if supervised:
-                    known_levels = {r["skill"]: r["user_level"] for r in missing[:len(requested)]
-                                    if has_skill_rating(levels, r["skill"], job)}
-                    recs = api.get_recommendations(job, requested, review=True, levels=known_levels)
-                    returned = {rec["gap_skill"] for rec in recs}
-                    unavailable_skills = [skill for skill in requested if skill not in returned]
+    if not courses:
+        lines = [f"{JOBS[job]} 공고의 기준 단계에 미달한 기술입니다."]
+        for row in missing:
+            line = f"• {row['skill']} · 공고 {row['of']}건 중 {row['postings']}건"
+            if "user_level" in row and "required_level" in row and has_skill_rating(levels, row["skill"], job):
+                line += f" · 내 수준 {row['user_level']}단계 / 기준 {row['required_level']}단계"
+            lines.append(line)
+        return Reply("\n".join([*lines, *notes]), gap_skills=[row["skill"] for row in missing])
+
+    rows = missing[:api.RECOMMEND_TOP_N]
+    requested = [row["skill"] for row in rows]
+    reply = Reply("", course_targets=requested)
+    try:
+        evidence = {row["skill"]: {key: row[key] for key in ("postings", "of", "required_ratio")} for row in rows}
+        known_levels = {row["skill"]: row["user_level"] for row in rows if has_skill_rating(levels, row["skill"], job)}
+        options = {"course_levels": course_levels} if course_levels is not None else {}
+        pair = None if supervised else experiments.pick_pair()
+        if pair:
+            reply.alternatives, reply.courses, unavailable = _compare_structures(pair, job, rows, evidence, known_levels,
+                                                                               **options)
+        else:
+            recs = api.get_recommendations(job, requested, review=True, levels=known_levels, review_evidence=evidence,
+                                           **options)
+            reply.courses, unavailable = _gap_course_cards(recs, rows)
+        if reply.alternatives:
+            detail = "두 가지 방식으로 교육과정을 추천했습니다. 더 도움이 되는 쪽을 골라 주세요."
+        elif reply.courses:
+            skills = ", ".join(dict.fromkeys(card["gap_skill"] for card in reply.courses))
+            detail = f"{skills} 관련 교육과정을 추천합니다."
+        elif len(unavailable) == len(requested):
+            detail = "요청한 기술의 교육과정을 검증하지 못했습니다."
+        else:
+            checked = ", ".join(skill for skill in requested if skill not in unavailable)
+            detail = f"{checked}에 연결할 교육과정을 찾지 못했습니다."
+        if course_levels and len(unavailable) < len(requested):
+            shown = {card["gap_skill"] for card in reply.courses}
+            empty = [name for name in requested if name not in shown and name not in unavailable]
+            if empty:
+                message = f"{', '.join(empty)}에서 요청한 {'·'.join(course_levels)} 과정을 찾지 못했습니다."
+                if reply.courses:
+                    notes.append(message)
                 else:
-                    recs = api.get_recommendations(job, requested, review=True)
-                reply.courses = _verified_courses(recs, missing[:len(requested)])
-            detail = ("부족 기술과 연결된 과정입니다. 과정별 추천 이유와 매칭 상태를 확인해 주세요." if reply.courses
-                      else "상위 부족 기술에 연결할 교육과정을 찾지 못했습니다.")
-            if reply.alternatives:
-                detail = ("부족 기술과 연결된 과정을 두 가지 방식으로 추천했습니다. "
-                          "과정별 추천 이유를 읽고 더 도움이 되는 쪽을 골라 주세요.")
-            if unavailable_skills:
-                detail += "\n추천 결과를 확인하지 못한 기술 · " + ", ".join(unavailable_skills)
-                reply.failed = True
-        except (BedrockJSONError, KeyError, TypeError, ValueError):
-            detail = "추천 결과가 검증을 통과하지 못해 과정을 표시할 수 없습니다."
+                    detail = message
+        if unavailable:
+            notes.append("추천 결과를 확인하지 못한 기술 · " + ", ".join(unavailable))
             reply.failed = True
-        except Exception:
-            detail = "교육과정 추천을 불러오지 못했습니다."
-            reply.failed = supervised
-        reply.text += "\n\n" + detail
+    except (BedrockJSONError, KeyError, TypeError, ValueError):
+        detail = f"{', '.join(requested)} 관련 교육과정을 검증하지 못했습니다."
+        reply.failed = True
+    except Exception:
+        detail = f"{', '.join(requested)} 관련 교육과정을 불러오지 못했습니다."
+        reply.failed = True
+    reply.text = "\n".join([detail, *notes])
     return reply
 
 
-def _supervised_analysis(message: str, facts: dict, levels: dict, plan: SupervisedTurn) -> Reply:
-    from ai import supervisor
+def _requirements(job: str, message: str, turn: intake.Turn) -> Reply:
+    try:
+        demand = api.get_demand(job)
+    except Exception:
+        return Reply("채용공고 수요를 불러오지 못해 필수·우대 건수를 확인할 수 없습니다.", failed=True)
+    rows = {_skill(row["skill"]): row for row in demand["skills"]}
+    if turn.add_skills or turn.add_experiences:
+        message = intake.requirement_question(message)
+    names = intake.target_skills(message, list(rows))
+    if not names:
+        return Reply("어떤 기술이 필요한지 궁금하신가요? 비교하려는 기술 이름을 함께 알려 주세요.")
+    if not demand["total_postings"]:
+        return Reply(f"{JOBS[job]} 직무에서 분석한 공고가 없어 {', '.join(names)}의 요구 수준을 확인할 수 없습니다.")
+
+    lines = [f"{JOBS[job]} 공고 {demand['total_postings']}건에서 확인한 내용입니다."]
+    for name in names:
+        row = rows.get(name)
+        if row:
+            lines.append(f"• {name} · {row['postings']}건에서 언급 (필수 {row['required']}건, 우대 {row['preferred']}건)")
+        else:
+            lines.append(f"• {name} · 해당 기술의 필수·우대 집계가 없습니다.")
+    lines.append("필요한 경험의 깊이는 지원할 공고의 자격 요건을 확인하세요. 여러 도구 중 하나를 쓸 수 있으면 되는 "
+                 "공고에는 익숙한 도구로 수행한 프로젝트를 제시할 수 있습니다. 특정 기술을 필수로 지정했다면 "
+                 "그 기술로 어떤 작업을 해 봤는지가 중요합니다.")
+    return Reply("\n".join(lines))
+
+
+def _requested_course_levels(preference: str | None, previous: list[str]) -> tuple[str, ...] | None:
+    """Resolve a relative request against the levels actually shown for this skill."""
+    if preference is None:
+        return None
+    if preference in COURSE_LEVELS:
+        return (preference,)
+    if preference == "above_basic":
+        return COURSE_LEVELS[1:]
+    if preference == "below_advanced":
+        return COURSE_LEVELS[-2::-1]
+    ranks = [COURSE_LEVELS.index(level) for level in previous if level in COURSE_LEVELS]
+    if preference == "harder":
+        return COURSE_LEVELS[max(ranks, default=0) + 1:]
+    if preference == "easier":
+        return COURSE_LEVELS[:min(ranks, default=len(COURSE_LEVELS) - 1)][::-1]
+    raise ValueError("지원하지 않는 과정 난이도입니다.")
+
+
+def _targeted_courses(facts: dict, levels: dict, targets: list[str], preference: str | None, *,
+                      supervised: bool) -> Reply:
     from backend.supervised_courses import recommend_for_targets
 
-    if plan.turn.action == "courses" and plan.targets:
-        reply = recommend_for_targets(facts["job"], plan.targets, levels, facts)
+    def allowed(skill: str) -> tuple[str, ...] | None:
+        return _requested_course_levels(preference, facts["last_course_levels"].get(skill, []))
+
+    pair = None if supervised else experiments.pick_pair()
+    groups = ([(None, targets)] if preference is None
+              else groupby(targets[:api.RECOMMEND_TOP_N], key=allowed))
+    replies = []
+    for wanted, group in groups:
+        names = list(group)
+        if wanted == ():
+            limit = "고급보다 어려운" if preference == "harder" else "기초보다 쉬운"
+            replies.append(Reply(f"{', '.join(names)}에는 {limit} 난이도가 없습니다.", action="courses"))
+            continue
+        options = {"course_levels": wanted} if wanted is not None else {}
+        if pair:
+            options["pair"] = pair
+        replies.append(recommend_for_targets(facts["job"], names, levels, facts, **options))
+    if len(replies) == 1:
+        result = replies[0]
     else:
-        reply = _analyze(facts, levels, courses=plan.turn.action == "courses", supervised=True)
+        result = Reply("\n".join(part.text for part in replies), action="courses",
+                       courses=[card for part in replies for card in part.courses],
+                       failed=any(part.failed for part in replies))
+        # Only open a vote if both sides cover all groups with displayed cards.
+        with_cards = [part for part in replies if part.courses]
+        if pair and with_cards and all(part.alternatives for part in with_cards):
+            for index, structure in enumerate(pair):
+                sides = [part.alternatives[index] for part in with_cards]
+                result.alternatives.append({
+                    "structure": structure, "courses": [c for side in sides for c in side["courses"]],
+                    "tokens": {key: sum(side["tokens"][key] for side in sides) for key in ("input", "output")},
+                })
+    if result.alternatives:
+        result.text = "두 가지 방식으로 교육과정을 추천했습니다. 더 도움이 되는 쪽을 골라 주세요.\n" + result.text
+    if preference is not None and len(targets) > api.RECOMMEND_TOP_N:
+        result.text += f"\n다음 요청에서 조회할 기술 · {', '.join(targets[api.RECOMMEND_TOP_N:])}"
+    return result
+
+
+def _remember_courses(state: Conversation, facts: dict, reply: Reply, targets: list[str]) -> None:
+    """Use displayed card levels as the baseline, including both sides of a vote."""
+    cards = list(reply.courses)
+    for side in reply.alternatives:
+        cards.extend(side["courses"])
+    shown: dict[str, list[str]] = {}
+    for card in cards:
+        levels = shown.setdefault(card["gap_skill"], [])
+        level = card.get("level")
+        if level in COURSE_LEVELS and level not in levels:
+            levels.append(level)
+    if reply.action == "clarify" or (not shown and reply.failed):
+        return
+    previous = facts["last_course_levels"]
+    state.last_course_job = facts["job"]
+    names = list(dict.fromkeys([*shown, *targets]))[:api.RECOMMEND_TOP_N]
+    state.last_course_levels = {name: shown.get(name, previous.get(name, [])) for name in names}
+
+
+def _review_analysis(message: str, facts: dict, plan: SupervisedTurn, reply: Reply) -> Reply:
+    from ai import supervisor
+
     if reply.failed:
         reply.supervisor_decisions.append("worker_error")
     try:
@@ -346,16 +492,38 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
     if plan is not None:
         state.wishes = list(plan.wishes)
         facts["wishes"] = state.wishes
-    if turn.action in {"gap", "courses"}:
+    analysis = turn.action in {"gap", "requirements", "courses"}
+    targets = []
+    if analysis:
         if not facts["job"]:
             reply = Reply(f"{supported} 직무 기준으로 비교할까요?")
-        elif plan is not None:
-            reply = _supervised_analysis(message, {**(prior_context or {}), **facts}, levels, plan)
-            if turn.action == "gap" or reply.gap_skills:
-                state.last_gap_job = facts["job"]
-                state.last_gap_skills = list(reply.gap_skills)
+        elif turn.action == "requirements":
+            reply = _requirements(facts["job"], message, turn)
+        elif turn.action == "gap":
+            reply = _analyze(facts, levels, courses=False)
         else:
-            reply = _analyze(facts, levels, courses=turn.action == "courses")
+            difficulty = turn.course_difficulty
+            if plan is not None:
+                targets = plan.targets
+            else:
+                targets = intake.explicit_course_skills(message, facts["skills"])
+                if not targets and difficulty and not intake.requests_gap_courses(message):
+                    targets = facts["last_course_skills"]
+            excluded = (intake.excluded_course_skills(message, facts["last_course_skills"])
+                        if difficulty and not intake.requests_gap_courses(message) else set())
+            if excluded:
+                previous_or_planned = targets or facts["last_course_skills"]
+                targets = [name for name in previous_or_planned if _skill(name).casefold() not in excluded]
+                if plan is not None:
+                    plan.targets = targets
+            if targets:
+                reply = _targeted_courses(facts, levels, targets, difficulty, supervised=plan is not None)
+            elif excluded:
+                reply = Reply("직전 추천에서 제외한 기술 외에 어떤 기술의 과정을 찾아볼까요?", action="clarify")
+            else:
+                reply = _analyze(facts, levels, courses=True, supervised=plan is not None,
+                                 course_levels=_requested_course_levels(difficulty, []))
+                targets = reply.course_targets
     elif turn.action == "summary":
         reply = Reply(_summary(facts))
         if plan is not None and state.wishes:
@@ -363,16 +531,31 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
     else:
         updates = []
         if turn.job:
-            updates.append(f"목표 직무를 {JOBS[turn.job]}로 반영했습니다.")
-        if turn.add_skills or turn.add_experiences:
-            items = dict.fromkeys([*turn.add_skills, *turn.add_experiences])
-            updates.append("이번 상담에 반영했습니다. " + ", ".join(items))
+            updates.append(f"{JOBS[turn.job]} 기준으로 함께 볼게요.")
+        if turn.add_skills:
+            updates.append(f"{', '.join(turn.add_skills)} 사용 경험이 있으시군요.")
+        if turn.add_experiences:
+            updates.append("직접 맡으신 작업 · " + ", ".join(turn.add_experiences))
         if turn.remove_skills or turn.remove_experiences:
             items = dict.fromkeys([*turn.remove_skills, *turn.remove_experiences])
             updates.append("이번 상담 정보에서 제외했습니다. " + ", ".join(items))
         if plan is not None and state.wishes != previous_wishes:
             updates.append("학습 희망 기술 · " + (", ".join(state.wishes) or "없음"))
-        reply = Reply("\n".join(updates) or "현재 보유한 기술이나 프로젝트에서 직접 맡은 일을 말씀해 주세요.")
+        reply = Reply("\n".join(updates) or "궁금한 기술이나 준비 중인 프로젝트에 대해 말씀해 주세요.")
+        if not turn.save:
+            try:
+                reply.text = chat_reply.write_reply(
+                    message, action=turn.action, draft=reply.text, history=state.history, confirmed_skills=facts["skills"],
+                )
+            except chat_reply.ReplyBlocked as exc:
+                return Reply(str(exc), action="blocked")
+    if analysis and facts["job"] and plan is not None:
+        reply = _review_analysis(message, {**(prior_context or {}), **facts}, plan, reply)
+        if turn.action == "gap" or reply.gap_skills:
+            state.last_gap_job = facts["job"]
+            state.last_gap_skills = list(reply.gap_skills)
+    if turn.action == "courses" and facts["job"]:
+        _remember_courses(state, facts, reply, targets)
     if turn.save:
         saved = _save(state, turn, facts)
         reply.text = saved if turn.action == "note" else reply.text + "\n\n" + saved
@@ -415,6 +598,9 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     if rival and reply.action == "courses" and reply.courses and not reply.alternatives and not reply.failed:
         reply.alternatives = _compare_chat_structures(state, snapshot, rival, message, job, sidebar_skills,
                                                       sidebar_levels, reply, before)
+        if reply.alternatives:
+            facts = _context(state, job, sidebar_skills)
+            _remember_courses(state, facts, reply, facts["last_course_skills"])
     return reply
 
 
@@ -514,8 +700,13 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
             turn = plan.turn
         else:
             turn = intake.interpret(message, context, screened=True)
+        if (turn.job and turn.job == context["job"] and turn.add_skills
+                and not any(cue in message.casefold() for cue in (JOBS[turn.job].casefold(), "목표", "직무", "기준"))):
+            turn = replace(turn, job=None)
         turn = replace(turn, add_skills=names(turn.add_skills), remove_skills=names(turn.remove_skills),
                        experience_skills=names(turn.experience_skills), save_skills=names(turn.save_skills))
+        if plan is not None:
+            plan.turn = turn
     except intake.ChatIntakeError:
         return Reply("메시지를 해석하지 못했습니다. 요청을 다시 말씀해 주세요.", action="intake", failed=True)
     if (not supervised and state.offered_gap and turn.status == "ok" and turn.action == "note"
@@ -532,6 +723,8 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
         reply.supervisor_decisions = [*plan.decisions, *reply.supervisor_decisions]
         if reply.action == "clarify" and turn.action == "courses":
             state.pending_course_question = True
+    if reply.action == "blocked":
+        return reply
     if turn.status == "ok" and turn.action == "summary" and "상태" in message and not any(
         word in message for word in ("정리", "요약", "만")
     ):

@@ -2,13 +2,25 @@
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from pipeline import aliases
 from pipeline.aliases import _index, find_skills, normalize_skill, normalize_skills
 
 GOLD = Path(__file__).resolve().parent.parent / "ai" / "eval" / "gold_extraction.json"
 
 
 class FindSkillsTest(unittest.TestCase):
+    def test_public_demo_resolves_ai_chat_names_without_private_dictionary(self):
+        missing = aliases.ALIAS_FILE.with_name("missing-aliases.json")
+        with patch.object(aliases, "ALIAS_FILE", missing), patch.dict("os.environ", BEDROCK_MOCK="1"):
+            names = aliases.skill_aliases()
+        self.assertIn("랭체인", names["LangChain"])
+        self.assertIn("랭크래프", names["LangGraph"])
+        self.assertIn("RAG", names)
+        self.assertIn("텐서플로우", names["TensorFlow"])
+        self.assertIn("파이토치", names["PyTorch"])
+
     def test_aliases_in_prose_have_word_boundaries_and_allow_korean_particles(self):
         text = "자바스크립트와 Dockerfile, NoSQL, nextXjs. 도커에서는 docker를, 자바와 K8S를 사용합니다."
         self.assertEqual(find_skills(text), ["Docker", "Java", "JavaScript", "Kubernetes"])  # 자바스크립트는 Java 가 아니다

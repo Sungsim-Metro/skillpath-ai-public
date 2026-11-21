@@ -43,10 +43,58 @@ class SupervisedCoursesTest(unittest.TestCase):
         self.search = self.enterContext(patch.object(recommend, "candidate_courses", side_effect=catalog))
         self.model = self.enterContext(patch.object(bedrock, "_call", side_effect=AssertionError("offline")))
 
-    def answer(self, targets, levels=None, facts=None):
+    def answer(self, targets, levels=None, facts=None, **kwargs):
         from backend.supervised_courses import recommend_for_targets
 
-        return recommend_for_targets(JOB, targets, levels or {}, facts or FACTS)
+        return recommend_for_targets(JOB, targets, levels or {}, facts or FACTS, **kwargs)
+
+    def test_explicit_difficulty_is_independent_of_unrated_and_corrected_skills(self):
+        def build(skill, demand, *, review, course_levels):
+            self.assertTrue(review)
+            self.assertEqual(course_levels, ("고급",))
+            card = dict(catalog(skill)[0], level="고급", reason="검토된 목표")
+            return {"gap_skill": skill, "demand": demand, "courses": [card]}, None
+
+        ratings = {"custom:Kubernetes": 2}
+        facts = {"skills": ["도커"], "excluded_skills": ["k8s"]}
+        with patch.object(recommend, "build_recommendation", side_effect=build):
+            reply = self.answer(["Docker", "Kubernetes"], ratings, facts, course_levels=("고급",))
+        self.assertEqual([(c["gap_skill"], c["level"]) for c in reply.courses],
+                         [("Docker", "고급"), ("Kubernetes", "고급")])
+        self.assertNotIn("내 수준", reply.text)
+        self.assertEqual(ratings, {"custom:Kubernetes": 2})
+
+    def test_empty_requested_level_is_distinct_from_a_retrieval_failure(self):
+        def build(skill, demand, **kwargs):
+            if skill == "Docker":
+                raise RuntimeError("offline")
+            return {"gap_skill": skill, "demand": demand, "courses": []}, None
+
+        with patch.object(recommend, "build_recommendation", side_effect=build):
+            reply = self.answer(["GraphQL", "Docker"], course_levels=("고급",))
+        lines = reply.text.splitlines()
+        self.assertIn("GraphQL", lines[0])
+        self.assertIn("고급", lines[0])
+        self.assertIn("찾지 못", lines[0])
+        self.assertIn("불러오지 못", lines[1])
+        self.assertTrue(reply.failed)
+
+    def test_explicit_targets_compare_only_when_every_target_has_demand_evidence(self):
+        pair = ("single", "reviewed")
+        card = {**catalog("Linux")[0], "gap_skill": "Linux", "reason": "검토"}
+        options = [{"structure": side, "courses": [card], "tokens": {}} for side in pair]
+        with patch("backend.chat._compare_structures", return_value=(options, [card], [])) as compare:
+            first = self.answer(["Linux", "Docker"], course_levels=("중급",), pair=pair)
+            self.assertEqual(compare.call_args.args[0], pair)
+            self.assertEqual(list(compare.call_args.args[3]), ["Linux", "Docker"])
+            self.assertEqual(compare.call_args.kwargs["course_levels"], ("중급",))
+            self.assertEqual(first.alternatives, options)
+            self.assertTrue(first.courses)
+            self.assertIn("중급", first.text)
+            both = self.answer(["Linux", "Kubernetes"], pair=pair)
+        self.assertEqual(compare.call_count, 1)
+        self.assertEqual(both.alternatives, [])
+        self.assertEqual({c["gap_skill"] for c in both.courses}, {"Linux", "Kubernetes"})
 
     def test_absent_observation_cannot_reuse_legacy_zero_or_invent_demand_in_reason(self):
         legacy = api.get_recommendations(JOB, ["Kubernetes"], review=True)
@@ -63,7 +111,7 @@ class SupervisedCoursesTest(unittest.TestCase):
     def test_absent_demand_live_review_uses_only_reviewed_objective(self):
         course = catalog("Docker")[0]
         cid, objective = course["course_id"], course["objectives"][0]
-        draft = {"reasons": [{"course_id": cid, "reason": "모든 공고에서 요구합니다.", "objective": objective}]}
+        draft = {"reasons": [{"course_id": cid, "reason": "모든 공고에서 요구합니다.", "objective_id": "O1"}]}
         verdict = {"reviews": [{"course_id": cid, "decision": "approve", "feedback": ""}]}
         self.search.side_effect = None
         self.search.return_value = [course]
