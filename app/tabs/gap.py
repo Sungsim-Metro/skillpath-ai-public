@@ -62,6 +62,11 @@ def render_area_gap(ctx: Ctx):
         base.mark_bar(color=ACCENT, height=24).encode(x=alt.X("보유:Q"), tooltip=tooltip),
         base.mark_text(align="left", dx=8, color="#566070").encode(x=alt.X("수요:Q"), text="표시:N"),
     ).properties(height=44 * len(df) + 50)
+    # 숫자만 두지 않고 무엇을 뜻하는지 한 줄로 먼저 적는다. 값은 backend 가 준 충족률 그대로다
+    low = min(shown, key=lambda r: r["coverage"])
+    if low["coverage"] < 1:  # 모든 영역을 다 채웠으면 비어 있는 영역이라고 적지 않는다
+        st.markdown(f"가장 많이 비어 있는 영역은 **{md_escape(low['area'])}**입니다. "
+                    f"공고가 요구한 것의 {low['coverage']:.0%}를 채웠습니다.")
     st.altair_chart(chart, width="stretch")
     st.caption(
         "옅은 막대는 공고가 그 영역의 기술을 요구한 건수, 진한 막대는 그중 내가 채운 몫입니다."
@@ -180,7 +185,7 @@ def _render_priorities(missing: list[dict]) -> None:
             if r.get("area"):  # 처음 보는 기술 이름이어도 어느 분야인지 알 수 있게 영역을 함께 적는다(설문 2026-11-20)
                 st.caption(md_escape(r["area"]))
             st.markdown(f"공고 {r['of']}건 중 **{r['postings']}건**이 요구 · 그중 필수 {r['required_ratio']:.0%}")
-            st.markdown(f"내 단계 **{r['user_level']}** → 기준 **{r['required_level']}단계**{guessed}")
+            st.markdown(f"지금 **{r['user_level']}단계** → 공고가 바라는 수준 **{r['required_level']}단계**{guessed}")
             st.button("공고 근거 보기", key=f"evidence_{number}", on_click=ui.go, args=("demand",),
                       kwargs={"evidence_skill": r["skill"]}, icon=":material/format_quote:", width="stretch",
                       help="이 기술을 요구한 공고 문장을 시장 수요 화면에서 봅니다.")

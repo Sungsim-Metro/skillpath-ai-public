@@ -81,7 +81,8 @@ def entry_gate() -> None:
     _, middle, _ = st.columns([1, 2, 1])
     with middle:
         st.title("skillpath-ai")
-        st.caption("채용공고에서 요구 기술을 찾아 부족한 역량과 AWS 교육과정을 추천합니다.")
+        st.markdown(PITCH)  # 처음 보는 화면이라 무엇을 해 주는지와 쓰는 순서를 회색 글씨가 아닌 본문으로 적는다
+        st.markdown("① 해 본 일을 말하면 → ② 공고와 비교해 부족한 기술을 찾고 → ③ 들을 과정을 추천합니다.")
         with st.form("entry_access"):
             st.text_input("닉네임", key="auth_nickname")
             st.text_input("비밀번호", type="password", key="auth_password",
@@ -276,6 +277,7 @@ PANEL_CSS = f"""<style>
   border: 1px solid rgba(49, 51, 63, 0.2); border-radius: 0.5rem; padding: 1rem; }}
 .st-key-chat_message {{ margin-left: {PANEL_REM + 1}rem; width: calc(100% - {PANEL_REM + 1}rem); }}
 </style>"""
+PITCH = "**실제 채용공고가 요구하는 기술과 내 경험을 비교해, 부족한 기술과 들을 AWS 교육과정을 알려 드립니다.**"
 # 무엇을 적을지 몰라 멈추는 사용자가 있어 예시 문장을 보여 준다(설문 2026-11-20)
 EXAMPLE_INPUT = "예: “학교 프로젝트에서 EC2에 서버를 올리고 GitHub Actions로 배포해 봤어요.”"
 GUEST_NOTICE = "비회원의 대화는 저장되지 않습니다. 왼쪽에서 로그인하면 대화가 저장됩니다."
@@ -511,6 +513,7 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
             _new_chat_button(action)
         else:  # 좁은 화면에서는 패널이 숨겨져 새 채팅 버튼도 사라진다. 그때만 보이는 버튼을 둔다(app/ui.py 의 좁은 화면 규칙)
             action.button("새 채팅", key="chat_new_narrow", on_click=_reset_chat, icon=":material/edit_square:", width="stretch")
+        st.markdown(PITCH)  # 처음 온 사람이 무엇을 받는지 먼저 알게 한다
         st.caption("해 본 일을 편하게 적어 주세요. " + EXAMPLE_INPUT)
         if history_on:
             st.caption(MEMBER_NOTICE if nickname else GUEST_NOTICE)

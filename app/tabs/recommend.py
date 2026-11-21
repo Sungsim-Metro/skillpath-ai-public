@@ -5,7 +5,7 @@
 import streamlit as st
 
 from app.common import COMMON_AREA, PENDING, Ctx, load, md_escape, notice
-from app.course_card import RATING_NOTE, duration_text, render_course_list
+from app.course_card import RATING_NOTE, duration_text, is_https, render_course_list
 from backend import api
 from backend.plan import plan_minutes, study_order
 
@@ -22,6 +22,11 @@ def _render_order(recs: list[dict]) -> None:
         for item in plan:
             level = f" · 난이도 {item['level']}" if item["level"] else ""
             st.text(f"{item['step']}. {item['title']} ({item['skill']}{level})")
+        first = plan[0]
+        if is_https(first.get("url")):  # 할 일을 하나로 모은다: 순서의 첫 과정을 바로 연다
+            took = duration_text(first.get("duration_min"))
+            st.link_button(f"1번 과정부터 시작하기{' · ' + took if took else ''}", first["url"], type="primary",
+                           icon=":material/play_arrow:")
         total, unknown = plan_minutes(plan)
         if total:  # 얼마나 걸릴지 알아야 계획을 세운다. 합계는 backend/plan.py 가 낸 값이다
             rest = f" (소요 시간을 모르는 과정 {unknown}개 제외)" if unknown else ""
@@ -40,6 +45,10 @@ def _render_recommendations(ctx: Ctx):
         notice("학습 추천", err, "부족한 기술마다 학습 프로그램과 추천 이유가 여기에 나옵니다.")
         return
     _render_order(recs)
+    languages = {c["language"] for rec in recs for c in rec["courses"] if c.get("language")}
+    if languages == {"English"}:  # 한국어 화면에서 과정을 열고서야 영어임을 알게 하지 않는다
+        st.info("추천 과정은 모두 **영어 강의**입니다(AWS Skill Builder). 자막·번역 지원은 과정 페이지에서 확인하세요.",
+                icon=":material/translate:")
     area_of = {r["skill"]: r["area"] for r in missing}
     # 길게 늘어놓지 않고 기술마다 탭으로 넘겨 본다. 탭 순서는 공고 수요가 높은 순서다
     labels = [f"{priority}. {md_escape(rec['gap_skill'])}" for priority, rec in enumerate(recs, start=1)]

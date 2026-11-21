@@ -22,7 +22,7 @@ from app.common import md_escape
 from backend import chat_profiles
 
 RATING_NOTE = "★ 평점은 AWS Skill Builder 과정 페이지의 별점 평균과 평가 수입니다(수집한 날 기준). 추천 순서에는 쓰지 않습니다."
-CARD_HEIGHT = 500  # 카드 한 장의 높이(px). 1위 카드는 추천 이유를 펼쳐 두므로 그만큼 높인다. 넘치는 내용은 카드 안에서 스크롤한다
+CARD_HEIGHT = 540  # 카드 한 장의 높이(px). 1위 카드는 추천 이유를 펼쳐 두므로 그만큼 높인다. 넘치는 내용은 카드 안에서 스크롤한다
 SAVE_FAILED = "담은 교육과정을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요."
 CERTAIN_BADGE = ":green-badge[:material/verified: AWS Skill Builder]"
 SIMILAR_BADGE = ":orange-badge[:material/travel_explore: 유사 과정]"
@@ -71,7 +71,7 @@ def services_text(course: dict) -> str:
     return f"다루는 서비스 {tags}{more}"
 
 
-def _https(url: str) -> bool:
+def is_https(url: str) -> bool:
     try:
         target = urlsplit(url or "")
     except ValueError:
@@ -130,7 +130,7 @@ def sync_saved(session) -> None:
 
 def render_course_card(course: dict, *, rank: int | None = None, key: str = "", user_level=None) -> None:
     match = course.get("match")  # '담은 교육과정' 화면의 카드에는 없다(어느 기술의 추천인지와 따로 담는다)
-    linked = _https(course.get("url"))
+    linked = is_https(course.get("url"))
     with st.container(border=True, height=CARD_HEIGHT):
         badges = [f":blue-badge[{rank}위]"] if rank else []
         if match:
@@ -174,7 +174,8 @@ def render_course_card(course: dict, *, rank: int | None = None, key: str = "", 
 
 
 def _render_cards(courses: list[dict], columns: int, key: str, user_level=None) -> None:
-    slots = st.columns(min(columns, len(courses))) if columns > 1 and len(courses) > 1 else None
+    # 과정이 하나뿐이면 화면의 절반 폭만 쓴다. 카드 한 장이 화면 폭을 다 차지하면 비어 보인다
+    slots = st.columns(min(columns, max(len(courses), 2))) if columns > 1 and courses else None
     for index, course in enumerate(courses, start=1):
         card_key = f"{key}_{index}" if key else ""
         if slots:
