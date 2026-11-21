@@ -1,0 +1,6 @@
+{
+  "_note": "상담 답 채점(judge_answer_v1) 가짜 응답. 키는 문항 id, 없으면 default. 점수는 흐름 확인용 고정값이다.",
+  "default": {"scores": [{"item_id": "answer", "helpful": 4, "grounded": 4, "note": null}]},
+  "C2": {"scores": [{"item_id": "answer", "helpful": 3, "grounded": 5, "note": "다음 행동이 조금 모호하다"}]},
+  "D1": {"scores": [{"item_id": "answer", "helpful": 5, "grounded": 3, "note": "근거 자료에 없는 숫자가 하나 있다"}]}
+}

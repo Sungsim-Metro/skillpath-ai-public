@@ -5,6 +5,9 @@
   python -m ai.eval.agent_compare --structures 0 A      구조 0(화면 경로)과 A(상담 에이전트, 아직 없음)
   python -m ai.eval.agent_compare --bedrock             실제 모드(BEDROCK_MOCK=0 과 모델·가드레일·DynamoDB 설정 필요)
   python -m ai.eval.agent_compare --set holdout         보지 않은 문항. 숫자만 출력(문항 id·원문 없음). 채점 직전에 한 번만
+  python -m ai.eval.agent_compare --judge <답 파일> [--rounds 2] [--human-sheet] [--bedrock --max-judge-calls N]
+                                                        상담 답 채점(ai/eval/judge_answer.py, 기준표 ai/eval/JUDGE_ANSWER.md)
+  python -m ai.eval.agent_compare --agreement <채점 결과 파일> <사람 채점 CSV>   LLM·사람 채점 일치율
 
 구조
 - 0 화면 경로: backend.chat.handle_message(가드레일 → 발화 해석 → 코드 분기 → Gap 또는 검토 추천). 지금 화면이 쓰는 경로
@@ -20,6 +23,8 @@
 - 불확실 비율: 보여 준 과정 중 match 가 uncertain 인 비율
 - 모델 호출 수(Guardrails 호출은 포함하지 않음), 토큰, 시간(중앙값·최대). 두 구조 모두 모델 호출 응답의 토큰을 직접 더한다(가짜 모드는 0, 가짜 대본 차례는 mock_turns)
 결과는 outputs/eval/agent_compare_*.json 에 저장한다(.gitignore 대상).
+상담 답 원문과 근거 자료(그 답을 만들 때 코드·도구가 낸 결과 요약)는 채점용으로 outputs/eval/agent_answers_*.json 에만 저장한다.
+화면에는 출력하지 않는다(보지 않은 문항도 파일에만).
 
 캐시: 추천(backend.api 의 추천 캐시)·수요(60초 캐시) 같은 메모리 캐시가 구조·문항 사이에 남으면 뒤에 도는 쪽의 호출 수와
 시간이 줄어 비교가 틀어진다. backend 에 캐시를 비우는 공개 함수가 없어(내부 변수는 건드리지 않는다), (구조, 문항)마다
@@ -83,6 +88,14 @@ class LimitReached(RuntimeError):
     """부모: 호출 한도에 걸려 측정을 멈춤(그때까지의 결과만 저장)."""
 # 답에 되묻기가 있는지(표기 애매 문항). 상담 에이전트의 보충 문장 "OO는 XX를 말씀하신 건가요?" 와 같은 꼴
 ASK_BACK = re.compile(r"말씀하신\s*건가요|무엇을\s*말씀|어떤\s*기술을\s*말씀|맞나요\?")
+EVIDENCE_MAX = 6000  # 근거 자료 요약 글자 수 상한(채점 입력이 너무 길어지지 않게)
+ANSWER_KEYS = ("answer", "evidence")  # 결과 행에서 떼어 답 파일에만 저장하는 칸
+
+
+def evidence_text(parts: dict) -> str:
+    """근거 자료를 JSON 문자열로. 상한을 넘으면 자르고 잘렸다고 적는다."""
+    text = json.dumps(parts, ensure_ascii=False)
+    return text if len(text) <= EVIDENCE_MAX else text[:EVIDENCE_MAX] + " …(잘림)"
 
 
 class Probe:
@@ -192,12 +205,31 @@ def run_screen(case: dict) -> dict:
     """구조 0: 화면 경로 handle_message. 문항마다 새 대화."""
     from backend import chat as screen
 
+    from backend import api
+
     state = screen.Conversation()
-    with Probe() as probe:
-        start = time.perf_counter()
-        reply = screen.handle_message(state, case["text"], job=case["job"], sidebar_skills=[])
-        seconds = time.perf_counter() - start
+    gaps = []
+    original_gap = api.get_gap
+
+    def watched_gap(*a, **k):
+        rows = original_gap(*a, **k)
+        gaps.append(rows)
+        return rows
+
+    api.get_gap = watched_gap
+    try:
+        with Probe() as probe:
+            start = time.perf_counter()
+            reply = screen.handle_message(state, case["text"], job=case["job"], sidebar_skills=[])
+            seconds = time.perf_counter() - start
+    finally:
+        api.get_gap = original_gap
     courses = reply.courses or []
+    gap_keys = ("skill", "owned", "postings", "of", "required_pct", "user_level", "required_level")
+    evidence = {
+        "gap": [{k: r[k] for k in gap_keys if k in r} for rows in gaps for r in rows],
+        "courses": [{k: c.get(k) for k in ("gap_skill", "title", "level", "match", "reason")} for c in courses],
+    }
     return {
         "guard": guard_kind(probe.guard),
         "intent": screen_intent(probe),
@@ -212,6 +244,8 @@ def run_screen(case: dict) -> dict:
         "tokens": probe.tokens,
         "seconds": round(seconds, 3),
         "answer_chars": len(reply.text),
+        "answer": reply.text,
+        "evidence": evidence_text(evidence),
     }
 
 
@@ -236,6 +270,16 @@ def run_agent(case: dict) -> dict:
     """구조 A: 상담 에이전트 + recommend_courses. 문항마다 새 대화(기록 없음)."""
     from ai import agent
 
+    tool_log = []
+    saved_tools = dict(agent.TOOL_FUNCS)
+
+    def logged(name, fn):
+        def call(inp):
+            out = fn(inp)
+            tool_log.append({"tool": name, "input": inp, "output": out})
+            return out
+        return call
+
     with Probe() as probe:
         original = agent.tool_recommend_courses
 
@@ -244,13 +288,17 @@ def run_agent(case: dict) -> dict:
             probe.recommendations.append(out)
             return out
 
-        agent.tool_recommend_courses = watched
+        agent.tool_recommend_courses = watched  # TOOL_FUNCS 의 람다가 부를 때 이 이름을 찾는다
+        for name, fn in list(agent.TOOL_FUNCS.items()):  # 근거 자료: 도구 이름·입력·출력
+            agent.TOOL_FUNCS[name] = logged(name, fn)
         try:
             start = time.perf_counter()
             result = agent.chat(case["text"])
             seconds = time.perf_counter() - start
         finally:
             agent.tool_recommend_courses = original
+            agent.TOOL_FUNCS.clear()
+            agent.TOOL_FUNCS.update(saved_tools)
     courses = [c for out in probe.recommendations for r in out["recommendations"] for c in r["courses"]]
     return {
         "guard": guard_kind(probe.guard),
@@ -269,6 +317,8 @@ def run_agent(case: dict) -> dict:
         "tools": [c["name"] for c in result["tool_calls"]],
         "not_found": [s for out in probe.recommendations for s in out.get("not_found", [])],  # 수요 집계에 없어 추천하지 않은 기술
         "uncertain_reason": result.get("uncertain_reason"),
+        "answer": result["answer"],
+        "evidence": evidence_text({"tools": tool_log}),
     }
 
 
@@ -371,6 +421,84 @@ def run_one(structure: str, case_set: str, case_id: str) -> int:
     return 0
 
 
+def split_answers(rows_by_structure: dict) -> dict:
+    """결과 행에서 답 원문·근거 자료를 떼어 낸다(행은 바뀜). {구조: {문항 id: {"answer", "evidence"}}}."""
+    answers = {}
+    for name, rows in rows_by_structure.items():
+        for cid, row in rows.items():
+            picked = {k: row.pop(k) for k in ANSWER_KEYS if k in row}
+            if picked:
+                answers.setdefault(name, {})[cid] = picked
+    return answers
+
+
+def save_answers(answers: dict, case_set: str, mode: str, cases_name: str) -> Path:
+    """채점용 답 파일(outputs/ 에만). 화면에는 경로만 알린다."""
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUT_DIR / f"agent_answers_{case_set}_{mode}_{time.strftime('%Y%m%d-%H%M%S')}.json"
+    out.write_text(json.dumps({"set": case_set, "mode": mode, "cases": cases_name, "answers": answers},
+                              ensure_ascii=False, indent=1), encoding="utf-8")
+    return out
+
+
+def run_judge(args) -> int:
+    """--judge: 답 파일을 채점한다. 화면에는 숫자만(구조별 평균, 잡음, 0·A 차이) 출력한다."""
+    from ai.eval import judge_answer
+
+    answers_path = Path(args.judge)
+    data = json.loads(answers_path.read_text(encoding="utf-8"))
+    if args.bedrock == bedrock.is_mock():
+        print("--bedrock 은 BEDROCK_MOCK=0 일 때만, 가짜 모드는 BEDROCK_MOCK=1 일 때만 씁니다. 멈춥니다.")
+        return 1
+    if args.bedrock and args.max_judge_calls is None:
+        print("실제 모드 채점은 --max-judge-calls 를 줘야 합니다. 멈춥니다.")
+        return 1
+    cases = json.loads((HOLDOUT if data.get("set") == "holdout" else CASES).read_text(encoding="utf-8"))["cases"]
+    by_id = {c["id"]: c for c in cases}
+    if not any(cid in by_id and judge_answer.judged_case(by_id[cid]) for rows in data["answers"].values() for cid in rows):
+        print("채점 대상이 없습니다(기대 의도가 gap·demand·courses 인 문항의 답이 답 파일에 없음). 채점하지 않고 끝냅니다.")
+        return 0
+    try:
+        out, result = judge_answer.judge_file(answers_path, cases, args.rounds, args.max_judge_calls, OUT_DIR,
+                                             human_sheet=args.human_sheet)
+    except judge_answer.JudgeLimitReached as e:
+        print(f"채점 한도에 걸려 멈췄습니다: {e}")
+        return LIMIT_EXIT
+    except ValueError as e:
+        print(f"채점을 시작하지 못했습니다: {e}")
+        return 1
+    used = result["judge_calls"]
+    print(f"채점 항목 {result['items']}개 × {result['rounds']}회  채점 호출 {used['calls']}번  토큰 {used['tokens']}  형식 실패 {used['failed']}")
+    for structure, per_round in result["summary"]["by_structure"].items():
+        for rnd, s in per_round.items():
+            print(f"  [구조 {structure} {rnd}회차] n={s['n']} 평균 " + ", ".join(f"{k} {v}" for k, v in s["mean"].items()))
+    noise, effect = result["summary"].get("noise"), result["summary"].get("effect")
+    if noise:
+        print(f"  채점 잡음(같은 답 두 번): 쌍 {noise['identical']['pairs']}개 중 합계가 달라진 쌍 {noise['noise']}개")
+    if effect:
+        e = effect
+        print(f"  구조 차이(1회차, 같은 질문): {e['labels']['b']} 가 {e['labels']['a']} 보다 높음 {e['higher']}·같음 {e['same']}·낮음 {e['lower']}")
+    print(f"저장: {out.relative_to(ROOT).as_posix()}" + ("  (사람 채점 양식도 같은 폴더)" if args.human_sheet else ""))
+    return 0
+
+
+def run_agreement(judge_path: str, human_csv: str) -> int:
+    """--agreement: LLM 채점(1회차)과 사람 채점 CSV 의 일치율. 숫자만 출력하고 결과 파일에 저장한다."""
+    from ai.eval import judge_answer
+
+    result = json.loads(Path(judge_path).read_text(encoding="utf-8"))
+    agr = judge_answer.human_agreement(result, Path(human_csv))
+    for k, v in agr["by_criterion"].items():
+        print(f"  {k}: n={v['n']} 정확 일치 {v['exact']}  ±1 일치 {v['within_one']}  kappa({agr['kappa_weight']}) {v['kappa']}"
+              f"  평균 차이(LLM−사람) {v['mean_diff']}" + ("  (한쪽 점수가 하나뿐)" if v["single_valued"] else ""))
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUT_DIR / f"agent_judge_agreement_{time.strftime('%Y%m%d-%H%M%S')}.json"
+    out.write_text(json.dumps({"judge_file": Path(judge_path).name, "human_csv": Path(human_csv).name, **agr},
+                              ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"저장: {out.relative_to(ROOT).as_posix()}")
+    return 0
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description="상담 구조 비교 코드 지표")
@@ -380,9 +508,18 @@ def main() -> int:
     ap.add_argument("--max-model-calls", type=int, help="이번 실행 전체의 모델 호출 한도(넘기 직전에 멈춤)")
     ap.add_argument("--max-guardrail-calls", type=int, help="이번 실행 전체의 ApplyGuardrail 호출 한도(넘기 직전에 멈춤)")
     ap.add_argument("--one", nargs=2, metavar=("STRUCTURE", "CASE_ID"), help=argparse.SUPPRESS)  # 하위 프로세스용
+    ap.add_argument("--judge", metavar="ANSWERS_FILE", help="답 파일(agent_answers_*.json)을 채점")
+    ap.add_argument("--rounds", type=int, default=1, choices=(1, 2), help="같은 답을 몇 번 채점할지(2면 채점 잡음)")
+    ap.add_argument("--max-judge-calls", type=int, help="채점 호출 한도(재시도 포함, 넘기 직전에 멈춤)")
+    ap.add_argument("--human-sheet", action="store_true", help="사람 채점 양식(CSV)도 만듦")
+    ap.add_argument("--agreement", nargs=2, metavar=("JUDGE_FILE", "HUMAN_CSV"), help="LLM·사람 채점 일치율")
     args = ap.parse_args()
     if args.one:
         return run_one(args.one[0], args.set, args.one[1])
+    if args.judge:
+        return run_judge(args)
+    if args.agreement:
+        return run_agreement(*args.agreement)
     unknown = [s for s in args.structures if s not in STRUCTURES]
     if unknown:
         print(f"아직 없는 구조라 건너뜁니다: {', '.join(unknown)}")
@@ -412,6 +549,9 @@ def main() -> int:
         used_m = sum(r["model_calls"] for v in partial.values() for r in v.values())
         used_g = sum(r.get("guardrail_calls", 0) for v in partial.values() for r in v.values())
         print(f"{e}. 끝난 문항 {done}, 쓴 호출: 모델 {used_m}번, ApplyGuardrail {used_g}번")
+        answers = split_answers(partial)
+        if answers:
+            print(f"답 파일: {save_answers(answers, args.set, 'bedrock' if args.bedrock else 'mock', path.name).relative_to(ROOT).as_posix()}")
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         out = OUT_DIR / f"agent_compare_{args.set}_stopped_{time.strftime('%Y%m%d-%H%M%S')}.json"
         kept = partial if args.set == "dev" else {k: len(v) for k, v in partial.items()}  # 보지 않은 문항은 개수만
@@ -419,6 +559,7 @@ def main() -> int:
                                   ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"멈출 때까지의 결과: {out.relative_to(ROOT).as_posix()}")
         return LIMIT_EXIT
+    answers = split_answers({name: r["rows"] for name, r in result.items()})
     for name, r in result.items():
         s = r["summary"]
         print(f"\n[구조 {name}] 의도 {s['intent_correct']}/{s['intent_total']}(해당 없음 {s['intent_not_applicable']})  되묻기 {s['ask_back_correct']}/{s['ask_back_total']}(해당 없음 {s['ask_back_not_applicable']})"
@@ -438,6 +579,8 @@ def main() -> int:
     out.write_text(json.dumps({"cases": path.name, "notes": RESULT_NOTES, "result": saved}, ensure_ascii=False, indent=1),
                    encoding="utf-8")
     print(f"\n저장: {out.relative_to(ROOT).as_posix()}")
+    if answers:
+        print(f"답 파일(채점용, 답 원문 포함): {save_answers(answers, args.set, mode, path.name).relative_to(ROOT).as_posix()}")
     return 0
 
 
