@@ -13,6 +13,7 @@ from pipeline.aliases import normalize_skill, skill_aliases
 
 STATUSES = ("ok", "blocked", "unsupported", "clarify_role", "incomplete", "out_of_scope")
 ACTIONS = ("note", "summary", "gap", "courses")
+INTAKE_MAX_TOKENS = 2400  # 경험 문장을 그대로 인용하므로 발화가 길면 답도 길다. 1200에서는 여러 줄 발화의 JSON이 잘릴 수 있었다
 LIST_FIELDS = ("add_skills", "remove_skills", "add_experiences", "remove_experiences",
                "save_skills", "save_experiences", "experience_skills")
 FRAGMENT = re.compile(r"…+\s*$|\.{2,}\s*$|(?:아직\s*입력\s*중|이어서\s*(?:쓸|말할)게)|"
@@ -421,12 +422,13 @@ def _prune(data: dict, message: str, context: dict) -> None:
 
     남기는 항목은 모두 사용자 발화에 실제로 있다: 기술은 같은 절 규칙(제삼자·희망·부정·수강 제외)으로 확인하고,
     경험은 공백·괄호·문장부호 차이만 눈감은 채 원문 구간으로 바꿔 넣는다. 원문에 없는 것은 버린다.
-    그 밖의 검사(정정·저장·직무)는 그대로 엄격하다.
+    정정(remove_*)도 확인된 사실을 가리키는 것만 남긴다. 확인된 적 없는 항목의 정정은 지울 것이 없어 버려도 결과가 같다.
+    그 밖의 검사(저장·직무, 추가와 정정이 겹치는 경우)는 그대로 엄격하다.
     """
     if data.get("status") != "ok":
         return
     if not all(isinstance(data.get(k), list) and all(isinstance(i, str) for i in data[k])
-               for k in ("add_skills", "add_experiences", "experience_skills")):
+               for k in ("add_skills", "add_experiences", "experience_skills", "remove_skills", "remove_experiences")):
         return  # 형식이 틀린 답은 _validate 가 거부해 다시 요청한다
     sources = [message]
     history = context.get("history", [])
@@ -447,8 +449,18 @@ def _prune(data: dict, message: str, context: dict) -> None:
         if found:
             quotes.append(found)
     data["add_experiences"] = list(dict.fromkeys(quotes))
+    # 긴 발화에는 "팀원이 썼지만 저는 안 다뤘어요" 같은 부정이 섞인다. 모델이 그것을 정정으로 올려도 턴 전체를 버리지 않는다
+    removable = _items("skills", context.get("skills", [])) | _supported_experience_skills(
+        context.get("experiences", []), data["remove_skills"])
+    # 같은 항목을 추가하면서 정정한 답은 덜어 내지 않는다. 앞뒤가 안 맞는 답이라 _validate 가 거부해 다시 요청하게 둔다
+    added = _items("skills", data["add_skills"])
+    data["remove_skills"] = [n for n in data["remove_skills"]
+                             if _items("skills", [n]) <= removable or _items("skills", [n]) & added]
+    confirmed = set(context.get("experiences", []))
+    data["remove_experiences"] = [e for e in data["remove_experiences"]
+                                  if e in confirmed or e in data["add_experiences"]]
     # 경험 기반 기술은 지금 확인된 본인 작업으로 설명되는 것만 둔다
-    active = active_experiences(context, data["add_experiences"], data.get("remove_experiences") or [])
+    active = active_experiences(context, data["add_experiences"], data["remove_experiences"])
     data["experience_skills"] = [n for n in data["experience_skills"]
                                  if _items("skills", [n]) <= _supported_experience_skills(active, [n])]
 
@@ -468,7 +480,7 @@ def interpret(message: str, context: dict, *, screened: bool = False) -> Turn:
         result = bedrock.converse_json(
             intake_prompt(),
             json.dumps({"message": message, "context": state}, ensure_ascii=False),
-            mock_file="", mock_key="chat_intake", usage_stage="chat_intake", max_tokens=1200,
+            mock_file="", mock_key="chat_intake", usage_stage="chat_intake", max_tokens=INTAKE_MAX_TOKENS,
             validate=lambda data: (_prune(data, message, state), _validate(data, message, state)),
         )
     except Exception:

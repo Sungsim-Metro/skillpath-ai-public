@@ -208,7 +208,10 @@ def _validate_review(data: dict, message: str, context: dict) -> None:
     if decision == "reinterpret":
         quote = data["quote"]
         texts = [message, *(m["content"] for m in context.get("history", []) if m["role"] == "user")]
-        if not isinstance(quote, str) or not quote.strip() or len(quote) > 160 or not any(quote in text for text in texts):
+        # 여러 줄 발화에서 모델이 줄바꿈을 공백으로 바꿔 인용해도 같은 구절로 본다
+        flat = lambda text: " ".join(text.split())
+        if (not isinstance(quote, str) or not quote.strip() or len(quote) > 160
+                or not any(flat(quote) in flat(text) for text in texts)):
             raise ValueError("재해석에는 사용자가 실제로 말한 근거 구절이 필요합니다.")
 
 
@@ -249,7 +252,7 @@ def interpret_turn(message: str, context: dict) -> SupervisedTurn:
     feedback = {}
     for attempt in range(2):
         candidate = _ask(chat.intake_prompt() + "\n" + _INTAKE, {**base, **feedback}, "chat_supervised_intake",
-                         lambda data: _validate_candidate(data, message, context), 1500)
+                         lambda data: _validate_candidate(data, message, context), chat.INTAKE_MAX_TOKENS)
         review = _ask(_REVIEW, {**base, "candidate": candidate}, "chat_supervisor_plan",
                       lambda data: _validate_review(data, message, context), 250)
         decision, issue = review["decision"], review["issue"]

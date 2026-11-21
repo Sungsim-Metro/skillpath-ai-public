@@ -246,6 +246,14 @@ class RealSupervisorBoundaryTest(unittest.TestCase):
             self.supervisor.interpret_turn("그 기술 과정 찾아줘", {})
         self.assertEqual(self.converse.call_count, 3)
 
+    def test_quote_across_a_line_break_matches_and_an_absent_quote_does_not(self):
+        """여러 줄 발화에서 모델이 줄바꿈을 공백으로 바꿔 인용해도 같은 구절로 본다. 원문에 없는 구절은 여전히 거부한다."""
+        message = "Docker로 배포해 봤어요.\n그 기술\n과정 찾아줘"
+        ok = {"decision": "reinterpret", "issue": "course_target", "quote": "그 기술 과정 찾아줘"}
+        self.supervisor._validate_review(ok, message, {})  # 예외 없음
+        with self.assertRaises(ValueError):
+            self.supervisor._validate_review({**ok, "quote": "그 기술 강의 찾아줘"}, message, {})
+
     def test_approved_generic_gap_cannot_replace_an_unresolved_singular_reference(self):
         self.respond(self.intake(scope="gap"), {"decision": "continue", "issue": "none"})
         plan = self.supervisor.interpret_turn("그 기술을 다루는 강의 추천해줘", {"wishes": ["IAM", "Git"]})
