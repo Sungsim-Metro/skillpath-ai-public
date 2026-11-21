@@ -309,8 +309,9 @@ def sidebar_summary(session: chat_profiles.ProfileSession | None, job: str) -> d
         st.caption("이 직무는 아직 진단하지 않았습니다. 진단하지 않은 세부 능력은 0단계로 봅니다.")
     from app.level_radar import render_level_radar
 
-    render_level_radar(job, levels)  # 영역별 내 단계와 기준 단계를 레이더 차트로 보여 준다
-    st.caption("수준 진단은 학습 상담 화면의 '수준 진단 설문'에서 합니다.")
+    # 메뉴 아래가 길어지지 않게 접어 둔다(설문 2026-11-20). 수준 진단을 어디서 하는지는 사용 안내와 상담 화면의 버튼이 알린다
+    with st.expander("영역별 내 수준 차트"):
+        render_level_radar(job, levels)  # 영역별 내 단계와 기준 단계를 레이더 차트로 보여 준다
     _custom_levels(session)
     notice = st.session_state.pop("levels_notice", None)
     if notice:

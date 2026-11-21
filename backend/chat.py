@@ -165,6 +165,19 @@ def _verified_courses(recommendations: list[dict], missing: list[dict]) -> list[
     return courses
 
 
+def _course_info(course: dict) -> dict:
+    """소요 시간·강의 언어·다루는 AWS 서비스(③ 의 선택 필드). 형식이 맞는 값만 카드에 옮기고 틀리면 그 값만 뺀다."""
+    info = {}
+    minutes, language, services = course.get("duration_min"), course.get("language"), course.get("aws_services")
+    if isinstance(minutes, int) and not isinstance(minutes, bool) and minutes > 0:
+        info["duration_min"] = minutes
+    if isinstance(language, str) and language.strip():
+        info["language"] = language.strip()
+    if isinstance(services, list) and services and all(isinstance(s, str) and s.strip() for s in services):
+        info["aws_services"] = [s.strip() for s in services]
+    return info
+
+
 def _verified_course_cards(skill: str, candidates: list[dict]) -> list[dict]:
     """후보 필드와 링크를 검사하고 검증된 이유를 그대로 카드에 옮긴다."""
     courses = []
@@ -181,6 +194,7 @@ def _verified_course_cards(skill: str, candidates: list[dict]) -> list[dict]:
         if (isinstance(avg, (int, float)) and not isinstance(avg, bool) and 0 < avg <= 5
                 and isinstance(count, int) and not isinstance(count, bool) and count > 0):
             shown.update(rating_avg=avg, rating_count=count)
+        shown.update(_course_info(course))
         courses.append(shown)
     return courses
 

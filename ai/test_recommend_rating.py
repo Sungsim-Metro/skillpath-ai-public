@@ -45,5 +45,36 @@ class CourseRatingTest(unittest.TestCase):
         self.assertNotIn("rating_count", shown[2])
 
 
+class CourseInfoTest(unittest.TestCase):
+    """소요 시간·강의 언어·AWS 서비스는 화면 표시용 선택 필드다(2026-11-21). 추천까지 가고 LLM 입력에는 들어가지 않는다."""
+
+    FULL = {**COURSE, "duration_min": "90", "language": "English",
+            "aws_services": "Amazon Elastic Compute Cloud / AWS Config"}
+
+    def test_only_present_values_become_fields(self):
+        self.assertEqual(rec.course_info(self.FULL), {"duration_min": 90, "language": "English",
+                                                      "aws_services": ["Amazon Elastic Compute Cloud", "AWS Config"]})
+        for row in (dict(COURSE), {"duration_min": "", "language": " ", "aws_services": ""},
+                    {"duration_min": "abc"}, {"duration_min": "0"}):
+            self.assertEqual(rec.course_info(row), {}, row)
+
+    def test_info_reaches_the_recommendation_but_not_the_llm_input(self):
+        demand = {"postings": 20, "of": 40, "required_ratio": 0.5}
+        table = {"FULL": self.FULL, "OLD": dict(COURSE)}
+        links = [{"course_id": cid, "subskill_id": "C1-4", "match": "certain"} for cid in table]
+        with mock.patch.dict(os.environ, {"BEDROCK_MOCK": "1"}), \
+             mock.patch.object(rec, "_courses", return_value=table), \
+             mock.patch.object(rec, "search_courses", return_value=links), \
+             mock.patch.object(rec, "_mock_skills", return_value=set()):
+            courses = rec.candidate_courses("예시기술")
+            llm_input = rec.llm_input_of("예시기술", demand, courses)
+            result, _ = rec.build_recommendation("예시기술", demand)
+        self.assertFalse(any(key in c for c in llm_input["courses"] for key in rec.INFO_KEYS))
+        full, old = result["courses"]
+        self.assertEqual((full["duration_min"], full["language"], full["aws_services"]),
+                         (90, "English", ["Amazon Elastic Compute Cloud", "AWS Config"]))
+        self.assertFalse(any(key in old for key in rec.INFO_KEYS))
+
+
 if __name__ == "__main__":
     unittest.main()

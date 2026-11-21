@@ -7,10 +7,13 @@
   추천 순서에는 쓰지 않는다.
 - 카드 높이를 맞추고 추천 이유는 접어 둔다. 과정이 여러 기술에 걸치면 기술마다 탭으로 나눈다.
 - 과정 데이터의 글자는 마크다운 기호를 지운 뒤(md_escape) 그리거나 `st.text` 로 그린다. 그대로 해석되면 링크나 이미지가 그려질 수 있다.
-- 과정 원문 문장은 보여 주지 않는다(원칙 3).
+- 과정 원문 문장은 보여 주지 않는다(원칙 3). 선수지식은 과정 페이지의 문장이라 "있음/없음"만 적고 내용은 과정 페이지에서 보게 한다.
+- 소요 시간, 강의 언어, 다루는 AWS 서비스 이름은 과정 표의 값이다(계약 ③ 의 선택 필드, 2026-11-21). 설문에서 "과정 정보가 부족해
+  판단하기 어렵다"는 응답이 많아 넣었다. 있을 때만 보여 주고 추천 순서에는 쓰지 않는다. 분 → "약 1시간 30분"은 표기만 바꾼 것이다.
 - 담기: 카드의 버튼으로 과정을 담아 메뉴의 '담은 교육과정' 화면(app/tabs/saved.py)에서 모아 본다.
   로그인했으면 프로필에 저장하고(backend.chat_profiles), 비회원이면 이 브라우저 세션에만 둔다.
 """
+import re
 from urllib.parse import urlsplit
 
 import streamlit as st
@@ -19,7 +22,7 @@ from app.common import md_escape
 from backend import chat_profiles
 
 RATING_NOTE = "★ 평점은 AWS Skill Builder 과정 페이지의 별점 평균과 평가 수입니다(수집한 날 기준). 추천 순서에는 쓰지 않습니다."
-CARD_HEIGHT = 450  # 카드 한 장의 높이(px). 1위 카드는 추천 이유를 펼쳐 두므로 그만큼 높인다. 넘치는 내용은 카드 안에서 스크롤한다
+CARD_HEIGHT = 500  # 카드 한 장의 높이(px). 1위 카드는 추천 이유를 펼쳐 두므로 그만큼 높인다. 넘치는 내용은 카드 안에서 스크롤한다
 SAVE_FAILED = "담은 교육과정을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요."
 CERTAIN_BADGE = ":green-badge[:material/verified: AWS Skill Builder]"
 SIMILAR_BADGE = ":orange-badge[:material/travel_explore: 유사 과정]"
@@ -31,6 +34,38 @@ def rating_text(course: dict) -> str:
     if not isinstance(avg, (int, float)) or not isinstance(count, int) or isinstance(avg, bool) or count <= 0:
         return ""
     return f"★ {avg:.1f} · 평가 {count:,}개"
+
+
+# 과정 페이지가 선수지식이 없다고 적은 표기("None", "No prerequisites needed.", "No prerequisite required", 예시 데이터의 "없음")
+NO_PREREQ = re.compile(r"^(none|n/a|없음|no prerequisites?( (needed|required))?)\.?$", re.IGNORECASE)
+UNKNOWN_PREREQ = {"", "표기 없음"}  # 과정 페이지에 선수지식 항목이 없는 경우(ai.recommend 의 NO_PREREQ). 없다고 단정하지 않는다(원칙 4)
+LANGUAGES = {"English": "영어", "Korean": "한국어", "한국어": "한국어"}
+SERVICES_SHOWN = 3  # 카드에 적는 AWS 서비스 수. 나머지는 "외 n개"로 줄인다
+
+
+def duration_text(minutes) -> str:
+    """90 → '약 1시간 30분'. 값이 없거나 숫자가 아니면 빈 글자."""
+    if not isinstance(minutes, int) or isinstance(minutes, bool) or minutes <= 0:
+        return ""
+    hours, rest = divmod(minutes, 60)
+    return "약 " + " ".join(part for part in (f"{hours}시간" if hours else "", f"{rest}분" if rest else "") if part)
+
+
+def prerequisite_text(course: dict) -> str:
+    """'선수지식 있음' 또는 '선수지식 없음'. 과정 페이지에 항목이 없거나 값이 없는 카드(담은 과정)에는 빈 글자."""
+    value = course.get("prerequisites")
+    if not isinstance(value, str) or value.strip() in UNKNOWN_PREREQ:
+        return ""
+    return "선수지식 없음" if NO_PREREQ.match(value.strip()) else "선수지식 있음(과정 페이지에서 확인)"
+
+
+def services_text(course: dict) -> str:
+    """'다루는 서비스: A, B, C 외 2개'. 없으면 빈 글자."""
+    names = course.get("aws_services")
+    if not isinstance(names, list) or not names:
+        return ""
+    more = f" 외 {len(names) - SERVICES_SHOWN}개" if len(names) > SERVICES_SHOWN else ""
+    return "다루는 서비스: " + ", ".join(str(name) for name in names[:SERVICES_SHOWN]) + more
 
 
 def _https(url: str) -> bool:
@@ -90,7 +125,7 @@ def sync_saved(session) -> None:
     st.session_state.saved_courses = {c["url"]: c for c in items}
 
 
-def render_course_card(course: dict, *, rank: int | None = None, key: str = "") -> None:
+def render_course_card(course: dict, *, rank: int | None = None, key: str = "", user_level=None) -> None:
     match = course.get("match")  # '담은 교육과정' 화면의 카드에는 없다(어느 기술의 추천인지와 따로 담는다)
     linked = _https(course.get("url"))
     with st.container(border=True, height=CARD_HEIGHT):
@@ -99,14 +134,23 @@ def render_course_card(course: dict, *, rank: int | None = None, key: str = "") 
             badges.append(SIMILAR_BADGE if match == "uncertain" else CERTAIN_BADGE)
         if course.get("level"):
             badges.append(f":gray-badge[난이도 {md_escape(course['level'])}]")
+        if duration_text(course.get("duration_min")):
+            badges.append(f":gray-badge[:material/schedule: {duration_text(course['duration_min'])}]")
+        if isinstance(course.get("language"), str) and course["language"].strip():
+            language = course["language"].strip()
+            badges.append(f":gray-badge[:material/translate: {md_escape(LANGUAGES.get(language, language))} 강의]")
         if badges:
             st.markdown(" ".join(badges))
         st.markdown(f"##### {md_escape(course['title'])}")  # 제목은 크게, 아래 정보는 작고 옅게
         details = [course["gap_skill"]] if course.get("gap_skill") else []
-        if course.get("prerequisites"):
-            details.append(f"선수지식 {course['prerequisites']}")
+        if user_level is not None and course.get("level"):  # 내 수준과 과정 난이도를 나란히 보고 고르게 한다
+            details.append(f"내 단계 {user_level} · {course['level']} 과정")
+        if prerequisite_text(course):
+            details.append(prerequisite_text(course))
         if details:
             st.caption(md_escape(" · ".join(details)))
+        if services_text(course):
+            st.caption(md_escape(services_text(course)))
         rating = rating_text(course)
         if rating and linked:
             st.link_button(rating, course["url"], type="tertiary", icon=":material/open_in_new:",
@@ -125,28 +169,29 @@ def render_course_card(course: dict, *, rank: int | None = None, key: str = "") 
                       type="tertiary", help="담은 과정은 메뉴의 '담은 교육과정'에서 모아 봅니다.")
 
 
-def _render_cards(courses: list[dict], columns: int, key: str) -> None:
+def _render_cards(courses: list[dict], columns: int, key: str, user_level=None) -> None:
     slots = st.columns(min(columns, len(courses))) if columns > 1 and len(courses) > 1 else None
     for index, course in enumerate(courses, start=1):
         card_key = f"{key}_{index}" if key else ""
         if slots:
             with slots[(index - 1) % len(slots)]:
-                render_course_card(course, rank=index, key=card_key)
+                render_course_card(course, rank=index, key=card_key, user_level=user_level)
         else:
-            render_course_card(course, rank=index, key=card_key)
+            render_course_card(course, rank=index, key=card_key, user_level=user_level)
 
 
-def render_course_list(courses: list[dict], *, columns: int = 1, key: str = "") -> None:
+def render_course_list(courses: list[dict], *, columns: int = 1, key: str = "", user_level=None) -> None:
     """과정을 받은 순서대로 카드로 그리고 기술별로 1위부터 번호를 붙인다. columns 가 2 이상이면 옆으로 나란히 놓는다.
 
     과정이 여러 기술에 걸쳐 있으면 길게 늘어놓지 않고 기술마다 탭으로 나눈다.
     key 는 이 목록을 화면에서 구분하는 이름이다. 주면 카드마다 담기 버튼이 생긴다.
+    user_level 은 이 기술의 내 단계(③ 의 user_level)다. 한 기술의 과정만 그릴 때 주면 카드에 과정 난이도와 나란히 적는다.
     """
     groups: dict[str, list[dict]] = {}
     for course in courses:
         groups.setdefault(course.get("gap_skill", ""), []).append(course)
     if len(groups) <= 1:
-        _render_cards(courses, columns, key)
+        _render_cards(courses, columns, key, user_level)
         return
     for number, (tab, group) in enumerate(zip(st.tabs([md_escape(skill) or "기타" for skill in groups]), groups.values())):
         with tab:

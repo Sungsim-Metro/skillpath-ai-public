@@ -51,7 +51,7 @@ def _render_recommendations(ctx: Ctx):
                             f"AWS 기초·자격증 과정 연결을 준비하고 있습니다. {PENDING}")
             elif not rec["courses"]:
                 st.write("이 기술을 다루는 교육과정을 찾지 못했습니다.")
-            render_course_list(rec["courses"], columns=CARDS_PER_ROW, key=f"rec{number}")
+            render_course_list(rec["courses"], columns=CARDS_PER_ROW, key=f"rec{number}", user_level=rec.get("user_level"))
     st.caption("'AWS Skill Builder'는 그 기술을 직접 다루는 과정, '유사 과정'은 직접 다루는지 확인하지 못한 관련 과정입니다. "
                + RATING_NOTE)
 

@@ -112,10 +112,10 @@ def render_market_gap(ctx: Ctx) -> None:
     df["직군"] = df["직군"].map(JOBS)
     df["내 보유"] = df["기술"].isin(ctx.owned).map({True: "보유", False: "-"})
     st.caption(
-        f"Gap은 {job_title} 공고의 기술 수요 비중에서 학습 프로그램의 기술 공급 비중을 뺀 값입니다. "
-        "공고마다 각 기술이 등장한 칸 중 가장 높은 가중치를 적용합니다. 혜택·복지와 회사소개는 수요에서 제외합니다. "
-        "프로그램 제목·설명·학습 목표에 같은 기술이 여러 번 나와도 프로그램당 한 번만 셉니다. "
-        "양수이면 채용 수요 비중이 더 크고, 음수이면 프로그램의 공급 비중이 더 큽니다."
+        f"Gap = {job_title} 공고의 기술 수요 비중 − 학습 프로그램의 기술 공급 비중. "
+        "양수이면 채용 수요가, 음수이면 프로그램 공급이 더 큽니다. "
+        "공고마다 각 기술이 등장한 칸 중 가장 높은 가중치를 적용합니다. "
+        "혜택·복지와 회사소개는 수요에서 빼고, 한 프로그램에 같은 기술이 여러 번 나와도 한 번만 셉니다."
     )
 
     left, right = st.columns(2)
@@ -177,6 +177,8 @@ def _render_priorities(missing: list[dict]) -> None:
         guessed = " (불확실)" if r["required_level_confidence"] == "uncertain" else ""
         with column, st.container(border=True, key=f"priority_{number}"):
             st.markdown(f"##### {number + 1}. {md_escape(r['skill'])}")
+            if r.get("area"):  # 처음 보는 기술 이름이어도 어느 분야인지 알 수 있게 영역을 함께 적는다(설문 2026-11-20)
+                st.caption(md_escape(r["area"]))
             st.markdown(f"공고 {r['of']}건 중 **{r['postings']}건**이 요구 · 그중 필수 {r['required_ratio']:.0%}")
             st.markdown(f"내 단계 **{r['user_level']}** → 기준 **{r['required_level']}단계**{guessed}")
             st.button("공고 근거 보기", key=f"evidence_{number}", on_click=ui.go, args=("demand",),
@@ -192,26 +194,24 @@ def _render_gap(ctx: Ctx):
     c2.metric("주요 요구 기술", f"{len(gap_rows)}개", help=f"공고의 {GAP_MIN_SHARE:.0%} 이상이 요구한 기술", border=True)
     c3.metric("그중 보유", f"{len(have)}개", help="내 단계가 기준 단계 이상인 기술", border=True)
     c4.metric("부족", f"{len(missing)}개", border=True)
+    # 숫자 바로 아래에 '먼저 채울 기술'을 둔다. 안내문과 표는 그 뒤로 미루고 접어, 한 화면에서 볼 것을 줄인다(설문 2026-11-20)
+    _render_priorities(missing)
     guessed = [r for r in gap_rows if r["required_level_confidence"] == "uncertain"]
     if guessed:
-        st.warning(
-            f"주요 요구 기술 {len(gap_rows)}개 중 {len(guessed)}개는 아직 공고로 기준 단계를 정하지 못해 "
-            f"팀이 정한 추정값(3단계)으로 보유·부족을 나눴습니다. 이 기술들의 판정은 참고용이며, "
-            "표에 '불확실'로 표시합니다.",
-            icon=":material/info:",
+        st.caption(
+            f":material/info: 주요 요구 기술 {len(gap_rows)}개 중 {len(guessed)}개는 공고로 기준 단계를 정하지 못해 "
+            "추정값(3단계)으로 판정했습니다. '불확실'로 표시하며 참고용입니다."
         )
-
-    _render_priorities(missing)
 
     with st.container(border=True):
         st.subheader("영역별 부족 정도")
         render_area_gap(ctx)
 
-    with st.container(border=True):
-        st.subheader("영역별 역량: 지금과 추천 과정을 마친 뒤")
+    # 영역 막대와 같은 내용을 다른 모양으로 보여 주는 차트라 접어 둔다
+    with st.expander("영역별 역량: 지금과 추천 과정을 마친 뒤"):
         render_radar(ctx)
 
-    with st.expander(f"부족한 기술 {len(missing)}개 (수요 높은 순)", expanded=True):
+    with st.expander(f"부족한 기술 {len(missing)}개 전체 표 (수요 높은 순)"):
         if not gap_rows:
             st.info("이 직무에서 보유 수준과 비교할 주요 요구 기술이 없습니다.")
         elif not missing:
@@ -240,7 +240,7 @@ def _render_gap(ctx: Ctx):
                 },
             )
             st.caption(
-                "내 단계는 '수준 진단 설문'의 답, 기준 단계는 공고 문장으로 정한 값입니다(공고가 부족하면 3단계, '불확실'). "
+                "내 단계는 '수준 진단 설문'의 답, 기준 단계는 공고 문장으로 정한 값입니다. "
                 "충족도 = 필수 비중 × (기준 이상이면 1) + 우대 비중 × 내 단계/5."
             )
         if have:

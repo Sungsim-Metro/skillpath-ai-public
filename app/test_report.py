@@ -120,6 +120,14 @@ class ReportTest(unittest.TestCase):
         self.assertFalse(at.exception)
         self.assertTrue([b for b in at.get("download_button") if b.key == "report_btn"])
         self.assertTrue(any("역량 진단 보고서" in m.value for m in at.markdown))
+        # 요약(한눈에 보기, 다음에 할 일)은 바로 보이고 1절부터는 접힌 칸에 있다. 둘을 이으면 보고서 전체다
+        summary = next(m.value for m in at.markdown if "역량 진단 보고서" in m.value)
+        self.assertIn("## 한눈에 보기", summary)
+        self.assertIn("## 다음에 할 일", summary)
+        self.assertNotIn("## 1. 역량 진단", summary)
+        detail = next(e for e in at.expander if e.label.startswith("전체 보고서 보기")).markdown[0].value
+        self.assertTrue(detail.startswith("## 1. 역량 진단"))
+        self.assertIn("## 4. 과정으로 채우기 어려운 기술", detail)
 
     def test_switching_target_role_changes_both_the_dashboard_and_report(self):
         def market(job):

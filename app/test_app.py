@@ -160,6 +160,38 @@ def _market_without_personal_demand():
                skill_options=[], gap_rows=None, gap_err="수요 미연결"))
 
 
+class CourseCardTextTest(unittest.TestCase):
+    """추천 카드의 과정 정보 글자(2026-11-21). 과정 페이지의 선수지식 문장은 카드에 그대로 나오지 않는다(#92)."""
+
+    def test_duration_prerequisite_and_services_are_short_labels(self):
+        from app import course_card as card
+
+        self.assertEqual([card.duration_text(m) for m in (90, 60, 45, 0, None, "60", True)],
+                         ["약 1시간 30분", "약 1시간", "약 45분", "", "", "", ""])
+        self.assertEqual([card.prerequisite_text({"prerequisites": p})
+                          for p in ("없음", "None", "No prerequisites needed.", "No prerequisite required")],
+                         ["선수지식 없음"] * 4)
+        # 과정 페이지에 선수지식 항목이 없으면 없다고 단정하지 않고 적지 않는다(원칙 4)
+        self.assertEqual([card.prerequisite_text({"prerequisites": p}) for p in ("표기 없음", "")], ["", ""])
+        self.assertTrue(card.prerequisite_text({"prerequisites": "None of the above applies"}).startswith("선수지식 있음"))
+        sentence = "We recommend that attendees of this course have basic AWS knowledge."
+        self.assertNotIn("recommend", card.prerequisite_text({"prerequisites": sentence}))
+        self.assertTrue(card.prerequisite_text({"prerequisites": sentence}).startswith("선수지식 있음"))
+        self.assertEqual(card.prerequisite_text({}), "")  # 담은 과정 카드에는 값이 없다
+        self.assertEqual(card.services_text({"aws_services": ["A", "B", "C", "D", "E"]}), "다루는 서비스: A, B, C 외 2개")
+        self.assertEqual(card.services_text({"aws_services": ["A"]}), "다루는 서비스: A")
+        self.assertEqual(card.services_text({}), "")
+
+    def test_recommend_cards_show_course_info_from_the_sample_data(self):
+        at = open_app("recommend")
+        self.assertFalse(at.exception)
+        text = " ".join(m.value for m in at.markdown)
+        self.assertIn("약 1시간", text)
+        self.assertIn("영어 강의", text)
+        self.assertTrue(any("다루는 서비스" in c.value for c in at.caption))
+        self.assertTrue(any("선수지식" in c.value and "내 단계" in c.value for c in at.caption))
+
+
 class MarketGapScreenTest(unittest.TestCase):
     def test_supply_counts_are_visible_without_postings(self):
         supply = {"source": "교육과정 목록", "total_courses": 3,
@@ -249,6 +281,10 @@ class GuidedFlowTest(unittest.TestCase):
     def test_priority_card_opens_the_evidence_of_that_skill(self):
         at = open_app("gap")
         self.assertIn("먼저 채울 기술", [item.value for item in at.subheader])
+        # 카드에 그 기술의 영역 이름을 함께 적는다(처음 보는 기술이어도 어느 분야인지 알게)
+        first = next(r for r in api.get_gap(at.session_state["job"], at.session_state["levels"]) if not r["owned"])
+        self.assertTrue(first["area"])
+        self.assertTrue(any(first["area"] in c.value.replace("\\", "") for c in at.caption))
         at.button(key="evidence_0").click().run()
         self.assertFalse(at.exception)
         self.assertEqual(at.session_state["view"], "demand")

@@ -93,6 +93,31 @@ def course_rating(course: dict) -> dict:
     return {"rating_avg": avg, "rating_count": count} if 0 < avg <= 5 and count > 0 else {}
 
 
+INFO_KEYS = ("duration_min", "language", "aws_services")
+
+
+def course_info(course: dict) -> dict:
+    """과정 표 한 행에서 소요 시간(분), 강의 언어, 다루는 AWS 서비스 이름을 꺼낸다. 없는 값은 넣지 않는다.
+
+    카드에 보여 주기만 하는 ③ 의 선택 필드다(2026-11-21). 문장이 아닌 값만 고른다(원칙 3).
+    추천 순서와 추천 이유에는 쓰지 않고 LLM 입력(llm_input_of)에도 넣지 않는다.
+    """
+    info: dict = {}
+    try:
+        minutes = int(course.get("duration_min") or "")
+    except ValueError:
+        minutes = 0
+    if minutes > 0:
+        info["duration_min"] = minutes
+    language = (course.get("language") or "").strip()
+    if language:
+        info["language"] = language
+    services = [name.strip() for name in (course.get("aws_services") or "").split(" / ") if name.strip()]
+    if services:
+        info["aws_services"] = services
+    return info
+
+
 def candidate_courses(skill: str, *, rules_only: bool = False) -> list[dict]:
     """search_courses 결과에서 과정 후보를 고른다. 결과가 과정 데이터와 맞지 않으면 오류를 낸다."""
     if rules_only and is_mock() and not COURSES_CSV.exists():
@@ -124,6 +149,7 @@ def candidate_courses(skill: str, *, rules_only: bool = False) -> list[dict]:
             "match": match,
             "subskill_id": sid,
             **course_rating(course),
+            **course_info(course),
         })
     return out
 
@@ -238,7 +264,7 @@ def build_recommendation(
             "prerequisites": c["prerequisites"],
             "reason": " ".join(x for x in (reasons[c["course_id"]], uncertain_note(skill, c)) if x),
             "match": c["match"],
-            **{k: c[k] for k in RATING_KEYS if k in c},
+            **{k: c[k] for k in (*RATING_KEYS, *INFO_KEYS) if k in c},
         }
         for c in courses if c["course_id"] in reasons
     ]

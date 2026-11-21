@@ -479,7 +479,7 @@ def test_uncertain_note():
     # 추천의 reason 끝에 붙는다(③ 형식은 그대로). 가짜 모드 Docker: certain 1개, uncertain 2개
     r, _ = rec.build_recommendation("Docker", {"postings": 20, "of": 40, "required_ratio": 0.45})
     for c in r["courses"]:
-        assert set(c) - {"rating_avg", "rating_count"} == {"title", "url", "level", "prerequisites", "reason", "match"}
+        assert set(c) - {"rating_avg", "rating_count", "duration_min", "language", "aws_services"} == {"title", "url", "level", "prerequisites", "reason", "match"}
         assert c["reason"].endswith("직접 다룬다는 내용을 확인하지 못했습니다.") == (c["match"] == "uncertain"), c
     # 상담 에이전트의 추천 도구도 같은 reason(안내 문장 포함)을 그대로 넘긴다
     rows = agent.tool_recommend_courses(["Docker"])["recommendations"]

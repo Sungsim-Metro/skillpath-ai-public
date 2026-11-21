@@ -63,6 +63,7 @@ VIEWS = {
 NEXT = {
     "demand": ("gap", "내 부족 역량 보기"),
     "gap": ("recommend", "추천 교육과정 보기"),
+    "connect": ("recommend", "추천 교육과정 보기"),  # 다음 버튼이 없어 막다른 화면이었다(설문 2026-11-20)
 }
 DEFAULT_JOB = next(iter(JOBS))
 
@@ -130,9 +131,9 @@ if need:
     origin += [f"출처 {', '.join(demand['sources'])}"] if demand and demand.get("sources") else []
     count = f" {demand['total_postings']}건" if demand else ""
     st.caption(
-        f"{JOBS[job]} · 채용공고{count}을 분석해 부족한 역량과 학습 프로그램을 근거와 함께 보여줍니다."
+        f"{JOBS[job]} · 채용공고{count} 기준"
         # 수집일에 "11-17~11-19" 같은 기간이 있으면 물결표 사이가 취소선으로 그려진다. 글자 그대로 보이게 한다
-        + (f" {', '.join(origin)}." if origin else "").replace("~", "\\~")
+        + "".join(f" · {part}" for part in origin).replace("~", "\\~")
     )
 else:
     st.caption(f"{JOBS[job]} 기준")

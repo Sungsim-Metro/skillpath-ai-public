@@ -48,8 +48,16 @@ CSS = """<style>
 [class*="st-key-suggest_"] button { border-radius: 999px; }
 [class*="st-key-suggest_"] button:hover { background: #D6E2F6; border-color: #9DB4DA; color: #1F5FBF; }
 
+/* 패널이 숨겨지는 좁은 화면에서만 쓰는 새 채팅 버튼 */
+.st-key-chat_new_narrow { display: none; }
+
 /* 좁은 화면(폰): 깨지지 않을 정도만 맞춘다. 열은 Streamlit 이 세로로 쌓는다 */
 @media (max-width: 640px) {
+  .st-key-chat_new_narrow { display: block; }
+  /* 추천 질문은 한 줄에 둘씩 놓아 입력창이 화면 밖으로 밀리지 않게 한다 */
+  [data-testid="stHorizontalBlock"]:has([class*="st-key-suggest_"]) { flex-direction: row !important; flex-wrap: wrap; gap: 0.5rem; }
+  [data-testid="stHorizontalBlock"]:has([class*="st-key-suggest_"]) > [data-testid="stColumn"] {
+    flex: 1 1 calc(50% - 0.5rem) !important; min-width: calc(50% - 0.5rem) !important; width: auto !important; }
   [data-testid="stMainBlockContainer"] { padding: 3.5rem 1rem 6rem; }
   [data-testid="stMainBlockContainer"] h1 { font-size: 1.6rem; }
   [data-testid="stMetricValue"] { font-size: 1.5rem; }

@@ -276,8 +276,10 @@ PANEL_CSS = f"""<style>
   border: 1px solid rgba(49, 51, 63, 0.2); border-radius: 0.5rem; padding: 1rem; }}
 .st-key-chat_message {{ margin-left: {PANEL_REM + 1}rem; width: calc(100% - {PANEL_REM + 1}rem); }}
 </style>"""
+# 무엇을 적을지 몰라 멈추는 사용자가 있어 예시 문장을 보여 준다(설문 2026-11-20)
+EXAMPLE_INPUT = "예: “학교 프로젝트에서 EC2에 서버를 올리고 GitHub Actions로 배포해 봤어요.”"
 GUEST_NOTICE = "비회원의 대화는 저장되지 않습니다. 왼쪽에서 로그인하면 대화가 저장됩니다."
-MEMBER_NOTICE = ("로그인했으므로 이 대화는 저장되고 왼쪽 '최근'에서 다시 볼 수 있습니다. "
+MEMBER_NOTICE = ("로그인했으므로 이 대화는 저장되고 '대화 기록'의 최근 목록에서 다시 볼 수 있습니다. "
                  "이름·연락처·주소 같은 개인정보는 입력하지 마세요. 연락처 모양은 가려서 저장하지만 이름과 주소는 가릴 수 없습니다.")
 
 
@@ -302,13 +304,13 @@ def _back_to_current() -> None:
     st.session_state.pop("viewing_session", None)
 
 
-def _toggle_history() -> None:
-    st.session_state.history_open = not st.session_state.get("history_open", True)
+def _toggle_history(opened: bool) -> None:
+    st.session_state.history_open = not opened
 
 
 def _toggle_button(opened: bool) -> None:
     """패널을 접고 펼치는 버튼. 새 채팅 버튼과 같은 글자·아이콘 크기를 쓴다."""
-    st.button("대화 기록 접기" if opened else "대화 기록 펼치기", key="history_toggle", on_click=_toggle_history,
+    st.button("대화 기록 접기" if opened else "대화 기록 펼치기", key="history_toggle", on_click=_toggle_history, args=(opened,),
               icon=":material/left_panel_close:" if opened else ":material/left_panel_open:",
               width="stretch" if opened else "content")
 
@@ -442,7 +444,7 @@ def _render_current_chat(chat, conversation, history: list, message: str | None,
             with st.chat_message("user"):
                 st.text(message)
             with st.chat_message("assistant"):
-                with st.spinner("답을 준비하고 있습니다…"):  # 답이 올 때까지 말풍선 안에 진행 표시를 둔다
+                with st.spinner("답을 준비하고 있습니다… 교육과정 추천은 시간이 조금 더 걸립니다."):  # 답이 올 때까지 말풍선 안에 진행 표시를 둔다
                     try:
                         reply = chat.handle_message(
                             conversation, message,
@@ -497,7 +499,8 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
     st.session_state.pop("from_chat", None)  # 상담으로 돌아왔으면 '돌아가기' 표시를 지운다
     nickname = session.nickname if session else None
     history_on = chat_history.enabled()  # 저장소가 준비되지 않았으면 패널도 '저장됩니다' 안내도 그리지 않는다
-    opened = history_on and st.session_state.get("history_open", True)
+    # 비회원은 저장된 대화가 없어 빈 패널만 화면을 차지한다. 회원만 처음부터 펼쳐 둔다(설문 2026-11-20)
+    opened = history_on and st.session_state.get("history_open", nickname is not None)
     panel, body = st.columns([1, 4]) if opened else (None, st.container())  # 패널은 메시지를 처리한 뒤 채운다
     with body:
         if history_on and not opened:
@@ -506,7 +509,9 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
         heading.title("학습 상담")
         if not opened:  # 패널이 열려 있으면 패널의 '새 채팅'을 쓴다. 패널이 없거나 접혔을 때 대화를 비울 길을 남긴다
             _new_chat_button(action)
-        st.caption("직접 맡은 일이나 사용한 기술을 알려주세요. 부족한 기술이나 교육과정은 원할 때 물어보세요.")
+        else:  # 좁은 화면에서는 패널이 숨겨져 새 채팅 버튼도 사라진다. 그때만 보이는 버튼을 둔다(app/ui.py 의 좁은 화면 규칙)
+            action.button("새 채팅", key="chat_new_narrow", on_click=_reset_chat, icon=":material/edit_square:", width="stretch")
+        st.caption("해 본 일을 편하게 적어 주세요. " + EXAMPLE_INPUT)
         if history_on:
             st.caption(MEMBER_NOTICE if nickname else GUEST_NOTICE)
     if "chat_conversation" not in st.session_state:
@@ -517,7 +522,7 @@ def render(job: str, sidebar_skills: list[str], session: chat_profiles.ProfileSe
         conversation.usage = SessionUsage()
     history = st.session_state.chat_history
     # 저장되는 회원에게는 입력하는 자리에서 직접 알린다(제목 아래 안내문은 놓치기 쉽다)
-    placeholder = "경험을 적거나 궁금한 점을 물어보세요." + (" 이름·연락처는 적지 마세요." if history_on and nickname else "")
+    placeholder = "해 본 일이나 궁금한 점을 적어 주세요." + (" 이름·연락처는 적지 마세요." if history_on and nickname else "")
     typed = st.chat_input(placeholder, key="chat_message")
     message = typed or st.session_state.pop("chat_suggested", None)  # 추천 질문 버튼도 같은 길로 들어온다
     if message and message.strip():

@@ -160,15 +160,16 @@ def owned_skill_names(job_category: str, owned_skills) -> list[str]:
 
 
 def get_saved_course_cards(saved: list[dict]) -> list[dict]:
-    """담은 교육과정에 과정 표의 평점을 붙여 돌려준다. '담은 교육과정' 화면이 쓴다(2026-11-20).
+    """담은 교육과정에 과정 표의 평점과 과정 정보(소요 시간·언어·AWS 서비스)를 붙여 돌려준다. '담은 교육과정' 화면이 쓴다(2026-11-20).
 
     saved 는 backend.chat_profiles 가 보관하는 [{"title", "url", "level"}] 이다. 주소가 과정 표에 있으면
-    rating_avg, rating_count 를 더하고 없으면 받은 그대로 둔다. 순서는 바꾸지 않는다.
+    rating_avg, rating_count 와 duration_min, language, aws_services 를 더하고 없으면 받은 그대로 둔다. 순서는 바꾸지 않는다.
     """
-    from ai.recommend import _courses, course_rating
+    from ai.recommend import _courses, course_info, course_rating
 
     by_url = {row["url"]: row for row in _courses().values()}
-    return [{**course, **course_rating(by_url.get(course["url"], {}))} for course in saved]
+    return [{**course, **course_rating(by_url.get(course["url"], {})), **course_info(by_url.get(course["url"], {}))}
+            for course in saved]
 
 
 def get_level_radar(job_category: str, owned_skills) -> list[dict]:

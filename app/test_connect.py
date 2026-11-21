@@ -25,6 +25,12 @@ class ConnectScreenTest(unittest.TestCase):
         self.assertIn("LinkedIn에서 직접 찾아보기", text)
         self.assertNotIn("컨테이너 #container 소모임** · 서울(오프라인) · 부족 영역: 컴퓨팅", text)  # 클라우드 영역 이름이 섞이지 않는다
 
+    def test_screen_ends_with_a_next_step_to_the_recommendations(self):
+        """막다른 화면이 되지 않게 맨 아래에 추천 교육과정으로 가는 버튼이 있다(설문 2026-11-20)."""
+        self.at.button(key="step_recommend").click().run()
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self.at.session_state["view"], "recommend")
+
 
 if __name__ == "__main__":
     unittest.main()

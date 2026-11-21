@@ -85,13 +85,17 @@ class ChatScreenTest(unittest.TestCase):
     def test_guest_chat_is_not_saved_and_is_told_so(self):
         at = self.open_screen()
         self.assertTrue(any("저장되지 않습니다" in c.value for c in at.caption))
-        self.assertTrue(any("로그인하면 대화 기록이 저장됩니다" in c.value for c in at.caption))
         first = at.session_state["chat_conversation"].usage.session_id
         at.button(key="chat_new").click().run()  # 비회원도 새 채팅을 시작할 수 있다
         self.assertNotEqual(at.session_state["chat_conversation"].usage.session_id, first)
-        at.button(key="history_toggle").click().run()  # 패널을 접어도 새 채팅 버튼은 제목 옆에 남는다(하나뿐)
+        # 비회원은 패널이 접힌 채로 시작한다(빈 패널이 화면을 차지하지 않게). 새 채팅 버튼은 제목 옆에 하나뿐이다
+        self.assertFalse(any("로그인하면 대화 기록이 저장됩니다" in c.value for c in at.caption))
         self.assertEqual(len([b for b in at.button if b.key == "chat_new"]), 1)
-        at.button(key="history_toggle").click().run()  # 다시 펼치면 패널 안의 버튼 하나뿐이다(제목 옆 버튼은 사라진다)
+        at.button(key="history_toggle").click().run()  # 펼치면 패널 안의 버튼 하나뿐이다(제목 옆 버튼은 사라진다)
+        self.assertTrue(any("로그인하면 대화 기록이 저장됩니다" in c.value for c in at.caption))
+        self.assertEqual(len([b for b in at.button if b.key == "chat_new"]), 1)
+        self.assertEqual(len([b for b in at.button if b.key == "chat_new_narrow"]), 1)  # 좁은 화면용(넓은 화면에서는 CSS 로 숨김)
+        at.button(key="history_toggle").click().run()  # 다시 접어도 하나뿐이다
         self.assertEqual(len([b for b in at.button if b.key == "chat_new"]), 1)
         at.chat_input[0].set_value(f"제가 Docker로 API를 배포했어요. 연락처 {PHONE}").run()
         self.assertFalse(at.exception)

@@ -292,6 +292,19 @@ class CourseRatingPassThroughTest(unittest.TestCase):
             self.assertNotIn("rating_count", course)
             self.assertEqual(course["gap_skill"], "Docker")
 
+    def test_course_info_is_kept_when_valid_and_dropped_when_malformed(self):
+        """소요 시간·언어·AWS 서비스도 선택 필드다(2026-11-21). 형식이 틀린 값만 빼고 과정은 보여 준다."""
+        demand = {"postings": 3, "of": 4, "required_ratio": 0.5}
+        base = {"title": "예시 과정", "url": "https://example.com/course", "level": "기초", "prerequisites": "없음",
+                "reason": "예시 이유", "match": "certain"}
+        good = {"duration_min": 90, "language": "English", "aws_services": ["Amazon EC2", "Amazon S3"]}
+        bad = {"duration_min": "90", "language": "", "aws_services": "Amazon EC2"}
+        recs = [{"gap_skill": "Docker", "demand": demand, "courses": [{**base, **good}, {**base, **bad}, dict(base)]}]
+        shown = chat._verified_courses(recs, [{"skill": "Docker", **demand}])
+        self.assertEqual({k: shown[0][k] for k in good}, good)
+        for course in shown[1:]:
+            self.assertFalse(set(good) & set(course))
+
 
 if __name__ == "__main__":
     unittest.main()

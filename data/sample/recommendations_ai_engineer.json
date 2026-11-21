@@ -24,7 +24,9 @@
         "reason": "공고 60건 중 33건이 LLM 활용을 요구합니다. 이 과정은 Bedrock으로 모델을 고르고 호출하는 방법을 처음부터 다룹니다.",
         "match": "certain",
         "rating_avg": 4.6,
-        "rating_count": 1120
+        "rating_count": 1120,
+        "duration_min": 60,
+        "language": "English"
       }
     ]
   },
@@ -42,7 +44,9 @@
         "level": "중급",
         "prerequisites": "Python",
         "reason": "공고 60건 중 30건이 PyTorch를 요구합니다. 이 과정은 SageMaker에서 PyTorch 모델을 학습·평가합니다.",
-        "match": "certain"
+        "match": "certain",
+        "duration_min": 120,
+        "language": "English"
       }
     ]
   },
@@ -60,7 +64,9 @@
         "level": "기초",
         "prerequisites": "없음",
         "reason": "공고 60건 중 27건이 AWS 경험을 요구합니다. 이 과정은 AI 서비스가 올라가는 기본 AWS 서비스를 다룹니다.",
-        "match": "certain"
+        "match": "certain",
+        "duration_min": 60,
+        "language": "English"
       }
     ]
   },
@@ -78,7 +84,9 @@
         "level": "중급",
         "prerequisites": "LLM 기초",
         "reason": "공고 60건 중 22건이 RAG 구현을 요구합니다. 이 과정은 문서를 넣어 검색 증강 답변을 만드는 방법을 다룹니다.",
-        "match": "certain"
+        "match": "certain",
+        "duration_min": 120,
+        "language": "English"
       }
     ]
   },
@@ -96,7 +104,9 @@
         "level": "기초",
         "prerequisites": "Linux 명령어",
         "reason": "공고 60건 중 21건이 Docker를 요구합니다. 이 과정은 컨테이너 이미지 작성부터 배포까지 다룹니다.",
-        "match": "certain"
+        "match": "certain",
+        "duration_min": 60,
+        "language": "English"
       }
     ]
   },
@@ -123,7 +133,9 @@
         "level": "중급",
         "prerequisites": "Python",
         "reason": "TensorFlow를 직접 다루는 AWS 과정은 찾지 못했습니다. 같은 딥러닝 학습을 SageMaker에서 다루는 과정이라 불확실로 표시합니다.",
-        "match": "uncertain"
+        "match": "uncertain",
+        "duration_min": 120,
+        "language": "English"
       }
     ]
   },
@@ -141,7 +153,9 @@
         "level": "중급",
         "prerequisites": "Docker",
         "reason": "공고 60건 중 14건이 Kubernetes를 요구합니다. Docker를 먼저 익힌 뒤 듣는 것을 권합니다.",
-        "match": "certain"
+        "match": "certain",
+        "duration_min": 120,
+        "language": "English"
       }
     ]
   },
@@ -159,7 +173,9 @@
         "level": "중급",
         "prerequisites": "Docker",
         "reason": "공고 60건 중 13건이 MLOps 경험을 요구합니다. 이 과정은 모델 학습부터 배포 자동화까지 다룹니다.",
-        "match": "certain"
+        "match": "certain",
+        "duration_min": 120,
+        "language": "English"
       }
     ]
   },

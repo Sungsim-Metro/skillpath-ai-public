@@ -39,6 +39,9 @@ def _build(job: str, levels: dict[str, int]) -> tuple[str | None, str | None]:
     return md, ("추천을 불러오지 못해 보고서의 학습 프로그램 추천 절은 비어 있습니다." if rec_err else None)
 
 
+DETAIL_START = "\n## 1. "  # 보고서에서 요약이 끝나고 본문이 시작하는 자리(app/report.py 의 1절 제목)
+
+
 def render(ctx) -> None:
     """메뉴의 '진단 보고서' 화면(2026-11-20, 전에는 사이드바 버튼으로 여는 창이었다).
 
@@ -62,6 +65,12 @@ def render(ctx) -> None:
     st.download_button("내려받기 (.md)", data=md.encode("utf-8"), file_name=file_name(), mime="text/markdown",
                        type="primary", icon=":material/download:", key="report_btn", on_click="ignore")
     st.caption("노션, GitHub, VS Code, 메모장 등에서 열 수 있습니다. 화면에 나온 값만 담기며, 이 서비스는 보고서를 저장하지 않습니다.")
-    with st.container(height=480, border=True):
-        st.markdown(md)  # 내려받는 파일과 같은 글. 데이터 글자는 이스케이프돼 있다(app/report.py)
+    # 화면에는 요약(한눈에 보기, 다음에 할 일)만 바로 보이고 나머지는 접어 둔다. 전에는 보고서 전체를 작은 상자 하나에
+    # 넣어 길고 읽기 어렵다는 응답이 있었다(설문 2026-11-20). 내려받는 파일은 전체 그대로다.
+    summary, cut, rest = md.partition(DETAIL_START)
+    with st.container(border=True):
+        st.markdown(summary)  # 데이터 글자는 이스케이프돼 있다(app/report.py)
+    if cut:
+        with st.expander("전체 보고서 보기 (역량 진단, 추천, 수강 순서)"):
+            st.markdown(cut.lstrip("\n") + rest)
 

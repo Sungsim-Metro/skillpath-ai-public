@@ -14,7 +14,13 @@
       "reason": "목표 직무 공고 40건 중 31건이 AWS 운영을 요구하고, 이 과정이 해당 내용을 다룹니다.",
       "match": "certain",
       "rating_avg": 4.6,
-      "rating_count": 1280
+      "rating_count": 1280,
+      "duration_min": 60,
+      "language": "English",
+      "aws_services": [
+        "Amazon EC2",
+        "Amazon S3"
+      ]
     }
   ],
   "user_level": 1
