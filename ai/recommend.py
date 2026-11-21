@@ -65,7 +65,13 @@ FOUNDATION_FILE = ROOT / "data" / "foundation_courses.json"
 
 @lru_cache(maxsize=1)
 def _foundation_ids() -> dict[str, list[str]]:
-    """사람이 지정한 넓은 기술의 입문 과정(data/foundation_courses.json)."""
+    """사람이 지정한 넓은 기술의 입문 과정(data/foundation_courses.json).
+
+    파일이 없으면(공개 저장소에는 data/sample 밖의 data/ 파일이 나가지 않는다) 빈 표를 돌려준다.
+    그러면 입문 과정 안내(FOUNDATION_NOTE) 대신 일반 안내(UNCERTAIN_NOTE)가 붙고 추천은 멈추지 않는다(11/21).
+    """
+    if not FOUNDATION_FILE.exists():
+        return {}
     return json.loads(FOUNDATION_FILE.read_text(encoding="utf-8"))["courses"]
 
 

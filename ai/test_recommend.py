@@ -101,7 +101,23 @@ def test_uncertain_note_in_final_reason():
             os.environ["BEDROCK_MOCK"] = saved[2]
 
 
+def test_missing_foundation_file_falls_back_to_uncertain_note():
+    # 공개 저장소에는 data/foundation_courses.json 이 없다. 그래도 uncertain 과정에는 일반 안내가 붙고 오류가 나지 않는다(11/21)
+    saved = rec.FOUNDATION_FILE
+    rec.FOUNDATION_FILE = rec.ROOT / "data" / "없는_foundation_courses.json"
+    rec._foundation_ids.cache_clear()
+    try:
+        assert rec._foundation_ids() == {}
+        note = rec.uncertain_note("ZZTest", {"match": "uncertain", "course_id": "C-FD"})
+        assert note == rec.UNCERTAIN_NOTE.format(skill="ZZTest"), note
+        assert rec.uncertain_note("ZZTest", {"match": "certain", "course_id": "C-FD"}) is None
+    finally:
+        rec.FOUNDATION_FILE = saved
+        rec._foundation_ids.cache_clear()
+
+
 if __name__ == "__main__":
     demo()
     test_uncertain_note_in_final_reason()
+    test_missing_foundation_file_falls_back_to_uncertain_note()
     print("통과")

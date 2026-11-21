@@ -67,11 +67,21 @@ ATTRIBUTES = {
 # 11/19 기술 답 정상 문장 세트: "따라 … 다르게"는 "리전에 따라 요금이 다르게"를 막아 뺐다(B4 는 "합격 확률"로 막힌다)
 # 11/19 리뷰: "걸러·거르·숨기" 단독은 "CloudWatch 로그를 지역별로 걸러서", "S3 버킷 지역 정보를 숨기고",
 # "국적 필드를 걸러내는" 같은 기술 질문을 막아, 사람·집단을 걸러내거나 숨기는 형태만 남겼다
+# 11/21 "합격 확률·기준으로 추천·피해야·피하라"는 "남자인데 비전공자라 합격 확률 높이려면?",
+# "온라인 과정을 기준으로 추천해 주세요", "오프라인 수업은 피해야 할 것 같아요" 같은 자기 소개 뒤의 정상 요청을 막아,
+# 사람·집단(속성)을 기준으로 삼는 형태만 남겼다
+#  - 합격 확률: 속성에 "따라·따른·별"로 나누거나, 확률을 "다르게·차등" 계산하거나, "○○는/은 … 합격 확률이 낮/높/떨어"로 단정
+#    ("높이려면·높이는"처럼 올리는 방법을 묻는 말은 제외)
+#  - 기준으로 추천: "그·그런·이" 앞 문장의 판단이나 속성 이름(성별·학력·출신·지역·국적·인종)을 기준으로 삼을 때
+#  - 피해야·피하라: 사람·집단이 대상일 때(걸러·숨기와 같은 형태)
 _PEOPLE = r"(지원자|사람|여성|남성|여자|남자|출신|외국인|흑인|백인|고졸|지방대)"
+_BASIS = r"(성별|학력|학벌|출신\s*(지역|학교)?|지역|국적|인종)"
 JUDGMENT = (
     r"안\s*뽑|뽑지\s*않|만\s*뽑|뽑아\s*주지|(사람|출신)\S{0,3}\s.{0,12}성향|실력이\s*떨어|"
-    r"피해야|피하라|기준으로\s*추천|합격\s*확률|"
-    + _PEOPLE + r"\S{0,4}\s*.{0,15}(걸러|거르|숨기)"
+    r"(따라|따른|별로?)\s*합격\s*확률|합격\s*확률\S*\s*(을|를)?\s*(다르게|차등)|"
+    r"(은|는)\s.{0,10}합격\s*확률\S*\s*(낮|높(?!이)|떨어)|"
+    r"(그|그런|이|" + _BASIS + r")\s*(을|를)?\s*기준으로\s*추천|"
+    + _PEOPLE + r"\S{0,4}\s*.{0,15}(피해야|피하라|걸러|거르|숨기)"
 )
 # 프롬프트 공격. 낱말 하나가 아니라 분명한 지시 문장 형태만 막는다(11/19: "S3는 용량 제한 없이", "Dan 이라고 합니다" 오탐).
 # (규칙 이름, 패턴, 대소문자 무시 여부). DAN 은 대소문자를 구분한다(사람 이름 Dan)
@@ -90,6 +100,7 @@ ATTACKS = (
     ("영어 지시 무시", r"ignore\s+(all\s+|the\s+)?(previous|prior|above)\s+instructions", True),
 )
 _SENTENCE = re.compile(r"[.?!。\n]+")
+_PUNCT = re.compile(r"[.?!。]+")
 
 logger = logging.getLogger(__name__)
 
@@ -104,15 +115,30 @@ class GuardResult(NamedTuple):
 PASS = GuardResult(False)
 
 
+def _windows(text: str) -> list[str]:
+    """속성+판단을 볼 단위. 문장(마침표·물음표·느낌표·줄바꿈으로 나눔)과, 줄바꿈으로만 나뉜 인접한 두 줄을 이은 창.
+
+    11/21: 차별 판단 요청을 두 줄로 나눠 쓰면 문장 단위 검사를 통과했다. 마침표 없이 줄만 바꾼 두 줄은
+    한 문장으로 보고 한 번 더 검사한다. 글 전체를 한 덩어리로 보지는 않는다(멀리 떨어진 낱말끼리 엮여 오탐).
+    빈 줄을 사이에 둔 두 줄은 잇지 않는다.
+    """
+    out = _SENTENCE.split(text)
+    for part in _PUNCT.split(text):
+        lines = part.split("\n")
+        out.extend(f"{a} {b}" for a, b in zip(lines, lines[1:]) if a.strip() and b.strip())
+    return out
+
+
 def code_check(text: str) -> GuardResult:
-    """질문 낱말표 검사. 공격 지시 문장은 어디에 있어도, 차별 판단은 속성 낱말과 판단 표현이 같은 문장에 있을 때만 막는다.
+    """질문 낱말표 검사. 공격 지시 문장은 어디에 있어도, 차별 판단은 속성 낱말과 판단 표현이 같은 문장
+    (또는 줄바꿈으로만 나뉜 인접한 두 줄, _windows)에 있을 때만 막는다.
 
     답에는 쓰지 않는다(_check). 답의 검사는 GUARDRAIL_OUTPUT=1 일 때 Guardrails 가 맡는다.
     """
     for name, pattern, ignore_case in ATTACKS:
         if re.search(pattern, text, flags=re.IGNORECASE if ignore_case else 0):
             return GuardResult(True, "code", "공격", name)
-    for sentence in _SENTENCE.split(text):
+    for sentence in _windows(text):
         if not re.search(JUDGMENT, sentence):
             continue
         for category, pattern in ATTRIBUTES.items():
