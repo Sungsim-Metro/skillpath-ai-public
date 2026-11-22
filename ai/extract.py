@@ -6,12 +6,14 @@ LLM 은 raw, normalized, type, evidence 만 낸다. posting_id, section, confide
 - 같은 기술이 여러 번 나오면 confidence가 high인 후보를 우선한다.
   같은 확신도에서는 수요 가중치(ai.sections.weight)가 가장 큰 하나를 남기고, 둘 다 같으면 먼저 나온 후보를 남긴다.
 
-프롬프트 버전 (기본은 v1. 기본값을 v2.1 로 바꾸는 시점은 #21 채점 뒤에 정한다)
+프롬프트 버전 (기본은 v3. 11/22 cloud·ai 저장 추출을 v3 로 다시 만든 뒤 기본값을 v1 에서 바꿨다)
 - v1: confidence 는 근거가 공고에 있고 normalized 가 v1 대표명 12개 안이면 high
 - v2: 이름을 팀 별칭 사전(pipeline.aliases.normalize_skill)으로 대표명에 맞춘 **뒤에** 중복을 합친다.
       confidence 는 근거가 공고에 있고 사전에 있는 기술이면 high. 마지막에 pipeline.standardize 로 ncs_unit 을 채운다.
 - v2.1: 프롬프트만 다르고(종류 이름·괄호 별칭·'/' 나열 규칙, 정답지와 겹치지 않는 예시) 후처리는 v2 와 같다.
         #21 채점용 공고로 판단할 버전이다.
+- v3: v2.1 에 규칙 두 줄('네트워크'가 요구 지식·경험으로 나오면 Network, 구체 도구가 같은 문장에 있으면 IaC 같은 범주 이름은
+      따로 쓰지 않음)을 더한 버전. 후처리는 v2 와 같다. 11/22 부터 기본값이다.
 PROMPTS 에 없는 버전을 주면 ValueError 를 낸다.
 """
 from __future__ import annotations
@@ -22,12 +24,12 @@ import os
 
 from ai.bedrock import ConverseResult, converse_json
 from ai.evidence import evidence_in_text
-from ai.prompts import extract_v1, extract_v2, extract_v2_1
+from ai.prompts import extract_v1, extract_v2, extract_v2_1, extract_v3
 from ai.sections import EXCLUDED, find_section, weight
 from pipeline.aliases import normalize_skill
 
-PROMPTS = {"v1": extract_v1, "v2": extract_v2, "v2.1": extract_v2_1}  # v2.1 의 후처리는 v2 와 같다
-DEFAULT_PROMPT = "v1"
+PROMPTS = {"v1": extract_v1, "v2": extract_v2, "v2.1": extract_v2_1, "v3": extract_v3}  # v2.1·v3 의 후처리는 v2 와 같다
+DEFAULT_PROMPT = "v3"  # 11/22: 저장된 두 직무 추출을 v3 로 다시 만들어, 공고 직접 분석과 배치도 v3 로 맞춘다
 PROMPT_VERSION = PROMPTS[DEFAULT_PROMPT].VERSION
 EXTRACTOR_VERSION = "extractor-v3"
 MOCK_FILE = "mock_bedrock_extract.json"

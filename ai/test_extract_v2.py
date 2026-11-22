@@ -47,7 +47,7 @@ def demo():
     assert view(got) == [("Python", "Python", "uncertain", None)], view(got)
 
     # PROMPTS 에 없는 버전은 KeyError 나 다른 버전으로 조용히 도는 대신 ValueError
-    for call in (lambda: ex.to_contract([], text, "v3"), lambda: ex.extract_with_details({"id": "x", "text": text}, "v3")):
+    for call in (lambda: ex.to_contract([], text, "v9"), lambda: ex.extract_with_details({"id": "x", "text": text}, "v9")):
         try:
             call()
             raise AssertionError("없는 버전인데 오류가 나지 않았습니다")

@@ -185,7 +185,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="실제 공고로 추출 한 바퀴")
     ap.add_argument("--glob", help="직접 지정할 공고 파일 패턴 (기본은 검토된 AI·클라우드 공고)")
     ap.add_argument("--limit", type=int, default=0, help="앞에서부터 N건만 (0 이면 전부)")
-    ap.add_argument("--prompt", choices=sorted(PROMPTS), default=DEFAULT_PROMPT, help="프롬프트 버전 (기본 v1)")
+    ap.add_argument("--prompt", choices=sorted(PROMPTS), default=DEFAULT_PROMPT, help="프롬프트 버전 (기본 v3)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 

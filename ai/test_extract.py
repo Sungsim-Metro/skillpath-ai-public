@@ -127,6 +127,16 @@ class FingerprintTest(unittest.TestCase):
         })
         self.assertEqual(len(settings["canonical_skills_sha256"]), 64)
 
+    def test_default_prompt_is_v3_and_changes_fingerprint_from_v1(self) -> None:
+        # 11/22 두 직무 저장 추출을 v3 로 다시 만들고 기본값을 v3 로 맞췄다. 배치가 저장하는 analysis 는 extraction_settings 를 쓴다
+        self.assertEqual(extract.DEFAULT_PROMPT, "v3")
+        self.assertEqual(extract.extraction_settings()["prompt_version"], "extract_v3")
+        v3 = extract.input_fingerprint(self.posting, "cloud_engineer")
+        # 저장된 항목의 지문은 v1 기준이다. 기본값이 바뀌면 지문이 달라 extraction_batch 가 전체를 다시 추출한다
+        with patch.object(extract, "DEFAULT_PROMPT", "v1"):
+            self.assertEqual(extract.extraction_settings()["prompt_version"], "extract_v1")
+            self.assertNotEqual(v3, extract.input_fingerprint(self.posting, "cloud_engineer"))
+
     def test_missing_or_blank_model_id_is_rejected(self) -> None:
         for model_id in ("", "  "):
             with self.subTest(model_id=model_id):
