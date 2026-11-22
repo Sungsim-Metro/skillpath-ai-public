@@ -55,7 +55,7 @@ def demo():
         ]
         recommendation, result = rec.build_recommendation("Terraform", {"postings": 14, "of": 40, "required_ratio": 0.36})
         # 두 과정 모두 uncertain 이라 LLM 이유 뒤에 코드의 고정 문장(#24)이 붙는다
-        note = rec.UNCERTAIN_NOTE.format(skill="Terraform")
+        note = rec.note_text(rec.UNCERTAIN_NOTE, "Terraform")
         assert [c["reason"] for c in recommendation["courses"]] == [f"{rec.MOCK_FALLBACK_REASON} {note}"] * 2
         assert result.attempts == 1 and result.usage["totalTokens"] == 0
     finally:
@@ -86,8 +86,8 @@ def test_uncertain_note_in_final_reason():
             got, _ = rec.build_recommendation("ZZTest", {"postings": 4, "of": 12, "required_ratio": 0.5}, review=review)
             reasons = {c["url"].rsplit("/", 1)[1]: c["reason"] for c in got["courses"]}
             assert set(reasons) == {"C-OK", "C-UN", "C-FD"}, (review, reasons)
-            general = rec.UNCERTAIN_NOTE.format(skill="ZZTest")
-            foundation = rec.FOUNDATION_NOTE.format(skill="ZZTest")
+            general = rec.note_text(rec.UNCERTAIN_NOTE, "ZZTest")
+            foundation = rec.note_text(rec.FOUNDATION_NOTE, "ZZTest")
             assert general not in reasons["C-OK"] and foundation not in reasons["C-OK"], (review, reasons["C-OK"])
             assert reasons["C-UN"].endswith(general) and foundation not in reasons["C-UN"], (review, reasons["C-UN"])
             assert reasons["C-FD"].endswith(foundation) and general not in reasons["C-FD"], (review, reasons["C-FD"])
@@ -109,15 +109,33 @@ def test_missing_foundation_file_falls_back_to_uncertain_note():
     try:
         assert rec._foundation_ids() == {}
         note = rec.uncertain_note("ZZTest", {"match": "uncertain", "course_id": "C-FD"})
-        assert note == rec.UNCERTAIN_NOTE.format(skill="ZZTest"), note
+        assert note == rec.note_text(rec.UNCERTAIN_NOTE, "ZZTest"), note
         assert rec.uncertain_note("ZZTest", {"match": "certain", "course_id": "C-FD"}) is None
     finally:
         rec.FOUNDATION_FILE = saved
         rec._foundation_ids.cache_clear()
 
 
+def test_josa_follows_final_sound():
+    # 안내 문장의 조사는 기술 이름의 끝소리 받침으로 고른다("AWS은(는)" 대신 "AWS는")
+    has = {"SQL": True, "S3": True, "Terraform": True, "Python": True, "쿠버네티스": False, "깃허브": False, "프롬": True,
+           "AWS": False, "EKS": False, "EC2": False, "Docker": False, "Kubernetes": False, "Node.js": False, "C++": False,
+           # 예외 사전: 철자 규칙은 "는" 인데 읽으면 받침이 있는 이름(깃, 앤서블, 엘크 스택 …)
+           "Git": True, "GitLab": True, "Ansible": True, "Hadoop": True, "Datadog": True, "Pinecone": True,
+           "Rundeck": True, "CloudStack": True, "ELK Stack": True, "Amazon Bedrock": True,
+           # 끝 단어가 예외가 아니면 규칙대로
+           "GitLab CI": False, "GitHub Actions": False}
+    for word, expected in has.items():
+        assert rec._has_batchim(word) is expected, word
+    assert rec.note_text(rec.FOUNDATION_NOTE, "AWS").startswith("AWS는 범위가 넓어")
+    assert rec.note_text(rec.UNCERTAIN_NOTE, "Git").startswith("이 과정이 Git을 직접")
+    assert rec.note_text(rec.UNCERTAIN_NOTE, "Terraform").startswith("이 과정이 Terraform을 직접 다루는지는")
+    assert "(는)" not in rec.note_text(rec.FOUNDATION_NOTE, "SQL") and "(를)" not in rec.note_text(rec.UNCERTAIN_NOTE, "SQL")
+
+
 if __name__ == "__main__":
     demo()
     test_uncertain_note_in_final_reason()
     test_missing_foundation_file_falls_back_to_uncertain_note()
+    test_josa_follows_final_sound()
     print("통과")

@@ -442,7 +442,7 @@ def test_screen_guard_input_contract():
         screen.Conversation(), "Docker 다음은 뭘 배워요?", job="cloud_engineer", sidebar_skills=[]))
     failed = _with_bedrock(FakeGuardrails(error=RuntimeError()), lambda: screen.handle_message(
         screen.Conversation(), "Docker 다음은 뭘 배워요?", job="cloud_engineer", sidebar_skills=[]))
-    assert blocked.text == "이 요청은 학습 상담 범위에서 처리할 수 없습니다."
+    assert blocked.text == "이 요청은 학습 상담 범위에서 처리할 수 없습니다. 본인 상황(전공·학력 등)은 말씀하셔도 괜찮아요. 공부 방법이나 준비 과정으로 다시 물어봐 주세요."
     assert failed.text.startswith("요청의 가드레일 점검을 완료하지 못했습니다")
 
 
@@ -547,9 +547,9 @@ def test_uncertain_note():
         return
     assert rec.uncertain_note("Kubernetes", {"match": "certain", "course_id": "x"}) is None
     note = rec.uncertain_note("쿠버네티스", {"match": "uncertain", "course_id": "x"})
-    assert note.startswith("이 과정이 Kubernetes을(를) 직접 다루는지는 확실하지 않습니다")
+    assert note.startswith("이 과정이 Kubernetes를 직접 다루는지는 확실하지 않습니다")
     aws_id = rec._foundation_ids()["AWS"][0]
-    assert rec.uncertain_note("AWS", {"match": "uncertain", "course_id": aws_id}).startswith("AWS은(는) 범위가 넓어 입문 과정")
+    assert rec.uncertain_note("AWS", {"match": "uncertain", "course_id": aws_id}).startswith("AWS는 범위가 넓어 입문 과정")
     # 추천의 reason 끝에 붙는다(③ 형식은 그대로). 가짜 모드 Docker: certain 1개, uncertain 2개
     r, _ = rec.build_recommendation("Docker", {"postings": 20, "of": 40, "required_ratio": 0.45})
     for c in r["courses"]:

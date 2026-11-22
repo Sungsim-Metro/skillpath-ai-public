@@ -58,8 +58,9 @@ MATCHES = ("certain", "uncertain")
 
 # match 가 uncertain 인 과정의 reason 끝에 코드가 붙이는 고정 문장(#24). LLM 이 쓴 reason 이 검사를 통과한 뒤에 붙인다.
 # ③ 형식은 그대로(reason 문자열에 붙임). 화면의 "불확실" 배지가 왜 붙었는지 설명한다
-UNCERTAIN_NOTE = "이 과정이 {skill}을(를) 직접 다루는지는 확실하지 않습니다. 과정 설명에서 {skill}을(를) 직접 다룬다는 내용을 확인하지 못했습니다."
-FOUNDATION_NOTE = "{skill}은(는) 범위가 넓어 입문 과정을 붙였습니다. 이 과정이 {skill} 전체를 다루지는 않습니다."
+# {skill_eul}·{skill_eun} 은 기술 이름에 받침에 맞는 조사(을/를, 은/는)를 붙인 것이다. 채우기는 note_text 로 한다
+UNCERTAIN_NOTE = "이 과정이 {skill_eul} 직접 다루는지는 확실하지 않습니다. 과정 설명에서 {skill_eul} 직접 다룬다는 내용을 확인하지 못했습니다."
+FOUNDATION_NOTE = "{skill_eun} 범위가 넓어 입문 과정을 붙였습니다. 이 과정이 {skill} 전체를 다루지는 않습니다."
 FOUNDATION_FILE = ROOT / "data" / "foundation_courses.json"
 
 
@@ -75,14 +76,58 @@ def _foundation_ids() -> dict[str, list[str]]:
     return json.loads(FOUNDATION_FILE.read_text(encoding="utf-8"))["courses"]
 
 
+# 철자 규칙과 읽는 소리가 다른 기술 이름(받침 있음 True). 11/22 별칭 사전 대표명 133개에 규칙을 돌려 어긋난 10개.
+# 전체 이름을 먼저 보고, 없으면 마지막 단어를 본다("GitLab CI" 처럼 끝 단어로 정해지는 이름은 규칙이 맡는다)
+_BATCHIM_EXCEPTIONS = {
+    "Git": True, "GitLab": True, "Ansible": True, "Hadoop": True, "Datadog": True, "Pinecone": True,
+    "Rundeck": True, "CloudStack": True, "Stack": True, "Bedrock": True,
+}
+
+
+def _has_batchim(word: str) -> bool:
+    """기술 이름을 읽었을 때 끝소리에 받침이 있는가(조사 고르기용, 규칙 기반).
+
+    - 한글: 마지막 글자의 받침
+    - 숫자: 읽는 소리(일·삼·육·칠·팔·영은 받침 있음)
+    - 영어 대문자 약어(AWS, SQL): 마지막 글자 이름(엘·엠·엔·알만 받침 있음)
+    - 그 밖의 영어 단어: m·n·l·ng 로 끝나면 받침 있음(Terraform, Python)
+    - 규칙과 읽는 소리가 다른 이름은 _BATCHIM_EXCEPTIONS 로 고친다(Git → 깃, Ansible → 앤서블)
+    한계: 예외 사전에 없는 새 이름은 철자 규칙을 따르므로 읽는 소리와 다를 수 있다.
+    """
+    w = (word or "").strip()
+    if not w:
+        return False
+    for key in (w, w.split()[-1]):
+        if key in _BATCHIM_EXCEPTIONS:
+            return _BATCHIM_EXCEPTIONS[key]
+    ch = w[-1]
+    if "가" <= ch <= "힣":
+        return (ord(ch) - 0xAC00) % 28 != 0
+    if ch.isdigit():
+        return ch in "013678"
+    if ch.isascii() and ch.isalpha():
+        tail = re.search(r"[A-Za-z]+$", w).group()
+        if tail.isupper():
+            return ch in "LMNR"
+        return tail.lower().endswith(("m", "n", "l", "ng"))
+    return False
+
+
+def note_text(template: str, skill: str) -> str:
+    """고정 안내 문장을 채운다. 조사는 받침에 맞게 고른다(AWS는, Terraform을)."""
+    batchim = _has_batchim(skill)
+    return template.format(skill=skill, skill_eul=skill + ("을" if batchim else "를"),
+                           skill_eun=skill + ("은" if batchim else "는"))
+
+
 def uncertain_note(skill: str, course: dict) -> Optional[str]:
     """match 가 uncertain 이면 이유를 설명하는 고정 문장, 아니면 None. 지정 입문 과정(AWS 등)은 따로 쓴다."""
     if course.get("match") != "uncertain":
         return None
     canon = normalize_skill(skill) or skill
     if course.get("course_id") in _foundation_ids().get(canon, []):
-        return FOUNDATION_NOTE.format(skill=canon)
-    return UNCERTAIN_NOTE.format(skill=canon)
+        return note_text(FOUNDATION_NOTE, canon)
+    return note_text(UNCERTAIN_NOTE, canon)
 
 
 RATING_KEYS = ("rating_avg", "rating_count")
