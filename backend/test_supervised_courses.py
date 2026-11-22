@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 import os
 import unittest
+from dataclasses import asdict
 from unittest.mock import patch
 
-from ai import bedrock, recommend
-from backend import api
+from ai import bedrock, chat as intake, recommend, supervisor
+from backend import api, chat
 
 JOB = "cloud_engineer"
 FACTS = {"skills": [], "excluded_skills": []}
@@ -32,6 +33,94 @@ def catalog(skill: str, **kwargs) -> list[dict]:
         }
         for i, level in enumerate(("중급", "기초"))
     ]
+
+
+class RoleGapCourseTest(unittest.TestCase):
+    switched = "이제 AI 엔지니어가 목표예요. "
+    first_gap = "AI 직무에서 부족한 기술 중 첫 번째 기술의 강의를 보여줘"
+    second_gap = "AI 기준 부족 기술 중 두 번째 강의를 보여줘."
+    named_course = "AI 관점에서 첫 번째로 AI 강의를 보여줘."
+
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ, BEDROCK_MOCK="1", USAGE_LOG="off"))
+
+    def send(self, state, message):
+        return chat.handle_message(state, message, job=JOB, sidebar_skills=[], architecture="supervised")
+
+    def after_cloud_gap(self):
+        state = chat.Conversation(job=JOB)
+        self.send(state, "내 부족한 기술을 알려줘")
+        self.assertEqual(state.last_gap_skills[0], "AWS")
+        return state
+
+    def test_new_role_ordinal_uses_its_comparable_gaps(self):
+        for skills, request, target in [({}, self.first_gap, "Python"), ({"Python": True}, self.first_gap, "LLM"),
+                                        ({}, self.second_gap, "LLM"), ({}, self.named_course, "AI"),
+                                        ({}, "마지막으로 AI 강의 보여줘", "AI"),
+                                        ({}, "마지막으로 부족 기술 중 두 번째 강의 보여줘", "LLM")]:
+            with self.subTest(skills=skills, request=request):
+                state = self.after_cloud_gap()
+                state.skills.update(skills)
+                with patch.object(api, "get_recommendations", wraps=api.get_recommendations) as lookup:
+                    reply = self.send(state, self.switched + request)
+                self.assertEqual(state.job, "ai_engineer")
+                self.assertEqual(lookup.call_args.args, ("ai_engineer", [target]), reply.text)
+
+    def test_approved_model_cannot_use_old_target_or_lose_new_explicit_gap_scope(self):
+        interpret = supervisor.interpret_turn
+        own_goal = self.switched + self.first_gap
+        cases = [
+            (own_goal, "ai_engineer", "targets", ["AWS"], "ai_engineer", "Python"),
+            (own_goal, None, "targets", ["AWS"], "ai_engineer", "Python"),
+            (own_goal, "ai_engineer", "clarify", [], "ai_engineer", "Python"),
+            (self.switched + self.second_gap, "ai_engineer", "targets", ["AI"], "ai_engineer", "LLM"),
+            (self.switched + self.named_course, "ai_engineer", "gap", [], "ai_engineer", "AI"),
+            ("친구가 AI 엔지니어가 목표예요. 부족 기술 중 첫 번째 강의를 보여줘",
+             "ai_engineer", "targets", ["AWS"], JOB, "AWS"),
+        ]
+        for message, planned_job, scope, names, job, target in cases:
+            with self.subTest(message=message, planned_job=planned_job, scope=scope):
+                state = self.after_cloud_gap()
+                candidate = {"turn": asdict(intake.Turn(job=planned_job, action="courses")),
+                             "add_wishes": [], "remove_wishes": [], "course_scope": scope, "targets": names}
+                outputs = [(json.dumps(obj), "end_turn", {}) for obj in
+                           (candidate, {"decision": "continue", "issue": "none"})]
+
+                def live_plan(message, context):
+                    with patch.object(bedrock, "is_mock", return_value=False), \
+                            patch.object(bedrock, "_call", side_effect=outputs):
+                        return interpret(message, context)
+
+                with patch.object(supervisor, "interpret_turn", side_effect=live_plan), \
+                        patch.object(supervisor, "approve_result", wraps=supervisor.approve_result) as verify:
+                    reply = self.send(state, message)
+                self.assertEqual(state.job, job)
+                context, plan = verify.call_args.args[1:3]
+                self.assertEqual(context["job"], job)
+                self.assertEqual(context["last_gap_skills"], [] if job != JOB else state.last_gap_skills)
+                self.assertEqual(plan.targets, [target], reply.text)
+                self.assertIn(target, reply.text)
+
+    def test_unseen_or_out_of_range_reference_keeps_new_role_and_asks(self):
+        for request in ("그중 첫 번째 기술의 강의를 보여줘", "부족한 기술 중 999번째 강의를 보여줘"):
+            with self.subTest(request=request):
+                state = self.after_cloud_gap()
+                reply = self.send(state, self.switched + request)
+                self.assertEqual(state.job, "ai_engineer")
+                self.assertEqual(reply.action, "clarify", reply.text)
+                self.assertEqual(reply.courses, [])
+
+    def test_ordinal_keeps_same_role_order_and_explicit_topic(self):
+        for message, job, target in [
+            ("팀원이 AI 엔지니어가 목표예요. 그중 첫 번째 기술의 강의를 보여줘", JOB, "AWS"),
+            (self.switched + "첫 번째로 Docker 강의를 보여줘", "ai_engineer", "Docker"),
+        ]:
+            with self.subTest(message=message):
+                state = self.after_cloud_gap()
+                with patch.object(api, "get_recommendations", wraps=api.get_recommendations) as lookup:
+                    reply = self.send(state, message)
+                self.assertEqual(state.job, job)
+                self.assertEqual(lookup.call_args.args, (job, [target]), reply.text)
 
 
 class SupervisedCoursesTest(unittest.TestCase):

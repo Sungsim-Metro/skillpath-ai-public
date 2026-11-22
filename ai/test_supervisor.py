@@ -103,6 +103,53 @@ class SupervisedLearningTest(unittest.TestCase):
         self.assertEqual(revised.turn.remove_skills, ["Git"])
         self.assertEqual(revised.turn.remove_experiences, state["experiences"])
 
+    def test_mock_course_clarification_retains_the_independent_retraction(self):
+        context = {"skills": ["Docker", "Git"], "experiences": ["제가 Docker로 배포했어요"],
+                   "wishes": ["Linux", "Kubernetes"]}
+        for correction in ("정정할게요. Docker는 팀원이 사용했어요.", "Docker는 사용해 본 적 없어요.",
+                           "Docker는 제가 쓴 게 아니에요.", "정정할게요. Docker는 팀원이 사용한 거예요.",
+                           "정정할게요. Docker는 제가 아니라 팀원이 사용했어요.",
+                           "정정할게요, 도커는 제가 아니라 팀원이 사용했어요.",
+                           "Docker를 사용한 건 제가 아니라 팀원이에요.",
+                           "Docker는 제가 쓴 게 아니라 팀원이 썼어요."):
+            with self.subTest(correction=correction):
+                plan = self.supervisor.interpret_turn(correction + " 그 기술의 강의 보여줘.", context)
+                self.assertTrue(plan.question)
+                self.assertEqual(plan.turn, chat.Turn(remove_skills=["Docker"],
+                                                      remove_experiences=context["experiences"]))
+                self.assertEqual(plan.wishes, context["wishes"])
+                self.assertEqual(plan.targets, [])
+
+    def test_a_correction_intro_does_not_apply_to_a_later_teammate_statement(self):
+        context = {"skills": ["Docker", "Git"], "experiences": ["제가 Docker로 배포했어요", "제가 Git을 썼어요"],
+                   "wishes": ["Linux", "Kubernetes"]}
+        for statement, expected in (
+            ("정정할게요. Docker는 제가 썼어요. 팀원이 Docker를 썼어요.", chat.Turn()),
+            ("정정할게요. Git은 쓴 적 없어요. 팀원이 Docker를 썼어요.",
+             chat.Turn(remove_skills=["Git"], remove_experiences=["제가 Git을 썼어요"])),
+        ):
+            with self.subTest(statement=statement):
+                plan = self.supervisor.interpret_turn(statement + " 그 기술의 강의 보여줘.", context)
+                self.assertTrue(plan.question)
+                self.assertEqual(plan.turn, expected)
+
+    def test_mock_withdraws_an_exact_experience_without_withdrawing_a_skill(self):
+        context = {"skills": ["Docker"], "experiences": ["제가 야간 장애에 대응했어요", "제가 Docker를 썼어요"],
+                   "wishes": ["Linux", "Kubernetes"]}
+        plan = self.supervisor.interpret_turn(
+            "‘제가 야간 장애에 대응했어요’는 제가 한 일이 아니에요. 그 기술의 강의 보여줘.", context)
+        self.assertTrue(plan.question)
+        self.assertEqual(plan.turn, chat.Turn(remove_experiences=["제가 야간 장애에 대응했어요"]))
+
+    def test_mentioning_a_teammate_does_not_independently_retract_shared_or_uncertain_work(self):
+        context = {"skills": ["Docker"], "wishes": ["Linux", "Kubernetes"]}
+        for clause in ("Docker는 팀원이 사용했나요?", "Docker는 팀원과 함께 사용했어요.",
+                       "Docker는 팀원이 사용했던 것 같아요."):
+            with self.subTest(clause=clause):
+                plan = self.supervisor.interpret_turn("정정할게요. " + clause + " 그 기술의 강의 보여줘.", context)
+                self.assertTrue(plan.question)
+                self.assertEqual(plan.turn, chat.Turn())
+
     def test_earlier_wish_reference_survives_quoted_clause_boundary(self):
         plan = self.supervisor.interpret_turn("앞서 배우고 싶다고 말씀드린 기술의 강의 보여주세요.",
                                                {"wishes": ["S3"]})
@@ -116,8 +163,14 @@ class SupervisedLearningTest(unittest.TestCase):
     def test_gap_list_reference_uses_actual_display_order_and_checks_bounds(self):
         context = {"wishes": ["Docker"], "last_gap_skills": ["IAM", "S3"]}
         for text, expected in [("부족 기술 중 첫 번째 과정 추천해줘", ["IAM"]),
-                               ("그중 두 번째 강의 찾아줘", ["S3"])]:
-            self.assertEqual(self.supervisor.interpret_turn(text, context).targets, expected)
+                               ("그중 두 번째 강의 찾아줘", ["S3"]),
+                               ("그중 마지막 기술의 강의 찾아줘", ["S3"]),
+                               ("그중 마지막 걸로 강의 찾아줘", ["S3"]),
+                               ("마지막으로 AI 강의 보여줘", ["AI"]),
+                               ("마지막 거래가 끝나면 AI 강의 보여줘", ["AI"]),
+                               ("마지막으로 강의 보여줘", ["Docker"])]:
+            with self.subTest(text=text):
+                self.assertEqual(self.supervisor.interpret_turn(text, context).targets, expected)
         self.assertTrue(self.supervisor.interpret_turn("그중 세 번째 강의 찾아줘", context).question)
         self.assertTrue(self.supervisor.interpret_turn("첫 번째 기술 강의 추천해줘", {}).question)
         self.assertEqual(self.supervisor.interpret_turn("네", {"offered_gap": True}).turn.action, "gap")
@@ -210,6 +263,44 @@ class RealSupervisorBoundaryTest(unittest.TestCase):
         self.assertEqual(plan.wishes, ["Git"])
         self.assertEqual(plan.decisions[-1], "clarify")
         self.assertEqual(self.converse.call_count, 4)
+
+    def test_course_clarification_only_keeps_retractions_grounded_in_the_current_message(self):
+        message = ("정정할게요. Docker는 팀원이 사용했어요. 나는 Python을 썼어요. "
+                   "Python은 프로필에 저장해줘. 그 기술의 강의 보여줘.")
+        context = {"skills": ["Docker", "Git"], "experiences": ["제가 Docker로 배포했어요", "제가 Git을 썼어요"],
+                   "wishes": ["Linux", "Kubernetes"]}
+        for issue in ("course_target", "ownership", "profile_scope"):
+            with self.subTest(issue=issue):
+                candidate = self.intake(scope="clarify", add_skills=["Python"], remove_skills=["Git", "Docker"],
+                                        remove_experiences=context["experiences"], save=True, save_skills=["Python"])
+                self.respond(candidate, {"decision": "clarify", "issue": issue})
+                plan = self.supervisor.interpret_turn(message, context)
+                expected = (chat.Turn(remove_skills=["Docker"], remove_experiences=["제가 Docker로 배포했어요"])
+                            if issue == "course_target" else chat.Turn())
+                self.assertEqual(plan.turn, expected)
+                self.assertTrue(plan.question)
+                self.assertEqual(plan.wishes, context["wishes"])
+                self.assertEqual(plan.targets, [])
+
+    def test_course_clarification_does_not_turn_a_teammates_denial_into_a_user_retraction(self):
+        context = {"skills": ["Docker", "Git"], "wishes": ["Linux", "Kubernetes"]}
+        message = "팀원은 Docker를 썼고 Git은 사용한 적 없어요. 그 기술의 강의 보여줘."
+        self.respond(self.intake(scope="clarify", remove_skills=["Git"]),
+                     {"decision": "clarify", "issue": "course_target"})
+        self.assertEqual(self.supervisor.interpret_turn(message, context).turn, chat.Turn())
+
+    def test_course_clarification_preserves_skills_when_the_user_affirms_or_narrows_their_experience(self):
+        context = {"skills": ["Docker", "Git"], "experiences": ["제가 Docker로 테스트했어요"],
+                   "wishes": ["Linux", "Kubernetes"]}
+        for statement in ("Docker를 안 쓴 건 아니에요.",
+                          "정정할게요. Docker는 팀원이 썼지만 저도 Docker를 썼어요.",
+                          "Docker는 제가 직접 썼습니다. Docker로 Git을 배포한 적은 없어요."):
+            with self.subTest(statement=statement):
+                self.respond(self.intake(scope="clarify", remove_skills=context["skills"],
+                                         remove_experiences=context["experiences"]),
+                             {"decision": "clarify", "issue": "course_target"})
+                plan = self.supervisor.interpret_turn(statement + " 그 기술의 강의 보여줘.", context)
+                self.assertEqual(plan.turn, chat.Turn())
 
     def test_ungrounded_target_fails_safely_and_cannot_be_forwarded_to_workers(self):
         invented = self.intake(targets=["secret-hallucination"])

@@ -5,7 +5,9 @@ import re
 from dataclasses import asdict, replace
 
 from ai import chat, chat_mock
-from ai.supervisor import COURSE_QUESTION, SupervisedTurn, _canonical, _save_scopes, _validate_writes
+from ai.supervisor import (
+    SupervisedTurn, _canonical, _clarify, _course_rank, _save_scopes, _validate_writes, switched_course_reference,
+)
 
 _WANT = re.compile(r"(?:배우|배워|공부|학습|익히|익혀|입문|연습|써\s*보|써보|도전|해\s*보).{0,12}"
                    r"(?:싶|계획|예정|희망|려고|려구|관심|할래|볼래)|(?:배우려|익히려)|"
@@ -16,14 +18,12 @@ _REPLACE = re.compile(r"말고|대신(?:에)?|아니라|빼고|제외하고")
 _REFERENCE = re.compile(r"그\s*(?:기술|과정|강의|주제|거|걸|쪽|중|것|분야)|이\s*(?:기술|주제|분야)|"
                         r"관련|아까|방금|전에\s*말|앞서|앞에서|위에서|말한|배우고\s*싶다던|거기|그걸로|이걸로")
 _GAP_SCOPE = re.compile(r"부족|미달|격차|갭|\bgap\b", re.I)
-_ORDINAL = re.compile(r"(첫|한|두|두번|세|네|다섯|마지막|\d+)\s*(?:번\s*째|번째|위|순위)|맨\s*(?:위|처음)|마지막")
-_ORDINALS = {"첫": 1, "한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5}
 _ALL = re.compile(r"전부|모두|둘\s*다|두\s*기술|각각|(?:이|그)\s*기술들")
 _GENERIC = re.compile(r"^(?:AWS\s+Skill\s+Builder|API|AWS\s+Training|Gap)$", re.I)
 _KOREAN_TOPIC = re.compile(r"([가-힣]{2,})(?:\s*(?:관련|입문|기초|심화|기술))?\s*(?:강의|교육\s*과정|강좌)")
 _GENERIC_TOPICS = {"관련", "입문", "기초", "심화", "기술", "부족한", "맞는", "관한", "위한", "그중", "추천", "좋은",
                    "연결된", "어떤", "위의", "맞춤", "온라인", "첫번째", "번째", "들을", "맞춘", "배울", "실습",
-                   "초급", "중급", "고급", "상급", "어려운", "쉬운", "높은", "낮은", "난이도"}
+                   "초급", "중급", "고급", "상급", "어려운", "쉬운", "높은", "낮은", "난이도", "마지막으로"}
 _REPORTED = re.compile(r"뜻했|의미했|가리켰|말했|언급했|원했|희망했|요청했|추천했|선택했")
 _PERSONAL_USE = re.compile(r"사용|활용|썼|써\s*봤|배포|운영|구축|실습|이용|개발|설계|담당|구현")
 
@@ -44,7 +44,7 @@ def _labels(text: str) -> list[str]:
 
 def _course_labels(text: str, has_reference: bool) -> list[str]:
     names = _labels(text)
-    if names or has_reference or _GAP_SCOPE.search(text) or _ORDINAL.search(text):
+    if names or has_reference or _GAP_SCOPE.search(text) or _course_rank(text) is not None:
         return names
     topic = _KOREAN_TOPIC.search(text)
     if topic and topic[1] not in _GENERIC_TOPICS:
@@ -97,16 +97,10 @@ def _updated_wishes(message: str, prior: list[str]) -> list[str]:
 
 
 def _ordered_target(text: str, candidates: list[str]) -> list[str] | None:
-    order = _ORDINAL.search(text)
-    if not order:
+    rank = _course_rank(text)
+    if rank is None:
         return None
-    token = order[1] or order[0]
-    if token.isdigit():
-        index = int(token) - 1
-    elif token == "마지막":
-        index = len(candidates) - 1
-    else:
-        index = _ORDINALS.get(token, 1) - 1
+    index = len(candidates) - 1 if rank == -1 else rank - 1
     return candidates[index:index + 1] if 0 <= index < len(candidates) else []
 
 
@@ -178,13 +172,20 @@ def mock_plan(message: str, context: dict) -> SupervisedTurn:
             turn.action = "gap"
     if turn.action != "courses":
         return SupervisedTurn(turn, wishes, decisions=["continue"])
-    targets, unclear = _targets(message, context, wishes, pending)
-    if turn.course_difficulty and not pending:
+    reference = switched_course_reference(message, context, turn)
+    if reference:
+        scope, targets, _ = reference
+        unclear = scope == "clarify"
+    else:
+        targets, unclear = _targets(message, context, wishes, pending)
+    if not reference and turn.course_difficulty and not pending:
         named = chat.explicit_course_skills(message, [*wishes, *context.get("last_course_skills", [])])
         if named:
             targets, unclear = named, False
-        elif context.get("last_course_skills") and not chat.requests_gap_courses(message) and not _ORDINAL.search(message):
+        elif context.get("last_course_skills") and not chat.requests_gap_courses(message) and _course_rank(message) is None:
             targets, unclear = list(context["last_course_skills"]), False
     if unclear:
-        return SupervisedTurn(chat.Turn(), prior, question=COURSE_QUESTION, decisions=["clarify"])
+        stored = chat.Turn(job=turn.job, remove_skills=_canonical([*context.get("skills", []), *turn.remove_skills]),
+                           remove_experiences=list(context.get("experiences", [])))
+        return _clarify(context, "course_target", ["clarify"], courses=True, message=message, proposed=stored)
     return SupervisedTurn(turn, wishes, targets, decisions=["continue"])

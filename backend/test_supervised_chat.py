@@ -60,6 +60,25 @@ class SupervisedChatTest(unittest.TestCase):
         choice = self.send("Kubernetes요")
         self.assertEqual({card["gap_skill"] for card in choice.courses}, {"Kubernetes"})
 
+    def test_course_question_keeps_explicit_correction_for_followup_turns(self):
+        self.send("Docker를 써봤어요. Linux와 Kubernetes를 배우고 싶어요.")
+        with patch.object(api, "get_recommendations") as recommend, patch.object(
+            chat.chat_profiles, "update_profile"
+        ) as save:
+            reply = self.send("정정할게요. Docker는 팀원이 사용했어요. 그 기술의 강의 보여줘.")
+            self.assertEqual(reply.action, "clarify")
+            self.assertIn("제외했습니다. Docker", reply.text)
+            self.assertEqual(self.state.history[-1]["content"], reply.text)
+            self.assertFalse(self.state.skills["Docker"])
+            self.assertEqual(self.state.last_changes["remove_skills"], ["Docker"])
+            self.assertTrue(self.state.pending_course_question)
+            self.assertEqual(self.state.wishes, ["Linux", "Kubernetes"])
+            recommend.assert_not_called()
+            save.assert_not_called()
+        choice = self.send("Kubernetes요")
+        self.assertEqual({card["gap_skill"] for card in choice.courses}, {"Kubernetes"})
+        self.assertNotIn("Docker", self.send("보유 기술을 요약해줘").text)
+
     def test_course_clarification_supersedes_pending_profile_selection(self):
         self.state.profile = {"skills": ["Docker", "Linux"], "levels": {"custom:Docker": 1}}
         self.send("Docker와 Kubernetes를 배우고 싶어요.")

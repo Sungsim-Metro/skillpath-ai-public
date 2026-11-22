@@ -259,7 +259,7 @@ def _compare_structures(pair: tuple[str, str], job: str, rows: list[dict], evide
 
 
 def _analyze(facts: dict, levels: dict[str, int], *, courses: bool, supervised: bool = False,
-             course_levels: tuple[str, ...] | None = None) -> Reply:
+             course_levels: tuple[str, ...] | None = None, gap_rank: int | None = None) -> Reply:
     job = facts["job"]
     try:
         rows = api.get_gap(job, levels)
@@ -294,7 +294,12 @@ def _analyze(facts: dict, levels: dict[str, int], *, courses: bool, supervised: 
             lines.append(line)
         return Reply("\n".join([*lines, *notes]), gap_skills=[row["skill"] for row in missing])
 
-    rows = missing[:api.RECOMMEND_TOP_N]
+    if gap_rank is None:
+        rows = missing[:api.RECOMMEND_TOP_N]
+    elif gap_rank == -1 or 1 <= gap_rank <= len(missing):
+        rows = [missing[-1 if gap_rank == -1 else gap_rank - 1]]
+    else:
+        return Reply(f"{JOBS[job]}에서 비교한 부족 기술은 {len(missing)}개여서 요청한 순번을 찾지 못했습니다.")
     requested = [row["skill"] for row in rows]
     reply = Reply("", course_targets=requested)
     try:
@@ -503,8 +508,15 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
             reply = _analyze(facts, levels, courses=False)
         else:
             difficulty = turn.course_difficulty
+            gap_rank = None
             if plan is not None:
+                from ai import supervisor
+
                 targets = plan.targets
+                reference = supervisor.switched_course_reference(message, prior_context or {}, turn)
+                if reference and reference[0] == "gap":
+                    gap_rank = reference[2]
+                    targets = []
             else:
                 targets = intake.explicit_course_skills(message, facts["skills"])
                 if not targets and difficulty and not intake.requests_gap_courses(message):
@@ -522,8 +534,13 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
                 reply = Reply("직전 추천에서 제외한 기술 외에 어떤 기술의 과정을 찾아볼까요?", action="clarify")
             else:
                 reply = _analyze(facts, levels, courses=True, supervised=plan is not None,
-                                 course_levels=_requested_course_levels(difficulty, []))
+                                 course_levels=_requested_course_levels(difficulty, []), gap_rank=gap_rank)
                 targets = reply.course_targets
+                if gap_rank is not None:
+                    plan.targets = targets
+                    if not targets:
+                        reply.action = "clarify"
+                        reply.text += "\n" + supervisor.COURSE_QUESTION
     elif turn.action == "summary":
         reply = Reply(_summary(facts))
         if plan is not None and state.wishes:
@@ -550,7 +567,10 @@ def _answer(state: Conversation, turn: intake.Turn, job: str, base_skills: list[
             except chat_reply.ReplyBlocked as exc:
                 return Reply(str(exc), action="blocked")
     if analysis and facts["job"] and plan is not None:
-        reply = _review_analysis(message, {**(prior_context or {}), **facts}, plan, reply)
+        review_context = {**(prior_context or {}), **facts}
+        if prior_context and prior_context["job"] != facts["job"]:
+            review_context["last_gap_skills"] = []
+        reply = _review_analysis(message, review_context, plan, reply)
         if turn.action == "gap" or reply.gap_skills:
             state.last_gap_job = facts["job"]
             state.last_gap_skills = list(reply.gap_skills)
@@ -691,12 +711,6 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
                            last_gap_skills=(getattr(state, "last_gap_skills", [])
                                             if getattr(state, "last_gap_job", None) == context["job"] else []))
             plan = supervisor.interpret_turn(message, context)
-            if plan.question:
-                state.pending_save = False
-                state.offered_gap = False
-                state.pending_course_question = plan.question == supervisor.COURSE_QUESTION
-                _remember_reply(state, message, plan.question)
-                return Reply(plan.question, action="clarify", supervisor_decisions=list(plan.decisions))
             turn = plan.turn
         else:
             turn = intake.interpret(message, context, screened=True)
@@ -707,6 +721,17 @@ def _handle_turn(state: Conversation, message: str, job: str, sidebar_skills: li
                        experience_skills=names(turn.experience_skills), save_skills=names(turn.save_skills))
         if plan is not None:
             plan.turn = turn
+            if plan.question:
+                _apply_turn(state, turn)
+                state.pending_save = False
+                state.offered_gap = False
+                state.pending_course_question = plan.question == supervisor.COURSE_QUESTION
+                removed = dict.fromkeys([*turn.remove_skills, *turn.remove_experiences])
+                text = plan.question
+                if removed:
+                    text = "이번 상담 정보에서 제외했습니다. " + ", ".join(removed) + "\n" + text
+                _remember_reply(state, message, text)
+                return Reply(text, action="clarify", supervisor_decisions=list(plan.decisions))
     except intake.ChatIntakeError:
         return Reply("메시지를 해석하지 못했습니다. 요청을 다시 말씀해 주세요.", action="intake", failed=True)
     if (not supervised and state.offered_gap and turn.status == "ok" and turn.action == "note"
