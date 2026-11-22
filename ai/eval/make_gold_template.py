@@ -2,7 +2,8 @@
 
 파일 (공고와 정답지는 data/raw/ 아래라 커밋되지 않는다)
   data/raw/eval_test/postings/*.posting.json   채점용 공고 ① (종훈 제공, 새 to_posting 칸 제목 형식)
-  data/raw/eval_test/gold_test.json            정답지 ② 배열 (성진이 직접 작성)
+  data/raw/eval_test/gold_test.json            채점용(#21) 정답지 ② 배열 (종훈 작성)
+  ai/eval/gold_extraction.json                 참고: 가짜 10건 정답지(개선용, 성진 작성). 이 스크립트는 읽지 않는다
   ai/eval/test_manifest.json                   커밋한다. 공고 id 와 본문 sha256 만 (원문·URL·제목 없음)
 
 사용 (저장소 루트에서)
