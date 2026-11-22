@@ -59,6 +59,10 @@ MAX_RECOMMEND = 3    # recommend_courses 한 번에 추천하는 기술 수(기�
 NO_DEMAND_SUMMARY = "수요 집계에 없는 기술(공고 수 정보 없음)"
 NO_DEMAND_REASON = "이 기술은 공고 수요 집계에 없어 공고 수 정보는 없습니다."
 _MESSAGE: ContextVar[str] = ContextVar("agent_message", default="")  # 이번 사용자 메시지(이름 댄 기술 판정용)
+# 화면용(backend/agent_screen.py): 프로필·사이드바 보유 기술. get_gap 입력에 코드가 합친다(프롬프트는 그대로). 평가 경로는 빈 값
+_BASE_SKILLS: ContextVar[tuple] = ContextVar("agent_base_skills", default=())
+# 화면용: recommend_courses 가 받은 과정 원본(카드에 필요한 url·언어 등). 모델에게는 4칸만 준다
+_COURSE_ROWS: ContextVar[Optional[list]] = ContextVar("agent_course_rows", default=None)
 MAX_TURNS = 4        # 도구 호출 반복 한도(모델 호출 수)
 MAX_SKILLS = 30      # get_gap 입력 기술 수 한도
 CLOSE_MIN = 0.5      # 문자열 비교 후보의 최소 비슷도 (도카↔도커 0.5, 파이선↔파이썬 0.67)
@@ -132,7 +136,9 @@ def demand_summary(of: int, postings: int, required_pct: int) -> str:
 def tool_get_gap(user_skills: list) -> dict:
     if not isinstance(user_skills, list):
         raise ValueError("user_skills 는 목록이어야 합니다")
-    known, unknown = normalize_skills([str(s).strip() for s in user_skills if str(s).strip()][:MAX_SKILLS])
+    said = [str(s).strip() for s in user_skills if str(s).strip()]
+    said += [s for s in _BASE_SKILLS.get() if s not in said]  # 화면용: 프로필·사이드바 보유 기술을 코드가 합친다
+    known, unknown = normalize_skills(said[:MAX_SKILLS])
     demand = api.get_demand(JOB)
     total = demand["total_postings"]
     raw = {s["skill"]: s for s in demand["skills"]}  # 필수 비율은 get_skill_demand 와 같은 _pct 로(반올림을 맞춘다)
@@ -212,6 +218,11 @@ def tool_recommend_courses(skills: list) -> dict:
         if s is None:  # 사용자가 이름을 댄, 수요 집계에 없는 기술
             for c in courses:
                 c["reason"] = _drop_pair_sentences(c["reason"])
+        rows = _COURSE_ROWS.get()
+        if rows is not None:  # 화면용: 원본 과정에 모델에게 준 것과 같은 reason 을 붙여 둔다
+            rows.append({"gap_skill": rec["gap_skill"],
+                         "courses": [{**full, "reason": c["reason"]} for full, c in zip(rec["courses"], courses)]})
+        if s is None:
             out.append({"skill": rec["gap_skill"], "demand_known": False, "summary": NO_DEMAND_SUMMARY, "courses": courses})
             continue
         pct = _pct(s["required"], s["postings"])
@@ -392,13 +403,23 @@ def _result(answer: str, calls: list, usage: dict, started: float, uncertain_rea
     }
 
 
-def chat(message: str, history: Optional[list] = None) -> dict:
-    """화면용 진입점. 이번 메시지를 추천 도구가 읽을 수 있게 둔 채 _chat 을 부른다(이름 댄 기술 판정)."""
-    token = _MESSAGE.set((message or "").strip())
+def chat(message: str, history: Optional[list] = None, base_skills: Optional[list] = None) -> dict:
+    """화면용 진입점. 이번 메시지를 추천 도구가 읽을 수 있게 둔 채 _chat 을 부른다(이름 댄 기술 판정).
+
+    base_skills(화면용): 프로필·사이드바 보유 기술. get_gap 입력에 코드가 합친다. 주면 결과에 course_rows(과정 원본)도 담는다.
+    결과의 guard 는 입력 검사 결과("pass", "blocked", "check_failed"), scope 는 답 범위("in", "out", 막히면 None).
+    """
+    tokens = (_MESSAGE.set((message or "").strip()),
+              _BASE_SKILLS.set(tuple(dict.fromkeys(str(s).strip() for s in base_skills or [] if str(s).strip()))),
+              _COURSE_ROWS.set([]))
     try:
-        return _chat(message, history)
+        result = _chat(message, history)
+        result["course_rows"] = _COURSE_ROWS.get()
+        return result
     finally:
-        _MESSAGE.reset(token)
+        _COURSE_ROWS.reset(tokens[2])
+        _BASE_SKILLS.reset(tokens[1])
+        _MESSAGE.reset(tokens[0])
 
 
 def _chat(message: str, history: Optional[list] = None) -> dict:
@@ -412,9 +433,10 @@ def _chat(message: str, history: Optional[list] = None) -> dict:
     if not message:
         raise ValueError("message 가 비었습니다")
     usage = {k: 0 for k in USAGE_KEYS}
-    blocked = guard_input(message)
-    if blocked is not None:
-        return _result(blocked, [], usage, started, None)
+    checked = guardrail.check_input(message)  # guard_input 과 같은 검사. 화면용으로 막힘과 검사 실패를 나눠 돌려준다
+    if checked.blocked:
+        return {**_result(guardrail.message_for(checked, guardrail.BLOCK_MESSAGE), [], usage, started, None),
+                "guard": "check_failed" if guardrail.is_check_failure(checked) else "blocked", "scope": None}
 
     msgs = _history_messages(history) + [{"role": "user", "content": [{"text": message}]}]
     outputs: list[dict] = []
@@ -488,7 +510,8 @@ def _chat(message: str, history: Optional[list] = None) -> dict:
         if blocked_answer is not None:  # 답이 가드레일에 걸리면 답 대신 고정 문장
             answer, reason = blocked_answer, "guardrail"
 
-    result = _result(answer, calls, usage, started, reason)
+    result = {**_result(answer, calls, usage, started, reason), "guard": "pass",
+              "scope": scope}
     logger.info(
         "상담 1건: 도구 %s, 도구 %d회, 모델 %d회, 답 %s, 재질문 %s, 근거 없는 숫자 %s, 짝 틀림 %s, 토큰 %s, %dms, 불확실 %s (prompt=%s)",
         [c["name"] for c in calls], len(calls), model_calls, via, retried or "없음",

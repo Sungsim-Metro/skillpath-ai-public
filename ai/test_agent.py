@@ -16,7 +16,8 @@ from ai.bedrock import BedrockJSONError  # noqa: E402
 from ai.usage import SessionUsage, track_session  # noqa: E402
 
 QUESTION = "Python, Docker 해봤는데 클라우드 엔지니어 되려면 뭐부터 공부해요?"
-KEYS = {"answer", "tool_calls", "usage", "latency_ms", "uncertain", "uncertain_reason"}
+KEYS = {"answer", "tool_calls", "usage", "latency_ms", "uncertain", "uncertain_reason",
+        "guard", "scope", "course_rows"}  # 뒤의 셋은 화면용(backend/agent_screen.py, 11/22)
 
 
 def names(r):
@@ -264,13 +265,46 @@ def test_history_numbers_and_format():
 
 
 def test_guard_hook():
-    old = agent.guard_input
-    agent.guard_input = lambda m: "이 질문에는 답할 수 없습니다."
+    # 입력이 막히면 도구·모델을 부르지 않고 고정 문장. 화면용으로 막힘과 검사 실패를 나눠 돌려준다
+    from ai import guardrail
+
+    old = guardrail.check_input
     try:
-        r = agent.chat(QUESTION)
+        for result, kind in ((guardrail.GuardResult(True, "code", "공격", "지시 무시"), "blocked"),
+                             (guardrail.GuardResult(True, "guardrails", guardrail.FAILED, "RuntimeError"), "check_failed")):
+            guardrail.check_input = lambda m, result=result: result
+            r = agent.chat(QUESTION)
+            assert r["answer"] == guardrail.message_for(result, guardrail.BLOCK_MESSAGE) and r["tool_calls"] == []
+            assert (r["guard"], r["scope"], r["course_rows"]) == (kind, None, [])
     finally:
-        agent.guard_input = old
-    assert r["answer"] == "이 질문에는 답할 수 없습니다." and r["tool_calls"] == []
+        guardrail.check_input = old
+
+
+def test_screen_base_skills_are_merged_into_get_gap_by_code():
+    # 화면용: 프로필·사이드바 보유 기술을 코드가 get_gap 입력에 합친다. 평가 경로(base_skills 없음)는 그대로
+    plain = agent.tool_get_gap(["Python"])
+    token = agent._BASE_SKILLS.set(("Docker", "Python"))
+    try:
+        merged = agent.tool_get_gap(["Python"])
+    finally:
+        agent._BASE_SKILLS.reset(token)
+    assert plain["recognized_skills"] == ["Python"]
+    assert merged["recognized_skills"] == ["Python", "Docker"]  # 중복 없이 뒤에 붙는다
+    assert "Docker" not in [m["skill"] for m in merged["missing_top"]]
+    r = agent.chat(QUESTION, base_skills=["Linux"])
+    assert r["tool_calls"][0]["input"] == {"user_skills": ["Python", "Docker"]}  # 모델 입력은 그대로
+    assert agent._BASE_SKILLS.get() == ()  # 끝나면 원래대로
+
+
+def test_screen_course_rows_keep_card_fields():
+    # 화면용: 모델에게는 4칸만 주고, 카드에 필요한 원본 칸(url 등)은 course_rows 로 따로 돌려준다. reason 은 같은 문장
+    r = agent.chat(QUESTION)
+    assert r["guard"] == "pass" and r["scope"] in ("in", "out")
+    rows = r["course_rows"]
+    assert rows and all(row["gap_skill"] and row["courses"] for row in rows)
+    for row in rows:
+        for course in row["courses"]:
+            assert {"title", "url", "level", "match", "reason"} <= set(course)
 
 
 def _agent_log(question: str) -> str:

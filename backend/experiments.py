@@ -34,11 +34,17 @@ def _names(variable: str) -> list[str]:
     return list(dict.fromkeys(name.strip() for name in os.getenv(variable, "").split(",") if name.strip()))
 
 
+def agent_mode() -> bool:
+    """CHAT_ARCHITECTURE=agent 이면 화면 상담을 구조 A(ai/agent.py)로 처리하고 비교 실험은 모두 끈다.
+    값을 비우면(기본) 지금과 같다. 시연 중 문제가 생기면 값을 지우고 앱을 다시 켜면 구조 0 으로 돌아간다."""
+    return os.getenv("CHAT_ARCHITECTURE", "").strip().lower() == "agent"
+
+
 # ---------- 실험 1: 모델 ----------
 
 def models() -> list[str]:
-    """무작위로 배정할 모델 ID 목록. 가짜 모드에서는 모델을 부르지 않으므로 빈 목록이다."""
-    return [] if api.is_mock() else _names("EXPERIMENT_MODELS")
+    """무작위로 배정할 모델 ID 목록. 가짜 모드에서는 모델을 부르지 않으므로 빈 목록이다. 구조 A 모드도 빈 목록."""
+    return [] if api.is_mock() or agent_mode() else _names("EXPERIMENT_MODELS")
 
 
 def pick_model(rng: random.Random | None = None) -> str | None:
@@ -72,6 +78,8 @@ CHAT_STRUCTURES = {"3": "supervised"}
 
 def chat_architecture() -> str:
     """AB_STRUCTURES에 상담 구조 하나만 지정하면 그 구조로 매 턴을 처리한다."""
+    if agent_mode():
+        return "agent"
     names = _names("AB_STRUCTURES")
     if len(names) == 1:
         return CHAT_STRUCTURES.get(names[0], "screen")
@@ -84,6 +92,8 @@ def chat_rival() -> str | None:
     AB_STRUCTURES 에 기본 구조(reviewed)와 상담 구조(3)를 함께 적으면 켜진다(예: `reviewed,3`).
     상담 구조 하나만 적으면 chat_architecture 가 그 구조로 모든 턴을 처리하고 비교는 하지 않는다.
     """
+    if agent_mode():
+        return None
     names = _names("AB_STRUCTURES")
     if DEFAULT_STRUCTURE not in names:
         return None
@@ -92,6 +102,8 @@ def chat_rival() -> str | None:
 
 def structures() -> list[str]:
     """과정 카드 A/B에 쓸 추천 구조 이름. 두 개 이상 등록되어야 투표를 연다."""
+    if agent_mode():
+        return []
     names = [name for name in _names("AB_STRUCTURES") if name in STRUCTURES]
     return names if len(names) >= 2 else []
 
