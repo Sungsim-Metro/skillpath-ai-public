@@ -21,7 +21,7 @@ raw·normalized·evidence 에 그대로 다시 적용해, 기술 이름·confide
 복구(--apply 가 중간에 실패했거나 결과가 마음에 안 들 때): 백업 파일 이름의 시각(예: 20261121T010203Z)을 준다.
   BEDROCK_MOCK=0 python -m pipeline.restandardize --job-category ai_engineer --backup-dir outputs/backup --restore 20261121T010203Z          # 확인만
   BEDROCK_MOCK=0 python -m pipeline.restandardize --job-category ai_engineer --backup-dir outputs/backup --restore 20261121T010203Z --apply  # 되돌려 씀
-쓰는 순서는 추출 결과 → 수요 집계(마지막)다. 중간에 실패하면 둘이 어긋나므로 같은 명령을 다시 돌리거나(같은 건을 다시 쓰므로 안전) --restore 로 되돌린다.
+추출 결과 전부를 새 실행의 파티션에 저장한 뒤, 처음 읽은 수요 집계가 그대로일 때만 공개 포인터를 교체한다. 실패하면 이전 집계와 추출 결과를 계속 조회할 수 있다.
 쓰기 전에 모든 항목이 DynamoDB 형식(float 금지)으로 바뀌는지 먼저 검사해, 도중에 형식 오류로 멈추는 일을 막는다.
 """
 from __future__ import annotations
@@ -34,6 +34,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from ai.extract import PROMPTS, to_contract_with_dropped
 from backend.demand import build_snapshot
@@ -111,15 +112,42 @@ def restore(store, backup_dir: Path, job_category: str, stamp: str, apply: bool)
     extractions = json.loads((backup_dir / f"{job_category}-extractions-{stamp}.json").read_text(encoding="utf-8"))
     demand = json.loads((backup_dir / f"{job_category}-demand-{stamp}.json").read_text(encoding="utf-8"))
     check_writable([*extractions, demand])
-    print(f"복구 대상: 추출 결과 {len(extractions)}건과 수요 집계(snapshot {demand.get('snapshot_id')})")
+    if demand.get("job_category") != job_category or any(
+        item.get("job_category") != job_category for item in extractions
+    ):
+        raise ValueError("Backup rows must belong to the selected job category.")
+    counted = demand["counted_postings"]
+    rows = {item["posting_id"]: item for item in extractions}
+    selected = {r["posting_id"]: r["input_fingerprint"] for r in counted}
+    if (not selected or len(selected) != len(counted) or len(rows) != len(extractions)
+            or demand["demand"]["total_postings"] != len(selected)):
+        raise ValueError("Backup contains an empty, duplicate or incorrectly sized posting set.")
+    for pid, fingerprint in selected.items():
+        if pid not in rows or not fingerprint or rows[pid].get("input_fingerprint") != fingerprint:
+            raise ValueError(f"Backup extraction is missing or has a different fingerprint for {pid}.")
+    # Historical role partitions may contain rows omitted from this snapshot.
+    matched = [rows[pid] for pid in selected]
+    print(f"복구 대상: 추출 결과 {len(matched)}건과 수요 집계(snapshot {demand.get('snapshot_id')})")
     if not apply:
         print("확인만 했습니다. 아무것도 쓰지 않았습니다(--apply 를 주면 되돌려 씁니다).")
         return 0
-    for item in extractions:
-        store.save_extraction(item)
-    store.save_demand(demand)
+    current = store.get_demand_snapshot(job_category) or {}
+    # A restore is a new publication. Reusing its old ID would admit stale writers.
+    restored = {**demand, "restored_from": demand["snapshot_id"],
+                "snapshot_id": f"restore-{uuid4().hex}"}
+    publish_revision(store, current, restored, matched)
     print("복구했습니다.")
     return 0
+
+
+def publish_revision(store, current, snapshot, all_records) -> None:
+    """Stage every revision away from both legacy and versioned published rows."""
+    job = snapshot["job_category"]
+    partition = f"run#{job}#{snapshot['snapshot_id']}"
+    snapshot = {**snapshot, "extraction_partition": partition}
+    for item in all_records:
+        store.stage_extraction(partition, item)
+    store.publish_batch(snapshot, current.get("snapshot_id"))
 
 
 def _dump(path: Path, value) -> None:
@@ -153,7 +181,7 @@ def main() -> int:
     if current is None:
         parser.exit(1, "공개된 수요 집계가 없어 비교할 수 없습니다.\n")
     current = json_numbers(current)
-    items = [json_numbers(i) for i in store.list_extractions(args.job_category)]
+    items = [json_numbers(i) for i in store.snapshot_extractions(args.job_category, current)]
     selected = {row["posting_id"] for row in current["counted_postings"]}
     items = [i for i in items if i["posting_id"] in selected]  # 지금 집계에 들어간 공고만 다룬다
 
@@ -170,7 +198,7 @@ def main() -> int:
 
     stored = Counter(i["analysis"].get("prompt_version") for i in items)
     changed, summary = plan(items, texts, args.prompt_version)
-    run_id = "restandardize-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = f"restandardize-{uuid4().hex}"
     merged = {i["posting_id"]: i for i in items} | {c["posting_id"]: c for c in changed}
     new_snapshot = snapshot_from(list(merged.values()), current, run_id)
 
@@ -195,9 +223,10 @@ def main() -> int:
     _dump(args.backup_dir / f"{args.job_category}-extractions-{stamp}.json", items)
     print(f"백업 저장: {args.backup_dir}")
     marker = {"restandardized_at": stamp, "restandardized_rules": args.prompt_version}
-    for item in changed:  # 어떤 규칙으로 다시 계산했는지 남긴다(prompt_version 은 원래 추출 값 그대로)
-        store.save_extraction({**item, "analysis": {**item["analysis"], **marker}})
-    store.save_demand(new_snapshot)
+    rewritten = {i["posting_id"]: {**i, "analysis": {**i["analysis"], **marker}} for i in changed}
+    if "source_manifest" in current:
+        new_snapshot["source_manifest"] = current["source_manifest"]
+    publish_revision(store, current, new_snapshot, (merged | rewritten).values())
     print(f"추출 결과 {len(changed)}건과 수요 집계를 저장했습니다(run_id {run_id}).")
     return 0
 

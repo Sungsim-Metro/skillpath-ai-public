@@ -157,6 +157,8 @@ uv run --python 3.11 --with boto3 python -m pipeline.extraction_batch --job-cate
 - 완료 시 공개 여부, 대상·성공·재사용·실패·제외 건수와 실패 호출을 포함한 토큰 합계를 JSON 한 줄로 출력한다.
 - 앱의 실제 모드는 DynamoDB의 완성된 `demand`를 조회한다. 조회 캐시는 최대 60초 후 갱신된다.
 
+CLI와 서버리스 배치는 새 추출 결과를 같은 테이블의 실행 전용 파티션(`run#<직무>#<실행 ID>`)에 적재한다. 집계에 성공하면 처음 읽은 `snapshot_id`가 그대로인 경우에만 수요와 `extraction_partition` 포인터를 함께 교체한다. `DynamoDBStore.get_extraction`과 `list_extractions`는 이 포인터를 따르고, 포인터가 없는 기존 집계에서는 직무 기본 키로 조회한다. 서버리스 배치의 S3 매니페스트 생성 및 검증 명령은 [AWS 배포 가이드](../infra/README.md)에 있다.
+
 필요한 IAM 권한은 수집 시 S3 `PutObject`, `GetObject`, DynamoDB `GetItem`, `PutItem`, `Query`,
 Bedrock 모델 호출 권한이다. 테이블 생성 명령에는 DynamoDB `CreateTable`, `DescribeTable` 권한도 필요하다.
 Query의 페이지 처리는 [AWS SDK 문서](https://docs.aws.amazon.com/boto3/latest/reference/services/dynamodb/table/query.html)를 따른다.

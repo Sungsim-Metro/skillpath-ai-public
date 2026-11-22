@@ -35,6 +35,7 @@ class DynamoDBStoreTest(unittest.TestCase):
     def setUp(self) -> None:
         self.extractions = Mock()
         self.demand = Mock()
+        self.demand.get_item.return_value = {}
         self.store = DynamoDBStore(self.extractions, self.demand)
 
     def test_query_reads_all_pages_consistently(self) -> None:
@@ -59,7 +60,7 @@ class DynamoDBStoreTest(unittest.TestCase):
             Key={"job_category": "cloud_engineer", "posting_id": "rp-1"}, ConsistentRead=True
         )
         self.assertIsNone(self.store.get_demand_snapshot("cloud_engineer"))
-        self.demand.get_item.assert_called_once_with(
+        self.demand.get_item.assert_called_with(
             Key={"job_category": "cloud_engineer"}, ConsistentRead=True
         )
 

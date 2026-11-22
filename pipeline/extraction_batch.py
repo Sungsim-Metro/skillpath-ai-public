@@ -218,22 +218,38 @@ def run_batch(
     try:
         database = store if store is not None else DynamoDBStore.from_env()
         s3 = s3_client if s3_client is not None else storage._client()
+        current = database.get_demand_snapshot(job_category) or {}
     except Exception as exc:
         summary["batch_error"] = type(exc).__name__
         return summary
     selected = {item.posting["id"]: item.fingerprint for item in inputs}
+    base_id = current.get("snapshot_id")
+    base_partition = current.get("extraction_partition", job_category)
+    if not force:
+        # Failed runs keep successful rows in the same private partition on retry.
+        identity = [base_id, job_category, collected, selection_version, exclusions,
+                    [(item.s3_key, item.fingerprint) for item in inputs]]
+        digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        summary["run_id"] = f"cli-{digest}"
+    partition = f"run#{job_category}#{summary['run_id']}"
     for batch_input in inputs:
         posting_id = batch_input.posting["id"]
         try:
             posting = _read_s3_posting(batch_input, target, s3)
-            existing = database.get_extraction(job_category, posting_id)
+            staged = database.get_partition_extraction(partition, posting_id)
+            if staged:
+                if (staged["posting_s3_key"] != batch_input.s3_key
+                        or staged["input_fingerprint"] != batch_input.fingerprint):
+                    raise ValueError("Conflicting staged input.")
+                summary["reused"] += 1
+                summary["success"] += 1
+                continue
+            existing = database.get_partition_extraction(base_partition, posting_id)
             if existing and existing.get("input_fingerprint") == batch_input.fingerprint and not force:
                 item = _extraction_item(
                     posting, batch_input, job_category,
                     existing["extraction"], existing["analysis"],
                 )
-                if item != existing:
-                    database.save_extraction(item)
                 summary["reused"] += 1
             else:
                 try:
@@ -250,7 +266,7 @@ def run_batch(
                 item = _extraction_item(
                     posting, batch_input, job_category, extraction, analysis,
                 )
-                database.save_extraction(item)
+            database.stage_extraction(partition, item)
             summary["success"] += 1
         except Exception as exc:
             failures.append({"posting_id": posting_id, "error_type": type(exc).__name__})
@@ -259,13 +275,14 @@ def run_batch(
     if failures:
         return summary
     try:
-        items = database.list_extractions(job_category)
+        items = database.snapshot_extractions(job_category, {"extraction_partition": partition})
         snapshot = build_snapshot(
             items, selected=selected, job_category=job_category, collected=collected,
             exclusions=exclusions, selection_version=selection_version,
             run_id=summary["run_id"],
         )
-        database.save_demand(snapshot)
+        snapshot["extraction_partition"] = partition
+        database.publish_batch(snapshot, base_id)
         summary["published"] = True
     except Exception as exc:
         summary["publication_error"] = type(exc).__name__

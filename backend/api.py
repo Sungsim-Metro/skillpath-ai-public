@@ -28,6 +28,7 @@ from pathlib import Path
 from threading import Lock
 from time import monotonic
 
+from backend import lambda_tools
 from backend.dynamodb import DynamoDBStore, json_numbers
 from backend.jobs import DEFAULT_JOB, JOBS, job_file
 from backend.levels import (course_level_first, level_after_courses, required_level, satisfaction, skill_levels,
@@ -79,6 +80,8 @@ def _load(name: str, job_category: str = DEFAULT_JOB):
 
 def get_demand(job_category: str) -> dict:
     """직무 수요 집계(④). 실제 모드는 완성된 DB 결과를 60초간 재사용한다."""
+    if function := lambda_tools.configured_function(lambda_tools.DEMAND_FUNCTION):
+        return lambda_tools.invoke(function, "get_demand", job_category=job_category)
     if is_mock():
         return _load("demand.json", job_category)
     table_name = os.getenv("DYNAMODB_DEMAND_TABLE", "").strip()
@@ -92,6 +95,7 @@ def get_demand(job_category: str) -> dict:
         now = monotonic()
         cached = _demand_cache.get(cache_key)
         if cached is not None and now - cached[0] < DEMAND_CACHE_SECONDS:
+            lambda_tools.mark_cache_hit("demand")
             return deepcopy(cached[1])
         snapshot = DynamoDBStore.from_env().get_demand_snapshot(job_category)
         if snapshot is None:
@@ -127,6 +131,10 @@ def get_gap(job_category: str, owned_skills, min_ratio: float = GAP_MIN_SHARE) -
     예전 호출의 기술 이름 목록도 지원한다.
     단계·기준 단계·충족도 계산은 backend/levels.py 에 있다. 계산은 전부 코드로 한다. LLM 을 쓰지 않는다.
     """
+    if function := lambda_tools.configured_function(lambda_tools.DEMAND_FUNCTION):
+        owned = owned_skills if owned_skills is None or isinstance(owned_skills, dict) else list(owned_skills)
+        return lambda_tools.invoke(function, "get_gap", job_category=job_category, owned_skills=owned,
+                                   min_ratio=min_ratio)
     demand = get_demand(job_category)
     total = demand["total_postings"]
     picked = [s for s in demand["skills"] if (s["postings"] / total if total else 0) >= min_ratio]
@@ -382,6 +390,10 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
     명시한 기술의 상담은 직무 집계에서 읽은 review_evidence를 넘긴다. 해당 기술의 행이 없으면
     이 내부 결과의 demand는 None이며, 검토한 과정 목표만 사유에 쓴다.
     """
+    if function := lambda_tools.configured_function(lambda_tools.RECOMMEND_FUNCTION):
+        return lambda_tools.invoke(function, "get_recommendations", job_category=job_category,
+                                   gap_skills=gap_skills[:RECOMMEND_TOP_N], review=review, levels=levels,
+                                   review_evidence=review_evidence, course_levels=course_levels)
     mock = is_mock()
     if not mock or review or course_levels is not None:
         gap_skills = gap_skills[:RECOMMEND_TOP_N]  # 기술별 모델 호출 비용과 화면 길이를 제한한다
@@ -410,6 +422,7 @@ def get_recommendations(job_category: str, gap_skills: list[str], *, review: boo
         if cached is not None:
             _recommend_cache.move_to_end(key)  # 방금 쓴 것으로 표시
     if cached is not None:
+        lambda_tools.mark_cache_hit("recommendations")
         return [with_recommendation_level(rec, levels, course_levels) for rec in deepcopy(cached)]
 
     from ai.bedrock import BedrockJSONError

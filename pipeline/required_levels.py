@@ -40,7 +40,8 @@ def load_extractions(job_category: str) -> tuple[list[dict], str]:
         return out, "sample"
     from backend.dynamodb import DynamoDBStore, json_numbers
 
-    items = DynamoDBStore.from_env().list_extractions(job_category)
+    store = DynamoDBStore.from_env()
+    items = store.snapshot_extractions(job_category, store.get_demand_snapshot(job_category))
     return [json_numbers(item["extraction"]) for item in items if "extraction" in item], "dynamodb"
 
 

@@ -39,7 +39,7 @@ class MemoryS3:
 
 class MemoryStore:
     def __init__(self):
-        self.extractions = {}
+        self.partitions = {}
         self.snapshot = {"previous": True}
         self.save_count = 0
         self.publish_count = 0
@@ -47,22 +47,34 @@ class MemoryStore:
         self.reject_demand = False
         self.omit_ids = set()
 
-    def get_extraction(self, job_category, posting_id):
-        return copy.deepcopy(self.extractions.get(posting_id))
+    @property
+    def extractions(self):
+        return self.partitions.get(self.snapshot.get("extraction_partition", "cloud_engineer"), {})
 
-    def save_extraction(self, item):
+    def get_partition_extraction(self, partition, posting_id):
+        return copy.deepcopy(self.partitions.get(partition, {}).get(posting_id))
+
+    def stage_extraction(self, partition, item):
         if item["posting_id"] in self.reject_ids:
             raise ClientError({"Error": {"Code": "ValidationException"}}, "PutItem")
         self.save_count += 1
-        self.extractions[item["posting_id"]] = copy.deepcopy(item)
+        rows = self.partitions.setdefault(partition, {})
+        if item["posting_id"] in rows:
+            raise AssertionError("Tests should not overwrite immutable rows.")
+        rows[item["posting_id"]] = copy.deepcopy(item)
 
-    def list_extractions(self, job_category):
+    def snapshot_extractions(self, job_category, snapshot):
         return copy.deepcopy([
-            item for posting_id, item in self.extractions.items()
+            item for posting_id, item in self.partitions.get(snapshot["extraction_partition"], {}).items()
             if posting_id not in self.omit_ids
         ])
 
-    def save_demand(self, item):
+    def get_demand_snapshot(self, job_category):
+        return copy.deepcopy(self.snapshot)
+
+    def publish_batch(self, item, expected_base):
+        if self.snapshot.get("snapshot_id") != expected_base:
+            raise ValueError("The published snapshot changed.")
         if self.reject_demand:
             raise ClientError({"Error": {"Code": "ValidationException"}}, "PutItem")
         self.publish_count += 1
@@ -121,6 +133,20 @@ class ExtractionBatchTest(unittest.TestCase):
             store=self.store, s3_client=self.s3, **kwargs,
         )
 
+    def test_legacy_writer_cannot_overwrite_a_concurrent_serverless_publish(self):
+        canonical = {"posting_id": "rp-1", "input_fingerprint": "old", "posting_meta": {"title": "Old"}}
+        self.store.partitions["cloud_engineer"] = {"rp-1": copy.deepcopy(canonical)}
+        self.store.snapshot = {"snapshot_id": "legacy"}
+        def concurrent_publish(posting):
+            self.store.snapshot = {"snapshot_id": "winner", "extraction_partition": "run#role#winner"}
+            return self.extract(posting)
+
+        self.extractor.side_effect = concurrent_publish
+        result = self.run_batch()
+        self.assertFalse(result["published"])
+        self.assertEqual(self.store.snapshot["snapshot_id"], "winner")
+        self.assertEqual(self.store.partitions["cloud_engineer"]["rp-1"], canonical)
+
     def test_same_input_is_reused_and_never_increments_counts(self):
         first = self.run_batch()
         second = self.run_batch()
@@ -129,7 +155,7 @@ class ExtractionBatchTest(unittest.TestCase):
         self.assertEqual((second["success"], second["reused"], second["failed"]), (1, 1, 0))
         self.assertEqual(second["usage"]["totalTokens"], 0)
         self.assertEqual(self.extractor.call_count, 1)
-        self.assertEqual(self.store.save_count, 1)
+        self.assertEqual(self.store.save_count, 2)  # Both immutable snapshots retain their complete rows.
         self.assertEqual(self.store.snapshot["demand"]["total_postings"], 1)
         self.assertEqual(self.store.snapshot["demand"]["skills"][0]["postings"], 1)
         self.assertEqual(len(self.s3.reads), 2)
@@ -163,6 +189,9 @@ class ExtractionBatchTest(unittest.TestCase):
         self.assertEqual(self.store.snapshot, snapshot)
 
     def test_partial_failure_saves_success_without_publishing_incomplete_demand(self):
+        canonical = {"posting_id": "rp-1", "input_fingerprint": "old", "posting_meta": {"title": "Old"}}
+        self.store.partitions["cloud_engineer"] = {"rp-1": copy.deepcopy(canonical)}
+        self.store.snapshot = {"snapshot_id": "legacy"}
         second = self.write_posting("rp-2")
         def extract(posting):
             if posting["id"] == "rp-2":
@@ -173,9 +202,14 @@ class ExtractionBatchTest(unittest.TestCase):
         self.assertEqual((result["target"], result["success"], result["failed"]), (2, 1, 1))
         self.assertFalse(result["published"])
         self.assertEqual(result["usage"]["totalTokens"], 12)
-        self.assertEqual(set(self.store.extractions), {"rp-1"})
-        self.assertEqual(self.store.snapshot, {"previous": True})
+        self.assertEqual(self.store.extractions, {"rp-1": canonical})
+        self.assertEqual(self.store.snapshot, {"snapshot_id": "legacy"})
         self.assertEqual(result["failures"], [{"posting_id": "rp-2", "error_type": "BedrockJSONError"}])
+        self.extractor.side_effect = self.extract
+        retried = self.run_batch([self.path, second])
+        self.assertEqual(retried["reused"], 1)
+        self.assertTrue(retried["published"])
+        self.assertEqual(self.store.partitions["cloud_engineer"]["rp-1"], canonical)
 
     def test_storage_failure_preserves_previous_row_and_counts_used_tokens(self):
         self.run_batch()
@@ -215,7 +249,8 @@ class ExtractionBatchTest(unittest.TestCase):
             {"posting_id": "rp-2", "reason": "manual review"},
         ])
         self.extractor.assert_not_called()
-        self.assertIn("rp-2", self.store.extractions)
+        self.assertNotIn("rp-2", self.store.extractions)
+        self.assertTrue(any("rp-2" in rows for rows in self.store.partitions.values()))
 
     def test_metadata_only_change_reuses_model_result_and_updates_reference(self):
         self.run_batch()
@@ -391,7 +426,8 @@ class ExtractionBatchTest(unittest.TestCase):
             self.store.snapshot["policy"]["selection_version"],
             batch.selection_version_for_terms(["cloud"]),
         )
-        self.assertIn("rp-2", self.store.extractions)
+        self.assertNotIn("rp-2", self.store.extractions)
+        self.assertTrue(any("rp-2" in rows for rows in self.store.partitions.values()))
         self.assertTrue(second.exists())
         self.extractor.assert_not_called()
         with self.assertRaises(ValueError):

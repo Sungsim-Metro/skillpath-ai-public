@@ -13,7 +13,7 @@ from ai import chat as intake
 from ai import chat_reply
 from ai.bedrock import BedrockJSONError, current_model, use_model
 from ai.usage import SessionUsage, current_session, track_session
-from backend import api, chat_profiles, experiments
+from backend import api, chat_profiles, experiments, lambda_tools
 from backend.jobs import JOBS
 from backend.levels import has_skill_rating
 from pipeline.aliases import normalize_skill
@@ -584,7 +584,7 @@ def handle_message(state: Conversation, message: str, *, job: str, sidebar_skill
     before = (state.usage.input_tokens, state.usage.output_tokens)
     rival = None if supervised else experiments.chat_rival()
     snapshot = copy.deepcopy(state) if rival else None  # 비교용 구조는 이 턴 전의 상태에서 같은 메시지를 다시 처리한다
-    with track_session(state.usage), use_model(model):
+    with track_session(state.usage), use_model(model), lambda_tools.track_turn(turn_id):
         used = "" if api.is_mock() else current_model()
         try:
             reply = _handle_turn(state, message, job, sidebar_skills, sidebar_levels, supervised=supervised)
@@ -619,7 +619,7 @@ def _compare_chat_structures(state: Conversation, snapshot: Conversation, rival:
     snapshot.profile = copy.deepcopy(state.profile)
     start = (usage.input_tokens, usage.output_tokens)
     try:
-        with track_session(usage), use_model(None):
+        with track_session(usage), use_model(None), lambda_tools.track_turn(reply.turn_id):
             other = _handle_turn(snapshot, message, job, sidebar_skills, sidebar_levels, supervised=True)
     except Exception:
         return []

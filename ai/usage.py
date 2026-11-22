@@ -42,6 +42,18 @@ class SessionUsage:
 
 
 _session: ContextVar[SessionUsage | None] = ContextVar("usage_session", default=None)
+_remote_usage: ContextVar[list[dict] | None] = ContextVar("remote_usage", default=None)
+
+
+@contextmanager
+def collect_remote_usage() -> Iterator[list[dict]]:
+    """Return usage metadata to the caller that owns the session and its log."""
+    rows: list[dict] = []
+    previous = _remote_usage.set(rows)
+    try:
+        yield rows
+    finally:
+        _remote_usage.reset(previous)
 
 
 @contextmanager
@@ -70,24 +82,26 @@ def stage_of(mock_file: str) -> str:
 
 
 def record(
-    mock_file: str, attempt: int, usage: dict, mock: bool, *, model_id: str | None = None
+    mock_file: str, attempt: int, usage: dict, mock: bool, *, model_id: str | None = None,
+    timestamp: str | None = None,
 ) -> None:
     """Account for a model response and append its metadata to the usage log."""
     session = _session.get()
+    remote = _remote_usage.get()
     logging_enabled = os.getenv("USAGE_LOG") != "off"
-    if session is None and not logging_enabled:
+    if session is None and remote is None and not logging_enabled:
         return
     try:
         input_tokens = int(usage.get("inputTokens") or 0)
         output_tokens = int(usage.get("outputTokens") or 0)
-        if session is not None and not mock:
+        if remote is None and session is not None and not mock:
             with _lock:
                 session.input_tokens += input_tokens
                 session.output_tokens += output_tokens
-        if not logging_enabled:
+        if remote is None and not logging_enabled:
             return
         row = {
-            "ts": datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S"),
+            "ts": timestamp or datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S"),
             "stage": stage_of(mock_file),
             "attempt": attempt,
             "inputTokens": input_tokens,
@@ -95,6 +109,9 @@ def record(
             "model": "mock" if mock else model_id or os.getenv("BEDROCK_MODEL_ID", ""),
             "mock": mock,
         }
+        if remote is not None:
+            remote.append(row)
+            return
         if session is not None:
             row["session_id"] = session.session_id
         path = log_path()

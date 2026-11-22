@@ -55,21 +55,34 @@ class DynamoDBStore:
         return cls(dynamodb.Table(extractions), dynamodb.Table(demand))
 
     def get_extraction(self, job_category: str, posting_id: str) -> dict | None:
+        snapshot = self.get_demand_snapshot(job_category) or {}
+        partition = snapshot.get("extraction_partition", job_category)
+        row = self.get_partition_extraction(partition, posting_id)
+        if row is not None and partition != job_category:
+            return {**row, "job_category": job_category}
+        return row
+
+    def get_partition_extraction(self, partition: str, posting_id: str) -> dict | None:
         response = self.extractions_table.get_item(
-            Key={"job_category": job_category, "posting_id": posting_id},
+            Key={"job_category": partition, "posting_id": posting_id},
             ConsistentRead=True,
         )
         return response.get("Item")
 
     def save_extraction(self, item: dict) -> None:
+        if str(item.get("job_category", "")).startswith("run#"):
+            raise ValueError("Versioned extractions can only be created with stage_extraction.")
         self.extractions_table.put_item(Item=item)
 
     def list_extractions(self, job_category: str) -> list[dict]:
+        return self.snapshot_extractions(job_category, self.get_demand_snapshot(job_category))
+
+    def list_partition_extractions(self, partition: str) -> list[dict]:
         """직무 partition의 모든 페이지를 강한 일관성으로 읽는다."""
         request = {
             "KeyConditionExpression": "#category = :category",
             "ExpressionAttributeNames": {"#category": "job_category"},
-            "ExpressionAttributeValues": {":category": job_category},
+            "ExpressionAttributeValues": {":category": partition},
             "ConsistentRead": True,
         }
         items = []
@@ -83,6 +96,42 @@ class DynamoDBStore:
 
     def save_demand(self, snapshot: dict) -> None:
         self.demand_table.put_item(Item=snapshot)
+
+    def snapshot_extractions(self, job_category: str, snapshot: dict | None) -> list[dict]:
+        """Resolve the published partition, including snapshots created by the CLI."""
+        partition = (snapshot or {}).get("extraction_partition", job_category)
+        rows = self.list_partition_extractions(partition)
+        if partition == job_category:
+            return rows
+        return [{**row, "job_category": job_category} for row in rows]
+
+    def stage_extraction(self, partition: str, item: dict) -> None:
+        """Keep the first successful extraction of this input in this run."""
+        from boto3.dynamodb.conditions import Attr
+
+        try:
+            self.extractions_table.put_item(
+                Item={**item, "job_category": partition},
+                ConditionExpression=Attr("posting_id").not_exists(),
+            )
+        except self.extractions_table.meta.client.exceptions.ConditionalCheckFailedException:
+            existing = self.get_partition_extraction(partition, item["posting_id"])
+            if (not existing or existing["input_fingerprint"] != item["input_fingerprint"]
+                    or existing["posting_s3_key"] != item["posting_s3_key"]):
+                raise ValueError("Conflicting staged extraction for this run.")
+
+    def publish_batch(self, snapshot: dict, expected_base: str | None) -> None:
+        """Swap the snapshot and its extraction partition in one conditional write."""
+        from boto3.dynamodb.conditions import Attr
+
+        condition = (Attr("job_category").not_exists() if expected_base is None
+                     else Attr("snapshot_id").eq(expected_base))
+        try:
+            self.demand_table.put_item(Item=snapshot, ConditionExpression=condition)
+        except self.demand_table.meta.client.exceptions.ConditionalCheckFailedException:
+            current = self.get_demand_snapshot(snapshot["job_category"]) or {}
+            if current.get("snapshot_id") != snapshot["snapshot_id"]:
+                raise ValueError("The published snapshot changed before finalization.")
 
     def get_demand_snapshot(self, job_category: str) -> dict | None:
         response = self.demand_table.get_item(

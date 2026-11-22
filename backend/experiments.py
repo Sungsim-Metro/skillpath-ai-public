@@ -18,7 +18,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Callable
 
-from backend import api
+from backend import api, lambda_tools
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOG = ROOT / "outputs" / "feedback" / "feedback.jsonl"
@@ -109,6 +109,9 @@ def recommend_with(structure: str, job_category: str, gap_skills: list[str], *,
                    evidence: dict[str, dict] | None = None, levels: dict[str, float] | None = None,
                    course_levels: tuple[str, ...] | None = None) -> list[dict]:
     """지정한 구조로 기술마다 추천을 만든다. 한 기술이 검사에 실패하면 그 기술만 빼고, 전부 실패하면 그 오류를 낸다."""
+    if function := lambda_tools.configured_function(lambda_tools.RECOMMEND_FUNCTION):
+        return lambda_tools.invoke(function, "recommend_with", structure=structure, job_category=job_category,
+                                   gap_skills=gap_skills, evidence=evidence, levels=levels, course_levels=course_levels)
     build = STRUCTURES[structure]
     out, failed = [], None
     pairs = (api.demand_pairs(job_category, gap_skills) if evidence is None
